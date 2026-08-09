@@ -398,3 +398,31 @@ Stage Summary:
 - Graph topology: 28 nodes, 12 roots (incl. P0-27 isolated), 6 leaves (incl. P0-27 isolated), 11 mid-layer, 0 cycles, 0 orphans.
 - Edge semantics now explicit: B-edges and F-edges drive longest-path; P-edges inform risk only; P0-27 is control-only (parallel, not blocking).
 - No implementation. No code. Document only.
+
+---
+Task ID: 22
+Agent: main
+Task: Build Artifact 3 — Critical Path to Launch (longest blocking path computation, no implementation sequence).
+
+Work Log:
+- Created CRITICAL_PATH.md (276 lines) as Artifact 3.
+- Method: longest-chain computation using ONLY --B[blocking]--> edges; --F--> as joins (super-blocking); --P--> as risk-weighting only (never path edges); P0-27 excluded as isolated control node.
+- Topological layering: L0 (8 roots: P0-09,13,15,16,19,20,21,22), L1 (P0-10,11,17,24,25,26,28), L2 (P0-01), L3 (P0-02,05,08), L4 (P0-03,04,06), L5 (P0-07). Leaves: P0-03,04,07,26,28.
+- Computed longest blocking path: max length 5 edges (6 nodes). Found TWO leaves at this length → TWO CO-CRITICAL PATHS:
+  - Path α (ends at P0-07 State Machine/Pickup): P0-15→P0-25→P0-24→P0-01→P0-06→P0-07 + join P0-22 + F-joins (LiveKitchen+Push, Geo-fence+Pickup, Prepaid+Reorder, KillSwitch+OrderIntake)
+  - Path β (ends at P0-03 Reconciliation or P0-04 Refund): P0-15→P0-25→P0-24→P0-01→P0-02→P0-03/04 + F-joins (Prepaid+Reorder, KillSwitch+OrderIntake, POS+Settlement, Wallet+Loyalty)
+- Identified shared critical prefix (the bottleneck): P0-15→P0-25→P0-24→P0-01 (4 edges). Both co-critical paths pass through it.
+- Preserved co-critical paths WITHOUT forcing single chain (per stakeholder boundary).
+- Mapped 4 feature-interaction F-nodes touching critical path as super-blocking joins.
+- Identified 7 parallelizable clusters (observability trio, foundation trio, payment cluster, reconciliation+refund, auth cluster, DR pair, concurrency+transactional pair).
+- Identified 9 P0s with slack (off critical path): P0-09,10,11,13,16,19,20,21,22,23,26,27,28.
+- Applied P-edge risk weighting: P0-24 and P0-01 are HIGHEST risk (on critical prefix AND have own failure-propagation edges); DB-failure touches every node on both paths.
+- Explicitly did NOT prescribe implementation sequence, sprints, or developer assignments.
+- Launch gate (7 AND-conditions) unchanged — critical path tells which delays hurt most, does not reduce launch bar.
+
+Stage Summary:
+- Artifact 3 — Critical Path to Launch: DRAFT COMPLETE. Pending stakeholder review.
+- Two co-critical paths of equal length (5 edges); shared bottleneck prefix P0-15→P0-25→P0-24→P0-01.
+- Risk concentrates on critical prefix (P0-24 + P0-01 have direct failure-propagation edges).
+- Artifact 4 — Implementation Order: UNLOCKED. Will sequence within critical-path constraint, interleaving slack branches into parallel slots, respecting F-node joins as sync points.
+- No implementation. No code. Document only.
