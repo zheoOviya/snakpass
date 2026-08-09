@@ -189,7 +189,7 @@ P0s whose only blocking B-predecessors are Wave 0 roots.
 | **6** | P0-06 | State separation (4-way convergence) |
 | **7** | P0-07 | **F-convergence: QR+OTP (security), LiveKitchen+Push, Geo-fence+Pickup (caution)** |
 
-**Total: 28 P0s across 8 waves.** Critical path runs through waves 0→1→2→3→4→5→6→7 (one P0 per wave on the critical path, except wave 0 which has the root).
+**Total: 28 unique P0s assigned across 8 implementation waves.** (P0 references in convergence/summary tables are appearances, not additional P0s.) Critical path runs through waves 0→1→2→3→4→5→6→7 (one P0 per wave on the critical path, except wave 0 which has the root).
 
 ---
 
