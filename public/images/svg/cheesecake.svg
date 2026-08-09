@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300">
+  <defs>
+    <linearGradient id="bg22" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF6EC"/><stop offset="1" stop-color="#FBE6CE"/>
+    </linearGradient>
+    <linearGradient id="cheese22" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBEFC0"/><stop offset="1" stop-color="#E8D388"/>
+    </linearGradient>
+    <radialGradient id="berry22" cx="0.5" cy="0.4" r="0.6">
+      <stop offset="0" stop-color="#6A2E80"/><stop offset="1" stop-color="#3A1255"/>
+    </radialGradient>
+  </defs>
+  <rect width="400" height="300" fill="url(#bg22)"/>
+  <ellipse cx="200" cy="245" rx="160" ry="22" fill="#E8D5B0"/>
+  <ellipse cx="200" cy="240" rx="148" ry="16" fill="#FBF0D0"/>
+  <path d="M120 240 L280 240 L260 225 L140 225 Z" fill="#A06A2B"/>
+  <path d="M140 225 L260 225 L200 110 Z" fill="url(#cheese22)"/>
+  <path d="M150 215 L250 215 L200 130 Z" fill="#F5E5A0"/>
+  <path d="M155 200 Q200 100 245 200 Q200 215 155 200 Z" fill="url(#berry22)"/>
+  <circle cx="175" cy="180" r="8" fill="#4A1A6A"/>
+  <circle cx="172" cy="177" r="3" fill="#7A3A95"/>
+  <circle cx="200" cy="160" r="9" fill="#4A1A6A"/>
+  <circle cx="197" cy="157" r="3" fill="#7A3A95"/>
+  <circle cx="225" cy="180" r="8" fill="#4A1A6A"/>
+  <circle cx="222" cy="177" r="3" fill="#7A3A95"/>
+  <circle cx="190" cy="195" r="6" fill="#3A1255"/>
+  <circle cx="215" cy="195" r="6" fill="#3A1255"/>
+  <path d="M170 205 q-3 8 0 12" stroke="#4A1A6A" stroke-width="3" fill="none"/>
+  <path d="M230 205 q3 8 0 12" stroke="#4A1A6A" stroke-width="3" fill="none"/>
+  <circle cx="105" cy="245" r="2" fill="#A06A2B"/>
+  <circle cx="120" cy="248" r="1.5" fill="#A06A2B"/>
+  <circle cx="290" cy="245" r="2" fill="#4A1A6A"/>
+  <circle cx="305" cy="248" r="1.5" fill="#4A1A6A"/>
+</svg>

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300">
+  <defs>
+    <linearGradient id="bg8" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF6EC"/><stop offset="1" stop-color="#FBE6CE"/>
+    </linearGradient>
+    <linearGradient id="dosa8" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#E6A84E"/><stop offset="1" stop-color="#A9651E"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="300" fill="url(#bg8)"/>
+  <ellipse cx="200" cy="220" rx="170" ry="50" fill="#F4E0B5"/>
+  <ellipse cx="200" cy="215" rx="160" ry="42" fill="#FBF0D0"/>
+  <ellipse cx="200" cy="215" rx="160" ry="42" fill="none" stroke="#E0C282" stroke-width="2"/>
+  <path d="M60 190 Q200 150 340 190 Q340 220 200 230 Q60 220 60 190 Z" fill="url(#dosa8)"/>
+  <ellipse cx="65" cy="200" rx="10" ry="20" fill="#8B4F1A"/>
+  <ellipse cx="65" cy="200" rx="6" ry="13" fill="#D88E3A"/>
+  <ellipse cx="65" cy="200" rx="2" ry="6" fill="#5C2A08"/>
+  <path d="M90 185 Q200 165 320 185" stroke="#7A4318" stroke-width="1.5" fill="none" opacity="0.6"/>
+  <path d="M90 195 Q200 175 320 195" stroke="#7A4318" stroke-width="1" fill="none" opacity="0.5"/>
+  <ellipse cx="130" cy="180" rx="6" ry="3" fill="#6B3416" opacity="0.6"/>
+  <ellipse cx="220" cy="172" rx="6" ry="3" fill="#6B3416" opacity="0.6"/>
+  <ellipse cx="290" cy="180" rx="6" ry="3" fill="#6B3416" opacity="0.6"/>
+  <ellipse cx="90" cy="258" rx="22" ry="8" fill="#5C2A08"/>
+  <ellipse cx="90" cy="256" rx="20" ry="6" fill="#FBF8E8"/>
+  <ellipse cx="310" cy="258" rx="22" ry="8" fill="#5C2A08"/>
+  <ellipse cx="310" cy="256" rx="20" ry="6" fill="#C9451A"/>
+  <circle cx="305" cy="255" r="2" fill="#F2B233"/>
+  <circle cx="315" cy="254" r="2" fill="#1F7A2E"/>
+</svg>

@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300">
+  <defs>
+    <linearGradient id="bg11" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF6EC"/><stop offset="1" stop-color="#FBE6CE"/>
+    </linearGradient>
+    <radialGradient id="utt11" cx="0.5" cy="0.4" r="0.7">
+      <stop offset="0" stop-color="#E8B65A"/><stop offset="1" stop-color="#A6701C"/>
+    </radialGradient>
+  </defs>
+  <rect width="400" height="300" fill="url(#bg11)"/>
+  <ellipse cx="200" cy="230" rx="170" ry="48" fill="#F4E0B5"/>
+  <ellipse cx="200" cy="225" rx="160" ry="40" fill="#FBF0D0"/>
+  <ellipse cx="200" cy="225" rx="160" ry="40" fill="none" stroke="#E0C282" stroke-width="2"/>
+  <ellipse cx="200" cy="180" rx="115" ry="55" fill="url(#utt11)"/>
+  <ellipse cx="200" cy="175" rx="108" ry="48" fill="#E0A645"/>
+  <circle cx="150" cy="160" r="6" fill="#FBF6E0"/>
+  <circle cx="180" cy="170" r="5" fill="#FBF6E0"/>
+  <circle cx="220" cy="155" r="6" fill="#FBF6E0"/>
+  <circle cx="250" cy="170" r="5" fill="#FBF6E0"/>
+  <circle cx="160" cy="195" r="5" fill="#FBF6E0"/>
+  <circle cx="240" cy="200" r="5" fill="#FBF6E0"/>
+  <circle cx="200" cy="195" r="5" fill="#FBF6E0"/>
+  <circle cx="170" cy="175" r="6" fill="#C9311A"/>
+  <circle cx="210" cy="180" r="6" fill="#C9311A"/>
+  <circle cx="240" cy="155" r="5" fill="#C9311A"/>
+  <circle cx="155" cy="180" r="5" fill="#C9311A"/>
+  <circle cx="225" cy="195" r="5" fill="#C9311A"/>
+  <circle cx="190" cy="160" r="5" fill="#1F7A2E"/>
+  <circle cx="230" cy="180" r="5" fill="#1F7A2E"/>
+  <circle cx="175" cy="195" r="5" fill="#1F7A2E"/>
+  <circle cx="255" cy="190" r="5" fill="#1F7A2E"/>
+  <circle cx="195" cy="200" r="4" fill="#1F7A2E"/>
+  <ellipse cx="105" cy="200" rx="6" ry="3" fill="#5C2A08" opacity="0.5"/>
+  <ellipse cx="295" cy="200" rx="6" ry="3" fill="#5C2A08" opacity="0.5"/>
+</svg>

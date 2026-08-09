@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, Leaf, ArrowLeft, ShoppingCart, Plus, Minus, Clock, MapPin, Loader2, Package } from 'lucide-react'
+import { Search, Leaf, ArrowLeft, ShoppingCart, Plus, Minus, Clock, MapPin, Loader2, Package, Receipt } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -12,12 +12,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
 import { useCart } from '@/lib/cart-store'
 import { useRealtime, realtimeSocket } from '@/hooks/use-realtime'
-import { inr } from '@/lib/snack'
+import { inr, STATUS_META, timeAgo } from '@/lib/snack'
 import type { MenuItem, Order, Restaurant } from '@/lib/types'
 import { VegBadge, SpiceDots, StarRating, CuisineIcon, cuisineGradient } from './bits'
 import { OrderTracking } from './order-tracking'
 
-type View = 'browse' | 'menu' | 'tracking'
+type View = 'browse' | 'menu' | 'tracking' | 'orders'
 
 export function ConsumerView() {
   const [view, setView] = useState<View>('browse')
@@ -29,10 +29,22 @@ export function ConsumerView() {
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [loadingMenu, setLoadingMenu] = useState(false)
   const [activeOrder, setActiveOrder] = useState<Order | null>(null)
+  const [myOrders, setMyOrders] = useState<Order[]>([])
   const [placing, setPlacing] = useState(false)
   const { toast } = useToast()
   const cart = useCart()
   const { connected } = useRealtime(['consumer:all'])
+
+  const fetchMyOrders = useCallback(async () => {
+    const res = await fetch('/api/orders?role=consumer&limit=20')
+    const data = await res.json()
+    setMyOrders(data.orders ?? [])
+  }, [])
+
+  // Load consumer's own orders on mount so the "My Orders" badge is live.
+  useEffect(() => {
+    fetchMyOrders()
+  }, [fetchMyOrders])
 
   // fetch restaurants
   const fetchRestaurants = useCallback(async () => {
@@ -86,7 +98,7 @@ export function ConsumerView() {
     }
   }, [cart, toast])
 
-  // realtime: refresh active order on update
+  // realtime: refresh active order + my-orders list on update
   useEffect(() => {
     const sock = realtimeSocket()
     const handler = (p: { orderId: string }) => {
@@ -95,12 +107,16 @@ export function ConsumerView() {
           .then((r) => r.json())
           .then((d) => d.order && setActiveOrder(d.order))
       }
+      fetchMyOrders()
     }
+    const createdHandler = () => fetchMyOrders()
     sock.on('order:updated', handler)
+    sock.on('order:created', createdHandler)
     return () => {
       sock.off('order:updated', handler)
+      sock.off('order:created', createdHandler)
     }
-  }, [activeOrder])
+  }, [activeOrder, fetchMyOrders])
 
   const cartTotal = cart.total()
   const cartCount = cart.count()
@@ -118,9 +134,56 @@ export function ConsumerView() {
           </div>
         </div>
         <OrderTracking order={activeOrder} />
-        <Button className="mt-4 w-full" variant="outline" onClick={() => { setView('browse'); setActiveOrder(null) }}>
-          Order something else
+        <div className="mt-4 flex gap-2">
+          <Button className="flex-1" variant="outline" onClick={() => { setView('orders'); setActiveOrder(null) }}>
+            <Receipt className="mr-1 h-4 w-4" /> My Orders
+          </Button>
+          <Button className="flex-1" onClick={() => { setView('browse'); setActiveOrder(null) }}>
+            Order something else
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  // My Orders list view
+  if (view === 'orders') {
+    const active = myOrders.filter((o) => o.status !== 'PICKED_UP' && o.status !== 'CANCELLED')
+    const past = myOrders.filter((o) => o.status === 'PICKED_UP' || o.status === 'CANCELLED')
+    return (
+      <div className="mx-auto max-w-2xl px-4 py-6">
+        <Button variant="ghost" size="sm" className="mb-3" onClick={() => setView('browse')}>
+          <ArrowLeft className="mr-1 h-4 w-4" /> Back to restaurants
         </Button>
+        <h2 className="mb-3 text-lg font-semibold">My Orders</h2>
+        {myOrders.length === 0 ? (
+          <div className="rounded-xl border border-dashed py-16 text-center text-muted-foreground">
+            <Package className="mx-auto mb-2 h-8 w-8" /> No orders yet. Place your first order!
+          </div>
+        ) : (
+          <div className="space-y-4">
+            {active.length > 0 && (
+              <div>
+                <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Active ({active.length})</h3>
+                <div className="space-y-2">
+                  {active.map((o) => (
+                    <OrderListItem key={o.id} order={o} onOpen={() => { setActiveOrder(o); setView('tracking') }} />
+                  ))}
+                </div>
+              </div>
+            )}
+            {past.length > 0 && (
+              <div>
+                <h3 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">History ({past.length})</h3>
+                <div className="space-y-2">
+                  {past.map((o) => (
+                    <OrderListItem key={o.id} order={o} onOpen={() => { setActiveOrder(o); setView('tracking') }} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     )
   }
@@ -225,6 +288,14 @@ export function ConsumerView() {
             <span className="text-xs font-medium">Veg only</span>
             <Switch checked={vegOnly} onCheckedChange={setVegOnly} />
           </div>
+          <Button variant="outline" size="sm" className="relative shrink-0" onClick={() => setView('orders')}>
+            <Receipt className="h-4 w-4" />
+            {myOrders.filter((o) => o.status !== 'PICKED_UP' && o.status !== 'CANCELLED').length > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-teal-600 px-1 text-[10px] font-bold text-white">
+                {myOrders.filter((o) => o.status !== 'PICKED_UP' && o.status !== 'CANCELLED').length}
+              </span>
+            )}
+          </Button>
         </div>
       </div>
 
@@ -307,7 +378,12 @@ function MenuRow({ item, restaurantId, restaurantName }: { item: MenuItem; resta
     <Card className={item.isAvailable ? '' : 'opacity-50'}>
       <CardContent className="flex items-center gap-3 p-3">
         <div className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-lg bg-gradient-to-br ${cuisineGradient('default')}`}>
-          <div className="absolute inset-0 flex items-center justify-center text-2xl">🍽️</div>
+          <img
+            src={item.image}
+            alt={item.name}
+            className="absolute inset-0 h-full w-full object-cover"
+            loading="lazy"
+          />
         </div>
         <div className="flex-1">
           <div className="flex items-center gap-2">
@@ -349,4 +425,31 @@ function groupByCategory(items: MenuItem[]): Record<string, MenuItem[]> {
     g[it.category].push(it)
   }
   return g
+}
+
+function OrderListItem({ order, onOpen }: { order: Order; onOpen: () => void }) {
+  const meta = STATUS_META[order.status] ?? STATUS_META.CONFIRMED
+  return (
+    <button
+      onClick={onOpen}
+      className="flex w-full items-center gap-3 rounded-xl border bg-card p-3 text-left transition hover:shadow-md"
+    >
+      <div className="flex-1">
+        <div className="flex items-center gap-2">
+          <span className="font-medium">{order.restaurant.name}</span>
+          <Badge className={meta.tone}>{meta.short}</Badge>
+          {order.isCatering && <Badge variant="secondary" className="text-xs">Catering</Badge>}
+        </div>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          {order.itemsCount} items · #{order.id.slice(-6).toUpperCase()} · {timeAgo(order.createdAt)}
+        </p>
+      </div>
+      <div className="text-right">
+        <p className="font-semibold">{inr(order.totalAmount)}</p>
+        {order.status !== 'PICKED_UP' && order.status !== 'CANCELLED' && (
+          <p className="font-mono text-xs text-teal-600">OTP {order.pickupOtp}</p>
+        )}
+      </div>
+    </button>
+  )
 }
