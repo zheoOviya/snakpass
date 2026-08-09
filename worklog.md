@@ -154,3 +154,20 @@ Stage Summary:
 - Firebase config (snakzap-5a326) fully wired: Auth + Analytics both initialized with the user's official console snippet values.
 - Analytics: LIVE (page_view events flowing to G-J8M7DEC12G).
 - Auth SMS: code path correct, blocked only by Firebase console setting (Phone Auth sign-in method must be enabled + Blaze plan). Demo fallback keeps app usable until then.
+
+---
+Task ID: 13
+Agent: main
+Task: Create SnakZap Production Readiness Matrix v1.0 — specification & decision document (no implementation).
+
+Work Log:
+- Authored PRODUCTION_READINESS_MATRIX.md at project root — a specification document, NOT an implementation plan.
+- Structure: 13 sections covering Purpose, Scope, strict Priority Definitions (P0/P1/P2/P3 with entry rules), the 5-Question Framework (Happy/Failure/Recovery/Money-Trust/Observability), Actor's Worst Day dimension, Starting Inventory (50 gaps mapped from uploaded audit), the full Matrix (P0=23 capabilities, P1=22, P2=11, P3=9 inventory), detailed 5-question breakdowns for all P0 + condensed for P1, Cross-Cutting Concerns, Decision Log (10 open questions with defaults), Acceptance criteria, and Governance rules.
+- Applied the strict entry rule: every P0/P1 capability has failure + recovery defined. P2/P3 listed as inventory only until promoted.
+- Traced Actor's Worst Day scenarios (Consumer/Vendor/Admin/Backend/Finance) through implicated capabilities.
+- No code changed. No implementation. Document only.
+
+Stage Summary:
+- Matrix v1.0 ready for stakeholder review and sign-off.
+- Next step (only after sign-off): derive implementation order from P0 dependencies, then begin P0 work — not before.
+- Key discipline enforced: "No code is written for a capability until it has a row in this matrix."
