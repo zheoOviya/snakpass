@@ -1,21 +1,29 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { auditIntegrityCheck, audit } from '@/lib/audit'
+import { apiError } from '@/lib/errors'
 
 // GET /api/audit-integrity-test
 //
-// DEV-001 CLOSURE: Audit hash-chain tamper-evidence test.
-// Exercises: write → verify chain → attempt mutation → verify chain broken → restore → verify chain ok.
-//
-// Test flow:
-//   1. Write a test audit event
-//   2. Verify chain integrity (should pass)
-//   3. Attempt to mutate an entry (UPDATE action field)
-//   4. Verify chain integrity (should FAIL — tamper detected)
-//   5. Restore the original value
-//   6. Verify chain integrity (should pass again)
+// GOVERNANCE NOTE: This is a TEST/DEVELOPMENT endpoint. It must be DISABLED in production
+// to avoid becoming an attack surface (it can mutate/delete audit entries).
+// In production (NODE_ENV=production), this endpoint returns 403.
 
 export async function GET() {
+  // Production guard — test endpoints must not be accessible in prod.
+  if (process.env.NODE_ENV === 'production') {
+    return apiError('AUTHORIZATION_DENIED', 'Test endpoint not available in production', 403)
+  }
+
+  // DEV-001: Audit hash-chain tamper-evidence test.
+  // Test flow:
+  //   1. Write a test audit event
+  //   2. Verify chain integrity (should pass)
+  //   3. Attempt to mutate an entry (UPDATE action field)
+  //   4. Verify chain integrity (should FAIL — tamper detected)
+  //   5. Restore the original value
+  //   6. Verify chain integrity (should pass again)
+
   const results: Array<{ step: string; passed: boolean; detail: string }> = []
 
   // Step 0: Clear audit table for clean test (dev only — production would NOT do this)

@@ -752,3 +752,27 @@ Stage Summary:
 - Both block Production-ready (S9), not Implemented (S4).
 - Wave 0: 13/13 P0s Implemented (S4). 2 deviations partially closed.
 - Next: Wave-0 gate review (evidence + observable signals + reviewer + approver for all 13 P0s).
+
+---
+Task ID: 34
+Agent: main
+Task: Governance correction — DEV-001 + DEV-002 reverted to OPEN (not "partially closed"); test endpoints production-guarded.
+
+Work Log:
+- Corrected DEV-001 status: PARTIALLY CLOSED → OPEN (mitigation implemented; acceptance criterion outstanding). "Partially closed" is a PROGRESS label, NOT acceptance closure. Hash-chain provides tamper-EVIDENCE (detection), NOT tamper-PREVENTION (blocking). Matrix demands storage-level WORM — outstanding.
+- Corrected DEV-002 status: PARTIALLY CLOSED → OPEN (production fallback disabled; production verification evidence outstanding). Real Firebase credentials + production-token tests not yet run.
+- Added production guards to both test harness endpoints:
+  - /api/audit-integrity-test: returns 403 AUTHORIZATION_DENIED in production (NODE_ENV=production). Governance note: test endpoints must not be accessible in prod (attack surface — can mutate/delete audit entries).
+  - /api/auth/firebase/verify-test: returns 403 AUTHORIZATION_DENIED in production. Governance note: must not expose token verification internals.
+- Fixed duplicate export syntax error in audit-integrity-test route.
+- Rewrote firebase/verify-test route cleanly (removed duplicate GET export).
+- Lint clean. Both test endpoints pass in dev (allPassed: true). App functional (landing 200, health 200).
+- Authoritative state: both deviations OPEN; Wave 0 gate NOT CLOSED; Wave 1 LOCKED.
+
+Stage Summary:
+- DEV-001: OPEN (mitigation: hash-chain tamper-evidence; outstanding: storage-level WORM prevention)
+- DEV-002: OPEN (mitigation: demo-trust disabled in prod; outstanding: real credentials + production-token tests)
+- Test endpoints production-guarded (403 in prod).
+- Wave 0: 13/13 P0s Implemented (S4). 2 deviations OPEN. G/H evidence PENDING.
+- Wave-0 Gate: NOT CLOSED. Wave 1: LOCKED.
+- S4 Implemented claims stand; S9 Production-ready claims do NOT (correct governance).
