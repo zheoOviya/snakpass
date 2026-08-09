@@ -695,3 +695,60 @@ Stage Summary:
 - 2 deviations open (DEV-001 P0-22 WORM, DEV-002 P0-09 demo-trust) — both block Production-ready, not Implemented.
 - Wave 0 closure still requires: P0-09 production credentials, P0-22 storage-level WORM, plus evidence/review/approver for all 13 P0s (G/H gates).
 - Next per stakeholder closure sequence: P0-09 production verification → P0-22 production immutability → Wave-0 gate review.
+
+---
+Task ID: 32
+Agent: main
+Task: DEV-002 closure (P0-09 Firebase verify) — disable demo-trust in production, wire verifyFirebaseToken, test harness.
+
+Work Log:
+- Modified src/lib/firebase-admin.ts:
+  - Demo-trust mode HARD-DISABLED in production (NODE_ENV=production → throws FIREBASE_ADMIN_NOT_CONFIGURED error; no fallback to trusting client claims).
+  - Production path: verifyIdToken(idToken, true) with checkRevoked=true — verifies signature, expiry, issuer, audience, revocation.
+  - Fixed naming conflict (getAuth import vs local function → renamed import to initAdminAuth).
+  - Stricter demo token parser: requires exactly demo:<phone>:<uid> with E.164 phone validation.
+- Modified /api/auth/firebase/session route:
+  - Now accepts { idToken, purpose } instead of { phone, purpose, firebaseUid }.
+  - Calls verifyFirebaseToken(idToken) — phone comes from VERIFIED token, NOT client claim.
+  - In production without Admin SDK: returns 503 DEPENDENCY_UNAVAILABLE (no demo-trust fallback).
+  - Token verification failures return 401 AUTHENTICATION_REQUIRED.
+- Created /api/auth/firebase/verify-test test harness:
+  - 5 dev-mode tests: missing-token (reject ✅), malformed-token (reject ✅), malformed-demo-format (reject ✅), valid-demo-token (accept ✅), demo-token-no-phone (reject ✅). All pass.
+  - Production-mode tests documented as manual (valid/expired/wrong-project/revoked tokens require real credentials).
+- DEV-002 status: OPEN → PARTIALLY CLOSED. Demo-trust can no longer accidentally activate in production. Code path complete. Remaining: credential configuration + manual production-token tests.
+- Lint clean. App functional. Verify-test endpoint returns allPassed: true.
+
+Stage Summary:
+- DEV-002 partially closed: production-safe (demo-trust hard-disabled in prod), verification path code-ready, dev tests pass.
+- Remaining: real Firebase service-account credentials + manual production-token verification tests.
+- Next: DEV-001 closure (P0-22 Audit WORM).
+
+---
+Task ID: 33
+Agent: main
+Task: DEV-001 closure (P0-22 Audit WORM) — hash-chain tamper-evidence + mutation test.
+
+Work Log:
+- Added prevHash + hash fields to AuditLog model (migration audit_hash_chain applied).
+- Updated src/lib/audit.ts: audit() now computes hash-chain linkage (SHA-256 of prevHash + entry data); auditIntegrityCheck() walks full chain verifying linkage + hash integrity.
+- Updated seed script to build hash chain for seeded audit entries.
+- Created /api/audit-integrity-test endpoint: 7-step test harness:
+  1. Write audit event → ✅ (hash-chain linkage)
+  2. Verify chain (pre-mutation) → ✅ (intact, 2 entries)
+  3. Attempt UPDATE mutation → ✅ (mutation applied)
+  4. Verify chain (post-mutation) → ✅ (tamper DETECTED: hash mismatch)
+  5. Restore original value → ✅
+  6. Delete detection → ✅ (DELETE DETECTED: prevHash mismatch)
+  7. Clean state restored → ✅ (chain intact)
+- All 7 steps pass. allPassed: true.
+- Known limitation documented: "restore-to-original" after UPDATE is undetectable by hash-chain alone (hash recomputes to same value). DELETE detection works. True prevention requires production storage-level WORM.
+- DEV-001 status: OPEN → PARTIALLY CLOSED. Tamper-evidence (detection) layer implemented and tested. Tamper-prevention (storage-level WORM) still requires production deployment.
+- Lint clean. App functional.
+
+Stage Summary:
+- Both deviations now PARTIALLY CLOSED:
+  - DEV-001 (P0-22 WORM): hash-chain tamper-evidence implemented + tested; production WORM still needed.
+  - DEV-002 (P0-09 Firebase): demo-trust hard-disabled in prod; verification path code-ready; real credentials still needed.
+- Both block Production-ready (S9), not Implemented (S4).
+- Wave 0: 13/13 P0s Implemented (S4). 2 deviations partially closed.
+- Next: Wave-0 gate review (evidence + observable signals + reviewer + approver for all 13 P0s).

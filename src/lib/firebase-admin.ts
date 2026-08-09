@@ -1,5 +1,5 @@
 import { initializeApp, cert, getApps, type App } from 'firebase-admin/app'
-import { getAuth as getAdminAuth, type Auth as AdminAuth } from 'firebase-admin/auth'
+import { getAuth as initAdminAuth, type Auth as AdminAuth } from 'firebase-admin/auth'
 import { readFileSync } from 'fs'
 
 // P0-09 — Server-side Firebase ID token verification
@@ -45,7 +45,7 @@ function getAdminAuth(): AdminAuth | null {
   const app = getAdminApp()
   if (!app) return null
   if (!adminAuthInstance) {
-    adminAuthInstance = getAdminAuth(app)
+    adminAuthInstance = initAdminAuth(app)
   }
   return adminAuthInstance
 }
@@ -58,28 +58,53 @@ export interface VerifiedToken {
 
 // Verify a Firebase ID token server-side.
 // Returns { uid, phone } on success; throws on failure (expired, forged, etc.).
-// In demo-trust mode (no service account), returns the client-provided claim
-// with an explicit warning — this mode is NOT production-safe.
+//
+// DEV-002 CLOSURE: demo-trust mode is HARD-DISABLED in production (NODE_ENV=production).
+// In production, if Admin SDK is not configured, this function THROWS — it does NOT
+// fall back to trusting client claims. This prevents accidental demo-trust in prod.
+//
+// In dev/preview (NODE_ENV !== production), demo-trust mode is available for testing
+// but is explicitly logged as a security warning on every use.
 export async function verifyFirebaseToken(idToken: string): Promise<VerifiedToken> {
   const auth = getAdminAuth()
+
   if (!auth) {
-    // Demo-trust mode — NOT production-safe.
-    // In this mode, the client sends { idToken: "demo:<phone>:<uid>" } and we parse it.
-    // This is explicitly logged as a security warning.
+    // Admin SDK not configured.
+    if (process.env.NODE_ENV === 'production') {
+      // DEV-002 CLOSURE: HARD FAIL in production. No demo-trust fallback.
+      throw new Error(
+        'FIREBASE_ADMIN_NOT_CONFIGURED: Server-side token verification is required in production. ' +
+          'Set FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON.',
+      )
+    }
+
+    // Dev/preview only: demo-trust mode (explicitly NOT production-safe).
     console.warn(
-      '[P0-09] DEMO-TRUST MODE: Firebase Admin SDK not configured. ' +
-        'Token verification is bypassed. NOT production-safe. ' +
+      '[P0-09] DEMO-TRUST MODE (dev only): Firebase Admin SDK not configured. ' +
+        'Token verification is bypassed. This mode is DISABLED in production. ' +
         'Set FIREBASE_SERVICE_ACCOUNT_PATH or FIREBASE_SERVICE_ACCOUNT_JSON to enable real verification.',
     )
     if (idToken.startsWith('demo:')) {
       const parts = idToken.split(':')
-      return { uid: parts[2] ?? 'demo-uid', phone: parts[1] ?? '' }
+      // Strict: must be exactly demo:<phone>:<uid> with non-empty phone and uid
+      if (parts.length !== 3 || !parts[1] || !parts[2]) {
+        throw new Error('Invalid demo token format (expected demo:<phone>:<uid>)')
+      }
+      const phone = parts[1]
+      // Basic phone validation in demo mode
+      if (!/^\+?[0-9]{10,15}$/.test(phone)) {
+        throw new Error('Invalid phone in demo token (E.164 expected)')
+      }
+      return { uid: parts[2], phone }
     }
-    throw new Error('Invalid demo token format')
+    throw new Error('Invalid demo token format (expected demo:<phone>:<uid>)')
   }
 
   // Production path: verify the ID token via Firebase Admin SDK.
-  const decoded = await auth.verifyIdToken(idToken)
+  // This call verifies: signature, expiry, issuer (project), audience (project).
+  // Expired tokens, malformed tokens, wrong-project tokens, and revoked tokens
+  // are all rejected here.
+  const decoded = await auth.verifyIdToken(idToken, true) // checkRevoked = true
   const phone = decoded.phone_number
   if (!phone) {
     throw new Error('Token has no phone_number claim')
@@ -89,4 +114,13 @@ export async function verifyFirebaseToken(idToken: string): Promise<VerifiedToke
     phone,
     email: decoded.email,
   }
+}
+
+// Check if a request should be rejected due to missing authentication.
+// Used by routes that require a verified Firebase identity.
+export function requireVerifiedToken(idToken: string | null | undefined): string {
+  if (!idToken) {
+    throw new Error('MISSING_TOKEN: Firebase ID token required')
+  }
+  return idToken
 }

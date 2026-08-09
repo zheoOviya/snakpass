@@ -1,24 +1,60 @@
+import { createHash } from 'crypto'
 import { db } from './db'
 
 // P0-22 — Audit trail integrity (immutable, complete)
-// Audit entries are append-only; no entry may be mutated or deleted.
 // Direct Protector of I-07 (Audit Integrity).
-// Acceptance: audit entries immutable; every admin/financial action audited.
+//
+// DEV-001 CLOSURE: Hash-chain tamper-evidence implemented.
+// Each audit entry includes: prevHash (hash of previous entry) + hash (SHA-256 of own data).
+// If any entry is modified or deleted, the chain breaks and integrity check detects it.
+//
+// This makes tampering DETECTABLE. True PREVENTION (blocking UPDATE/DELETE at storage level)
+// still requires production-grade WORM storage (PostgreSQL REVOKE, QLDB, or separate audit DB).
+// The hash-chain is the interim tamper-EVIDENCE layer; production WORM is the tamper-PREVENTION layer.
 
-// Create an audit log entry. This is the ONLY sanctioned write path to the audit table.
-// All other access is read-only.
+function computeHash(
+  prevHash: string,
+  id: string,
+  actorId: string | null,
+  actorRole: string,
+  action: string,
+  metadata: string,
+  createdAt: Date,
+): string {
+  const data = `${prevHash}|${id}|${actorId ?? 'null'}|${actorRole}|${action}|${metadata}|${createdAt.toISOString()}`
+  return createHash('sha256').update(data).digest('hex')
+}
+
+// Create an audit log entry with hash-chain linkage.
+// This is the ONLY sanctioned write path to the audit table.
 export async function audit(
   action: string,
   metadata: Record<string, unknown> = {},
   actorId?: string,
   actorRole: string = 'SYSTEM',
 ): Promise<void> {
+  // Get the last entry's hash (for chain linkage)
+  const lastEntry = await db.auditLog.findFirst({
+    orderBy: { createdAt: 'desc' },
+    select: { hash: true },
+  })
+  const prevHash = lastEntry?.hash || 'GENESIS'
+
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  const createdAt = new Date()
+  const metadataStr = JSON.stringify(metadata)
+  const hash = computeHash(prevHash, id, actorId ?? null, actorRole, action, metadataStr, createdAt)
+
   await db.auditLog.create({
     data: {
+      id,
       actorId: actorId ?? null,
       actorRole,
       action,
-      metadata: JSON.stringify(metadata),
+      metadata: metadataStr,
+      createdAt,
+      prevHash,
+      hash,
     },
   })
 }
@@ -43,34 +79,51 @@ export async function readAuditLogs(opts: {
   })
 }
 
-// Integrity check: detect any audit entries that were modified (createdAt != updatedAt).
-// In a true WORM storage this would be enforced at the storage level; with SQLite we
-// verify that no entry has been tampered with post-creation.
+// Integrity check: verify the hash chain is unbroken.
+// Walks all entries in chronological order, recomputes each hash, and verifies:
+//   1. Each entry's hash matches recomputed hash (no mutation)
+//   2. Each entry's prevHash matches previous entry's hash (no deletion/insertion)
+// Returns { ok, brokenCount, totalCount, firstBrokenEntry? }.
 export async function auditIntegrityCheck(): Promise<{
   ok: boolean
-  tamperedCount: number
+  brokenCount: number
   totalCount: number
+  firstBrokenEntry?: { id: string; action: string; issue: string }
 }> {
-  const total = await db.auditLog.count()
-  // Prisma's updatedAt auto-updates on any update; if any entry has updatedAt > createdAt
-  // by more than 1 second (allowing for initial write), it was modified.
-  const tampered = await db.auditLog.count({
-    where: {
-      updatedAt: { gt: new Date(Date.now() - 0) }, // placeholder; real check compares to createdAt
-    },
+  const entries = await db.auditLog.findMany({
+    orderBy: { createdAt: 'asc' },
+    select: { id: true, actorId: true, actorRole: true, action: true, metadata: true, createdAt: true, prevHash: true, hash: true },
   })
-  // Note: SQLite + Prisma doesn't expose createdAt/updatedAt comparison directly.
-  // In production, this would use a WORM storage layer or a hash chain.
-  // For now, the check confirms the table exists and is queryable.
-  return { ok: tampered === 0, tamperedCount: 0, totalCount: total }
-}
 
-// DEV NOTE (recorded as implementation detail, not a deviation):
-// True WORM (Write-Once-Read-Many) storage requires either:
-//   (a) PostgreSQL with REVOKE UPDATE/DELETE on the audit table, or
-//   (b) An append-only log service (e.g. AWS QLDB, a hash-chained log), or
-//   (c) A separate audit database with no mutation API.
-// SQLite (current dev DB) does not support row-level immutability natively.
-// This is an accepted limitation for dev; production deployment must use one of (a)/(b)/(c).
-// This is NOT a deviation from the matrix — the matrix specifies "Storage-level WORM"
-// as the enforcement mechanism, which requires production-grade storage.
+  let brokenCount = 0
+  let prevHash = 'GENESIS'
+  let firstBrokenEntry: { id: string; action: string; issue: string } | undefined
+
+  for (const entry of entries) {
+    // Check chain linkage
+    if (entry.prevHash !== prevHash) {
+      brokenCount++
+      if (!firstBrokenEntry) {
+        firstBrokenEntry = { id: entry.id, action: entry.action, issue: `prevHash mismatch: expected ${prevHash}, got ${entry.prevHash}` }
+      }
+    }
+
+    // Check hash integrity
+    const recomputedHash = computeHash(entry.prevHash, entry.id, entry.actorId, entry.actorRole, entry.action, entry.metadata, entry.createdAt)
+    if (entry.hash !== recomputedHash) {
+      brokenCount++
+      if (!firstBrokenEntry) {
+        firstBrokenEntry = { id: entry.id, action: entry.action, issue: 'hash mismatch (entry may have been modified)' }
+      }
+    }
+
+    prevHash = entry.hash
+  }
+
+  return {
+    ok: brokenCount === 0,
+    brokenCount,
+    totalCount: entries.length,
+    firstBrokenEntry,
+  }
+}
