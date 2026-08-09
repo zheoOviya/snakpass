@@ -524,3 +524,33 @@ Stage Summary:
 - P0-05 and P0-23 explicitly shown off-path with depth arithmetic (not assertion).
 - Ready for FINAL ACCEPTED → Artifact 4 (Implementation Order) unlock.
 - No implementation. No code. Math verification only.
+
+---
+Task ID: 26
+Agent: main
+Task: Build Artifact 4 — P0 Implementation Order (sequence of waves, not sprints).
+
+Work Log:
+- Created IMPLEMENTATION_ORDER.md (297 lines) as Artifact 4.
+- Method: wave(P0) = depth(P0) from Artifact 3 Section 2.A mechanical verification. 8 waves (W0-W7), matching the 8 topological layers.
+- Wave 0 (foundation, 12 P0s + P0-27 parallel-isolated): P0-15, 22, 23, 09, 16, 19, 20, 21, 12, 13, 14, 18, (27). All roots, all parallel.
+- Wave 1 (6 P0s): P0-25, 17, 26, 28, 10, 11. Direct root-dependents.
+- Wave 2 (1 P0): P0-24. First critical-path throttle (needs P0-15 + P0-25).
+- Wave 3 (2 P0s): P0-01, P0-08. F-convergence: Prepaid+Reorder (P0-01, P0-08, P0-25). KillSwitch+OrderIntake already promoted to B-edge.
+- Wave 4 (2 P0s): P0-02, P0-05. Ledger + webhook.
+- Wave 5 (2 P0s): P0-04, P0-03. F-convergence: POS+Settlement (P0-02, P0-03).
+- Wave 6 (1 P0): P0-06. State separation, 4-way convergence.
+- Wave 7 (1 P0): P0-07. Critical path terminus. F-convergence: QR+OTP (security/integrity sync — highest gate), LiveKitchen+Push, Geo-fence+Pickup (caution G04).
+- Within-wave ordering by Risk-Critical Surface tier: Tier 1 (HIGHEST) gets earliest attention within wave (NOT earliest in time — scrutiny priority, not schedule).
+- Mapped 9 F-node convergence gates across waves (Section 5).
+- Applied Risk-Critical Surface as hardening priority (Section 6): Tier 1 P0s (P0-24, P0-01, P0-04, P0-07) get maximum failure-injection coverage + dedicated review; built in their wave, not pulled earlier.
+- Identified parallelization opportunities (Section 7): Wave 0 has 13 parallel slots (largest); critical-path singletons (waves 2, 6, 7) have no parallelization within wave.
+- Discipline held: NO sprints, NO teams, NO dates, NO effort estimates. Output is sequence/order only.
+- P-edges NOT used as precedence. P0-27 NOT universal prereq (parallel-isolated). Risk tier NOT schedule.
+
+Stage Summary:
+- Artifact 4 — P0 Implementation Order: DRAFT COMPLETE. 8 waves, 28 P0s placed, 9 convergence gates mapped.
+- Critical path respected: waves 0→1→2→3→4→5→6→7 follow the 7-edge critical path.
+- Convergence gates (especially QR+OTP security sync at wave 7) mark Production-ready synchronization points.
+- Artifact 5 — Sprint Plan: UNLOCKED. Will assign waves to sprints, teams to within-wave parallel P0s, set dates based on effort+capacity.
+- No implementation. No code. Document only.
