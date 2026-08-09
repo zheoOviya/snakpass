@@ -241,7 +241,9 @@ Consolidated from matrix Section 10 (External Dependency Failure Matrix). When a
 | CI/CD pipeline failure | P0-27 | (foundational) | (internal) |
 | SMS gateway (MSG91) down | P0-11 (OTP delivery), I-13 (pickup handoff) | I-13 | R-msg91 |
 
-**Failure-propagation insight:** The DB is the single point of compromise — its failure affects 16 P0s and 10 invariants. This is the highest-priority hardening target (consistent with matrix Section 10 R-db-pool). Redis is second (affects auth + idempotency). Razorpay is third but scoped to payment P0s.
+**Failure-propagation insight:** PostgreSQL is the **highest-centrality shared dependency** in the current P0 graph — its failure affects 16 P0s and 10 invariants. Redis is second (affects auth + idempotency). Razorpay is third but scoped to payment P0s. This centrality informs hardening priority and risk focus, consistent with the Strategic Blueprint's explicit choice of PostgreSQL for strict ACID guarantees.
+
+**⚠️ Failure-propagation edges do NOT create implementation precedence.** A `--P-->` edge describes what is compromised *when a dependency fails* — it is a risk/criticality signal, not a build-order constraint. Example: `Razorpay-failure --P--> P0-01` means "if Razorpay fails, P0-01 is compromised"; it does NOT mean "P0-01 must be implemented before Razorpay" or vice versa. Implementation precedence is derived only from `--B-->` (business) and `--F-->` (feature-interaction) edges. **Artifact 3 must use P-edges to weight criticality/risk on the critical path, but must never treat them as dependency edges for longest-path calculation.**
 
 ---
 
@@ -299,7 +301,9 @@ A P0 cannot transitively depend on itself. Walking all B-edges from each node:
 | P0-23 (Kill switch) | No P0 dep; standalone store |
 | P0-27 (Deployment) | No P0 dep; CI/CD |
 
-**11 roots.** These are the foundation — nothing blocks them from starting implementation (modulo G-F1 approver assignment).
+**12 roots** (P0-12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 27). These are the foundation — nothing blocks them from starting implementation (modulo G-F1 approver assignment).
+
+**P0-27 (Deployment & Rollback) is a special case — isolated control node.** It appears in both the root list (no B-dependency) and the leaf list (no B-dependent). In the B-edge graph it is isolated: it does not functionally gate any P0, and no P0 functionally gates it. Its relationship to other P0s is a **control/foundation dependency** (it enables safe rollout and rollback), NOT a business functional prerequisite. **Artifact 3 must NOT treat P0-27 as an ordinary business critical-path edge** — it must not force "implement P0-27 before everything." P0-27 is built in parallel with the foundation layer and reaches `Production-ready` before launch (it is on the launch gate via P0-27's own acceptance), but it does not block other P0s from reaching `Implemented` or `Tested`.
 
 ### 8.3 Leaf nodes (no P0 depends on them — top of stack)
 
@@ -312,7 +316,7 @@ A P0 cannot transitively depend on itself. Walking all B-edges from each node:
 | P0-27 (Deployment) | Terminal (enables all, but none depend on it functionally) |
 | P0-28 (Unknown-exception) | Terminal backstop |
 
-**6 leaves.** These are the top of the dependency stack — they cannot start until their dependencies are at least `Implemented`.
+**6 leaves** (P0-03, 04, 07, 26, 27, 28). These are the top of the dependency stack — they cannot start until their dependencies are at least `Implemented`. Note P0-27 appears here too (isolated control node — see Section 8.2 clarification).
 
 ### 8.4 Orphan check
 
@@ -322,14 +326,14 @@ An orphan is a P0 with neither a dependency nor a dependent. **None found** — 
 
 | Infrastructure | P0s depending on it | Risk |
 |----------------|---------------------|------|
-| DB | 16 | Highest — single point of compromise |
+| DB | 16 | Highest-centrality shared dependency |
 | Redis | 4 | Medium — auth + idempotency |
 | Razorpay | 3 | Medium — scoped to payment |
 | Observability backend | 3 | Medium — detection layer |
 | Firebase | 1 | Low — scoped to auth |
 | CI/CD | 1 | Low — scoped to deployment |
 
-**Insight for Artifact 3:** DB hardening (P0-15 migrations, P0-16 backup, P0-24 transactional integrity, P0-25 concurrency, P0-26 DR) is on the critical path because 16 P0s depend on it. This is the highest-leverage cluster.
+**Insight for Artifact 3:** DB hardening (P0-15 migrations, P0-16 backup, P0-24 transactional integrity, P0-25 concurrency, P0-26 DR) is the highest-centrality cluster because 16 P0s share the DB as a technical dependency. Whether it lands *on* the critical path is for Artifact 3 to compute from B-edges and F-edges — this observation informs risk weighting, not the path itself.
 
 ---
 
@@ -338,9 +342,10 @@ An orphan is a P0 with neither a dependency nor a dependent. **None found** — 
 | Metric | Value |
 |--------|-------|
 | P0 nodes | 28 |
-| Roots (no B-dep) | 11 |
-| Leaves (no B-dependent) | 6 |
-| Mid-layer | 11 |
+| Roots (no B-dep) | 12 (includes P0-27 isolated control node) |
+| Leaves (no B-dependent) | 6 (includes P0-27 isolated control node) |
+| Mid-layer (both B-in and B-out) | 11 |
+| Isolated (both root and leaf — control only) | 1 (P0-27) |
 | B-edges (business) | 31 (27 blocking + 2 non-blocking + 2 parallelizable clusters) |
 | T-edges (technical) | ~30 (P0 → infrastructure) |
 | F-edges (feature interactions) | 8 interaction nodes |
@@ -359,8 +364,10 @@ An orphan is a P0 with neither a dependency nor a dependent. **None found** — 
 - ❌ Does not assign sprints (Artifact 5).
 - ❌ Does not add new P0s or invariants.
 - ❌ Does not prioritize by "importance" — only by dependency structure + metadata.
+- ❌ **Does not treat failure-propagation (`--P-->`) edges as implementation precedence** — they inform risk/criticality only, never build order.
+- ❌ **Does not treat P0-27 (Deployment) as a business functional prerequisite** — it is an isolated control node; it enables safe rollout but does not block other P0s from `Implemented`/`Tested`.
 
-The graph is a **structural fact**, not a plan. Artifact 3 will compute the longest blocking path (critical path). Artifact 4 will sequence within that constraint. Artifact 5 will sprint-plan the sequence.
+The graph is a **structural fact**, not a plan. Artifact 3 will compute the longest blocking path (critical path) using `--B-->` and `--F-->` edges only. Artifact 4 will sequence within that constraint. Artifact 5 will sprint-plan the sequence. `--P-->` edges weight criticality on the path but never create edges in the path.
 
 ---
 
