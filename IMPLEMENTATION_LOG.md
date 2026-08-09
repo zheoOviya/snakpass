@@ -16,19 +16,19 @@
 
 | P0 | Capability | Wave | Risk Tier | Owner (simulated) | Lifecycle state | Notes |
 |----|-----------|------|-----------|-------------------|-----------------|-------|
-| P0-15 | Migrations | 0 | Tier 2 | Backend-lead | Specified → Implemented | Critical-path root; converted db:push → prisma migrate |
-| P0-12 | Zod validation | 0 | Tier 4 (C/E) | Full-stack 1 | Specified → Implemented | Schemas added to all API routes |
-| P0-18 | Error handling | 0 | Tier 4 (C/E) | Full-stack 1 | Specified → Implemented | Consistent error envelope |
-| P0-19 | Structured logging | 0 | Tier 4 (C/E) | Full-stack 2 | Specified → Implemented | Structured JSON logger with trace ids |
-| P0-20 | Health + metrics | 0 | Tier 4 (C/E) | DevOps | Specified → Implemented | /health endpoint |
-| P0-09 | Firebase verify | 0 | Tier 3 | Full-stack 1 | Specified | (next: server-side Admin SDK verify) |
-| P0-22 | Audit integrity | 0 | Tier 3 | Full-stack 2 | Specified | (next: append-only enforcement) |
-| P0-23 | Kill switch | 0 | Tier 3 | Full-stack 1 | Specified | (next: fail-safe defaults) |
-| P0-13 | Rate limiting | 0 | Tier 4 (C/E) | DevOps | Specified | (next: fail-closed for auth/payment) |
-| P0-14 | CSRF | 0 | Tier 4 (C/E) | Full-stack 2 | Specified | (next: CSRF token + SameSite) |
-| P0-16 | Backup | 0 | Tier 4 (C/E) | DevOps | Specified | (next: corruption-detection checksum) |
-| P0-21 | Alerting | 0 | Tier 4 (C/E) | DevOps | Specified | (next: alert rules) |
-| P0-27 | Deployment | 0 | (isolated) | DevOps | Specified | (next: CI/CD + feature flags) |
+| P0-15 | Migrations | 0 | Tier 2 | Backend-lead | Specified → Implemented (S4) | Critical-path root; converted db:push → prisma migrate |
+| P0-19 | Structured logging | 0 | Tier 4 (C/E) | Full-stack 2 | Specified → Implemented (S4) | Structured JSON logger with trace ids |
+| P0-18 | Error handling | 0 | Tier 4 (C/E) | Full-stack 1 | Specified → Implemented (S4) | Consistent error envelope; orders route verified |
+| P0-12 | Zod validation | 0 | Tier 4 (C/E) | Full-stack 1 | **Partial** — schemas built; orders POST done; remaining routes pending | Shared infra complete; per-route coverage in progress |
+| P0-20 | Health + metrics | 0 | Tier 4 (C/E) | DevOps | **Implemented (S4) — operational status: degraded** | DB check ok; realtime check degraded (socket.io 400 on plain HTTP — expected) |
+| P0-09 | Firebase verify | 0 | Tier 3 | Full-stack 1 | **Implemented (S4) — demo-trust mode** | Admin SDK installed; verifyFirebaseToken() path ready; activates when service-account key provided |
+| P0-22 | Audit integrity | 0 | Tier 3 | Full-stack 2 | **Implemented (S4)** | Audit helper + integrity check; WORM note (production needs storage-level enforcement) |
+| P0-23 | Kill switch | 0 | Tier 3 | Full-stack 1 | **Implemented (S4)** | Fail-safe defaults per key; getKillSwitchState with DB-error fallback |
+| P0-13 | Rate limiting | 0 | Tier 4 (C/E) | DevOps | **Implemented (S4)** | In-memory limiter; fail-closed for auth/payment/admin-write; fail-open for general |
+| P0-14 | CSRF | 0 | Tier 4 (C/E) | Full-stack 2 | **Implemented (S4)** | Double-submit cookie pattern; SameSite=Lax; constant-time compare |
+| P0-16 | Backup | 0 | Tier 4 (C/E) | DevOps | **Implemented (S4)** | SQLite copy + SHA-256 checksum; verifyBackup() integrity check |
+| P0-21 | Alerting | 0 | Tier 4 (C/E) | DevOps | **Implemented (S4)** | 8 alert rules; cooldown; fireAlert() logs to stderr (prod: PagerDuty) |
+| P0-27 | Deployment | 0 | (isolated) | DevOps | **Implemented (S4)** | Feature flags (env-based); 3 deployment classes; rollback procedures per class |
 
 ### Lifecycle state legend
 - S2 Specified (matrix v1.4 — 5 questions answered)
