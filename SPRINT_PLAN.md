@@ -4,7 +4,9 @@
 > **Source:** Implementation Order (Artifact 4, ACCEPTED) + Critical Path (Artifact 3, FINAL ACCEPTED) + Production Readiness Matrix v1.4.
 > **Purpose:** Convert the 8-wave implementation order into a sprint plan with capacity, ownership, sprint boundaries, effort, and dates. For the first time in this chain, scheduling concerns appear.
 > **Output:** Sprint plan — the actionable plan that, when signed off, unlocks implementation.
-> **Status:** Draft — sprint planning.
+> **Status:** Draft — sprint planning (v1.4 corrections applied: 20-week claim downgraded to provisional; assignment vs completion vs Production-ready distinguished; Wave-0 capacity constrained).
+
+**⚠️ Important distinction (v1.4 stakeholder correction):** The critical path (Artifact 3) gives **7 dependency edges / 8 dependency stages** — it does NOT give a schedule. Sprint duration, engineering capacity, P0 effort, and parallel capacity are separate variables. Any timeline in this artifact is a **provisional schedule** derived from assumptions below, NOT a mathematically proven minimum. The 20-week figure is provisional and must be validated by the effort/capacity model in Section 1.3 once real estimation occurs.
 
 ---
 
@@ -15,8 +17,9 @@
 | Artifact | 5 of 5 (Traceability Map ✅ → Dependency Graph ✅ → Critical Path ✅ → Implementation Order ✅ → **Sprint Plan**) |
 | Source | IMPLEMENTATION_ORDER.md (ACCEPTED) + CRITICAL_PATH.md (FINAL) + PRODUCTION_READINESS_MATRIX.md v1.4 |
 | Date | 2026-08-09 |
-| Status | Draft — sprint planning |
-| Output | Sprint plan with capacity, ownership, boundaries, effort, dates |
+| Status | Draft — sprint planning (v1.4 corrections applied) |
+| Output | Sprint plan with capacity, ownership, boundaries, effort, provisional timeline |
+| P0 count | **28 unique P0s**; sprint/lifecycle tables contain 66 references (appearances, not additional P0s) |
 
 ---
 
@@ -26,20 +29,54 @@
 
 **2-week sprints.** Standard agile cadence; allows meaningful work per sprint without excessive planning overhead.
 
-### 1.2 Capacity model
+### 1.2 Capacity model (v1.4 — explicit constraints)
 
-- **Team size:** 3 engineers (1 backend-lead, 2 full-stack) + 1 part-time DevOps/DBA + 1 product owner (approver role).
-- **Velocity assumption:** ~8-10 P0-capability-points per sprint (a "point" = one P0 reaching `Implemented`; deeper states take more).
-- **Parallelism:** Up to 3 P0s in active `Implemented` work per sprint (one per engineer), plus parallel `Production-ready` sign-off work on earlier-wave P0s.
+**Team size:** 3 engineers (1 backend-lead, 2 full-stack) + 1 part-time DevOps/DBA + 1 product owner (approver role).
 
-### 1.3 Ownership rules (from matrix Section 11)
+**Concurrent engineering slots per sprint:**
+- 3 engineer slots for active `Implemented` work (one P0 each, in parallel).
+- 1 DevOps slot (part-time; ~0.5 effective) for infrastructure P0s (backup, health, metrics, alerting, rate-limiting, deployment).
+- Product owner: `Approved` sign-off work (batched weekly; not a per-sprint blocking slot, but a per-P0 gate).
+- Reviewer work (separation of duties): absorbed by the other 2 engineers + DevOps; not a separate slot but adds ~20% load to reviewers.
+
+**Effective per-sprint capacity:** ~3.5 P0-equivalents in active `Implemented` progress + parallel `Tested`/`Production-ready` work on earlier P0s.
+
+**⚠️ Wave-0 capacity check (v1.4 stakeholder correction):** Wave 0 has 13 P0s. At 3.5 P0-equivalents per sprint, Wave 0 CANNOT complete in a single sprint. The 13 P0s are assigned to Sprint 1 but will NOT all reach `Implemented` by Sprint 1's end. They will reach `Implemented`/`Tested` progressively across Sprints 1-2, with the critical-path root (P0-15) and key Wave-1 predecessors (P0-09, P0-22, P0-23) prioritized first. The original "Sprint 1 = Wave 0" mapping is therefore a **start-assignment**, not a completion commitment.
+
+**Assignment vs completion vs Production-ready (v1.4 distinction):**
+- **Assigned to sprint** = the P0 begins active work in that sprint.
+- **Completed (Implemented/Tested)** = the P0 reaches `Implemented` or `Tested` by sprint end (may be a later sprint than assignment).
+- **Production-ready** = the P0 reaches lifecycle state 9 (all gates passed, approver signed). This is typically 2-4 sprints AFTER assignment for Tier 1 P0s, 1-3 sprints for Tier 2-4.
+
+This distinction matters: a sprint table showing "P0-15: Tested" means the *target state by sprint end*, not that P0-15 was assigned and completed in the same sprint. Targets are provisional and subject to the effort/capacity model below.
+
+### 1.3 Effort/capacity model (v1.4 — provisional, to be validated)
+
+The 20-week provisional timeline assumes the following per-P0 effort estimates. **These are placeholders, NOT measured.** Real estimation must occur before Sprint 1 begins; if estimates exceed these, the timeline extends.
+
+| P0 complexity tier | Effort estimate (engineer-weeks to `Implemented`) | Effort to `Production-ready` (incl. review/approval) |
+|--------------------|---------------------------------------------------|------------------------------------------------------|
+| Tier 1 (HIGHEST — P0-24, 01, 04, 07) | 2-3 weeks each | 4-6 weeks each (failure-injection + review + approval) |
+| Tier 2 (HIGH — P0-15, 25, 02, 06) | 1.5-2 weeks each | 3-4 weeks each |
+| Tier 3 (MEDIUM — P0-03, 26, 28, 22, 23, 09) | 1-1.5 weeks each | 2-3 weeks each |
+| Tier 4 (lower — P0-05, 08, 10, 11, 12, 13, 14, 16, 17, 18, 19, 20, 21, 27) | 0.5-1 week each | 1.5-2.5 weeks each |
+
+**Provisional timeline derivation (NOT a proof):** With ~3.5 concurrent slots and the effort estimates above, the critical-path P0s (8 nodes, mix of Tier 1-2) take roughly 8-10 sprints of dependency-respecting sequence. Adding the launch-gate verification sprint = ~10 sprints = ~20 weeks. **This is a back-of-envelope estimate, not a proven minimum.** Real scheduling must:
+1. Validate each P0's effort estimate with the implementing engineer.
+2. Confirm the 3.5-slot capacity is sustainable sprint-over-sprint.
+3. Account for non-P0 work (bug fixes, P1/P2 features, meetings, leave).
+4. Build in buffer for failure-test rework (Tier 1 P0s especially).
+
+**Until these validations occur, the 20-week figure is provisional and should not be communicated as a commitment.**
+
+### 1.4 Ownership rules (from matrix Section 11)
 
 - **Separation of duties:** The developer who implements a P0 cannot be its `Reviewed` or `Approved` signatory.
 - `Reviewed` = different engineer (technical review).
 - `Approved` = product owner (business risk acceptance).
 - Each P0 has a named owner assigned at sprint planning.
 
-### 1.4 Lifecycle state progression per sprint
+### 1.5 Lifecycle state progression per sprint
 
 Each P0 moves through the 9 lifecycle states (matrix Section 11). A sprint advances P0s by 1-3 states depending on complexity and risk tier:
 
@@ -193,9 +230,9 @@ The 8 implementation waves map to sprints. Because waves have different sizes an
 
 **Sprint 9 exit criteria:** P0-07 at `Production-ready`. All P0-level F-convergence gates pass.
 
-### Sprint 10 (Weeks 19-20): Launch gate verification + buffer
+### Sprint 10 (Weeks 19-20, provisional): Launch gate verification + NO-GO remediation
 
-**Goal:** Verify all 7 launch-gate AND-conditions. Address any residual items. Launch.
+**Goal:** Verify all 7 launch-gate AND-conditions. This is a **verification sprint**, NOT an assumption that prior sprints left everything green. If any gate fails, the output is **NO-GO + remediation plan**, not automatic Production Go.
 
 | Launch-gate condition | Status check |
 |----------------------|--------------|
@@ -207,7 +244,7 @@ The 8 implementation waves map to sprints. Because waves have different sizes an
 | 6. No unresolved P0 exception | Exception queue empty |
 | 7. No expired exception waiver | All waivers within expiry; 0 expired |
 
-**Sprint 10 exit:** All 7 conditions green → **PRODUCTION GO**. Any red → NO-GO, address, re-verify.
+**Sprint 10 exit:** All 7 conditions green → **PRODUCTION GO**. Any red → **NO-GO + remediation plan** (re-sprint the failing items; re-verify; do NOT launch until all green). This sprint does not assume automatic success — it verifies.
 
 ---
 
@@ -227,7 +264,7 @@ Sprint 8-9: P0-07 (Wave 7) → Observed → Production-ready
 Sprint 10: Launch gate verification
 ```
 
-**Minimum timeline: 20 weeks (10 sprints × 2 weeks)** from Sprint 1 start to launch gate verification. This assumes no slippage on the critical path. Slack branches (Tier 3/4 P0s) build in parallel and must reach `Production-ready` by Sprint 9.
+**Provisional timeline: ~20 weeks (10 sprints × 2 weeks)** from Sprint 1 start to launch gate verification. **This is provisional, NOT a proven minimum.** It depends on the effort estimates in Section 1.3 (placeholders, not measured) and assumes no slippage on the critical path. Real scheduling must validate effort estimates with implementing engineers before this timeline can be committed. If any P0's real effort exceeds the placeholder, the timeline extends. Slack branches (Tier 3/4 P0s) build in parallel and must reach `Production-ready` by Sprint 9.
 
 ---
 
@@ -343,8 +380,11 @@ This is the **final planning artifact**. Sign-off unlocks implementation.
 
 | Criterion | Status |
 |-----------|--------|
-| 8 waves mapped to sprints | ✅ (10 sprints over 20 weeks) |
-| Critical path timeline derived | ✅ (Sprint 1 → Sprint 9 for P0-07) |
+| 8 waves mapped to sprints | ✅ (10 sprints; ~20 weeks PROVISIONAL) |
+| Critical path timeline derived | ✅ (provisional — pending effort validation per Section 1.3) |
+| Wave-0 capacity constrained (13 P0s ≠ 1 sprint) | ✅ (3.5 slots/sprint; Wave 0 spans Sprints 1-2) |
+| Assignment vs completion vs Production-ready distinguished | ✅ (Section 1.2 explicit) |
+| Sprint 10 = verification (not automatic GO) | ✅ (NO-GO + remediation if any gate fails) |
 | Convergence gates scheduled | ✅ (5 P0-level gates; P2/P3 deferred) |
 | Ownership assigned (Coverage G resolved) | ✅ (all 28 P0s have owner + reviewer + approver) |
 | Lifecycle state progression per sprint | ✅ (Tier 1: 1-2 states/sprint; Tier 2-4: 2-3) |
@@ -358,7 +398,7 @@ This is the **final planning artifact**. Sign-off unlocks implementation.
 
 ## 10. Unlock for Implementation
 
-With the sprint plan signed off, **implementation begins**. Sprint 1 starts the foundation wave. The critical path drives the minimum 20-week timeline to launch gate verification.
+With the sprint plan signed off, **implementation begins**. Sprint 1 starts the foundation wave. The critical path drives the **provisional** ~20-week timeline to launch gate verification — this must be validated against real effort estimates before being committed as a schedule.
 
 The entire chain is now complete:
 ```
