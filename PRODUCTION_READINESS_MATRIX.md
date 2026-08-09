@@ -1,7 +1,7 @@
-# SnakZap Production Readiness Matrix v1.0
+# SnakZap Production Readiness Matrix v1.1
 
 > **Document Type:** Specification & Decision Document
-> **Status:** Draft v1.0 — pending sign-off
+> **Status:** Draft v1.1 — pending sign-off
 > **NOT an implementation plan.** This document defines *what* must be true before SnakZap can serve a real paying customer, *how* each capability must behave under failure, and *how* we will know it is ready. Implementation order, code, and sprints are derived from this — not the other way around.
 
 ---
@@ -10,14 +10,23 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.0 |
+| Version | 1.1 |
 | Date | 2026-08-09 |
 | Status | Draft — awaiting review |
 | Baseline | Uploaded audit (`zheo-main.zip` rebuild) + self-audit + stakeholder feedback |
 | Authors | Engineering + Product |
 | Reviewers | (pending) |
-| Supersedes | Ad-hoc feature checklist audit |
+| Supersedes | v1.0 (ad-hoc feature checklist audit) |
 | Next review | After P0 sign-off; before any P1 implementation begins |
+
+---
+
+## Revision History
+
+| Version | Date | Changes | Trigger |
+|---------|------|---------|---------|
+| v1.0 | 2026-08-09 | Initial matrix: 5-question framework, actor's worst day, P0/P1/P2/P3 inventory, 23 P0 capabilities. | Self-audit + stakeholder feedback. |
+| v1.1 | 2026-08-09 | Added 5 new P0 capabilities: **Transactional Data Integrity, Concurrency / Race Conditions, Disaster Recovery (split from backup), Deployment & Rollback, Unknown-Exception Handling**. Added 3 new sections: **External Dependency Failure Matrix, Business Invariants, Capability Lifecycle**. Added capability lifecycle gate: "code merged" ≠ "production-ready". Added 7 new inventory gaps (G51–G57). | Stakeholder preliminary review — 7 corrections identified. |
 
 ---
 
@@ -167,6 +176,13 @@ These gaps were identified during the rebuild audit and form the **starting inve
 | G48 | No watch API | P3 |
 | G49 | No geo-fence auto check-in | P3 |
 | G50 | No A/B testing framework | P3 |
+| G51 | No transactional data integrity (cross-entity consistency) | P0 |
+| G52 | No concurrency / race-condition handling on money + order writes | P0 |
+| G53 | Disaster recovery not separated from backup (no RPO/RTO/restore drill) | P0 |
+| G54 | No deployment / rollback capability | P0 |
+| G55 | No external-dependency failure strategy (fail-open vs fail-closed per dependency) | P0 |
+| G56 | No explicit business invariants (state-machine laws) | P0 |
+| G57 | No unknown-exception handling (unclassified states silently ignored) | P0 |
 
 ---
 
@@ -201,6 +217,11 @@ Columns: **Priority | Domain | Capability | Failure Scenario | Dependency | Acce
 | P0 | Observability | Alerting on P0 failures | Payment success rate < 95% / reconciliation mismatch | Alert rules + on-call | Alerts fire on defined thresholds; false-positive rate < 5% | Alert-trigger test; false-positive audit | Backend |
 | P0 | Audit | Audit trail integrity (immutable, complete) | Tampered audit log / missing entry | Audit model + append-only storage | Audit entries immutable; every admin/financial action audited | Tamper test; coverage test | Backend |
 | P0 | Governance | Kill switch fail-safe behaviour | Kill switch itself fails | Kill switch + fallback | Kill switch defaults to safe state on failure; toggles audited | Kill-switch-failure test | Backend |
+| P0 | Data | Transactional data integrity (cross-entity) | Order + items + payment + availability + audit event partially commit | DB transactions + outbox pattern | No partially committed business transaction leaves system in a silently-wrong state; all writes atomic or compensating | Partial-failure injection test; outbox-consistency test | Backend |
+| P0 | Reliability | Concurrency / race-condition control | Two users order last item simultaneously; vendor toggles availability mid-checkout; admin + vendor edit same order | Optimistic locking + row-level locks + atomic decrements | Concurrent writes serialised; no oversell; conflicts surface as retry/conflict not silent corruption | Concurrency test suite (last-item, mid-edit, dual-modifier); optimistic-lock conflict test | Backend |
+| P0 | Data | Disaster recovery (split from backup) | DB corruption / regional failure / restore drill fails | Backup + restore drill + documented runbook | RPO ≤ 24h, RTO ≤ 4h; restore drill passes monthly; backup-corruption detection on every backup; documented runbook | Restore-drill test; corruption-detection test; runbook-walkthrough test | Backend |
+| P0 | Reliability | Deployment & rollback | Bad release / migration incompatibility / failed deploy | CI/CD + health-checked deploy + feature flags + rollback automation | Rollback to previous known-good within 10 min; migrations forward+backward compatible; failed deploy auto-aborts; feature flags gate new paths | Rollback drill test; migration-compatibility test; failed-deploy-abort test | Backend |
+| P0 | Admin | Unknown-exception handling (unclassified states) | System reaches a state not in known state machine | Invariant checker + freeze + exception queue + alert | Unknown state freezes affected transaction, preserves evidence, creates exception queue entry, alerts; never silently ignored | Unknown-state injection test; freeze-and-alert test | Backend |
 
 ### 7.2 P1 — Must Work Reliably After Launch
 
@@ -447,6 +468,55 @@ Each capability below has all five questions answered. A capability is **not rea
 4. **Money / Trust Impact:** **High.** Wrong default = either lost sales or unsafe orders.
 5. **Observability:** Kill-switch-state metric.
 
+### P0-24 · Transactional Data Integrity (cross-entity)
+
+1. **Happy Path:** Order creation writes Order + OrderItems + decrements availability + emits audit event atomically (DB transaction + outbox). Payment capture updates Payment + Ledger + Order status atomically.
+2. **Failure Path:** Partial failure mid-transaction → entire business transaction rolls back; no orphan OrderItems, no orphan ledger entries, no decremented availability without an order. Outbox ensures the audit event eventually emits even if the immediate publish fails.
+3. **Recovery Path:** Outbox processor retries event emission; reconciliation catches any drift between transactional writes and emitted events.
+4. **Money / Trust Impact:** **Critical.** A partially committed order (items without order, or captured payment without ledger entry) is exactly the class of bug that silently corrupts financial state.
+5. **Observability:** Outbox lag metric; partial-commit detector; alert on any orphan entity.
+
+### P0-25 · Concurrency / Race-Condition Control
+
+1. **Happy Path:** Two users checkout simultaneously; the last available item goes to one, the other gets a clear "sold out" message. Vendor toggles availability mid-checkout; cart re-validation surfaces the change.
+2. **Failure Path:**
+   - **Last-item race:** both pass cart validation; one wins the atomic decrement, other gets conflict (409) not silent corruption.
+   - **Mid-checkout edit:** vendor marks item unavailable between validation and order create → order create re-checks inside transaction, rejects if state changed.
+   - **Dual-modifier:** admin and vendor edit same order concurrently → optimistic lock (version field) rejects the loser with retry guidance.
+3. **Recovery Path:** Loser retries with fresh state; UI shows updated availability/price.
+4. **Money / Trust Impact:** **Critical.** Overselling an unavailable item = vendor can't fulfil = refund + trust loss. Silent corruption of concurrent edits = wrong order state.
+5. **Observability:** Conflict-rate metric per resource; alert on conflict spike (indicates contention or bug).
+
+### P0-26 · Disaster Recovery (split from backup)
+
+1. **Happy Path:** Daily backup succeeds; restore drill passes monthly; runbook current.
+2. **Failure Path:**
+   - Backup succeeds but is corrupt → corruption-detection checksum on every backup; alert if checksum mismatch.
+   - Regional failure → failover to standby region (or accept downtime within RTO).
+   - Restore drill fails → drill blocks release; root-caused before any deploy.
+3. **Recovery Path:** Restore from last-known-good backup per runbook; RTO ≤ 4h; data loss bounded by RPO ≤ 24h.
+4. **Money / Trust Impact:** **Critical.** Without recoverable backups, a single DB failure destroys all orders, payments, and audit history — unrecoverable.
+5. **Observability:** Backup-success + checksum metric; restore-drill-result metric; alert on any backup failure or drill failure.
+
+### P0-27 · Deployment & Rollback
+
+1. **Happy Path:** New release deploys via health-checked pipeline; health checks pass; traffic shifts; feature flags gate new code paths.
+2. **Failure Path:**
+   - Health check fails post-deploy → auto-abort; traffic stays on previous version.
+   - Migration incompatible with running code → deploy blocked; backward-compatible migration required.
+   - Bad release reaches production → rollback to previous known-good within 10 min; feature flag can dark-kill new path.
+3. **Recovery Path:** Rollback procedure documented + drilled; migrations forward+backward compatible; feature flags as kill switch for in-flight code.
+4. **Money / Trust Impact:** **Critical.** A bad deploy with no rollback = indefinite outage = direct revenue loss + trust erosion.
+5. **Observability:** Deploy-success metric; rollback-time metric; alert on health-check degradation post-deploy.
+
+### P0-28 · Unknown-Exception Handling (unclassified states)
+
+1. **Happy Path:** System stays within known state machines; no unknown states reached.
+2. **Failure Path:** System reaches a state not in any known state machine (e.g. Order status = "ZOMBIE" due to a bug, or Payment captured but no Order exists). Invariant checker detects it → freezes the affected transaction (no further transitions) → preserves evidence (full state snapshot + trace) → creates exception queue entry → alerts on-call.
+3. **Recovery Path:** Human investigates via exception queue; root-causes; either corrects state through audited manual action or marks as resolved-with-explanation. System never silently drops or auto-"fixes" unknown states.
+4. **Money / Trust Impact:** **Critical.** Silently ignoring unknown states is how money leaks compound undetected. Freezing + alerting contains the blast radius.
+5. **Observability:** Unknown-state counter metric; alert on any non-zero count; exception-queue-aging metric.
+
 ---
 
 ### P1 detailed breakdowns (condensed — same 5 questions per capability)
@@ -479,7 +549,97 @@ Each capability below has all five questions answered. A capability is **not rea
 
 ---
 
-## 9. Cross-Cutting Concerns
+## 9. Business Invariants (Laws of the System)
+
+Invariants are not acceptance criteria — they are **laws** the system must never violate. Every P0 capability is tested against these. A violation of any invariant is, by definition, an **unknown exception** (see P0-28) and must be frozen + alerted, not silently corrected.
+
+| # | Invariant | Enforcement | Violation ⇒ |
+|---|-----------|-------------|-------------|
+| I1 | A captured payment cannot exist without a valid order. | Payment.orderId FK NOT NULL + transactional create | Freeze + exception queue |
+| I2 | A completed order cannot exist without a successful fulfilment. | Order.status transition guarded by fulfilment status | Freeze + exception queue |
+| I3 | Total refund amount across a payment cannot exceed the captured amount. | Refund service checks sum before creating | Reject + alert |
+| I4 | A payment cannot be captured twice. | Payment.status single-transition + idempotency key | Reject second capture + alert |
+| I5 | An order's items must all belong to the order's restaurant. | OrderItem.menuItemId → MenuItem.restaurantId == Order.restaurantId | Reject + alert |
+| I6 | Ledger must balance: sum of debits == sum of credits per order/payment. | Ledger integrity check hourly | Freeze affected + exception queue |
+| I7 | Audit log is append-only; no entry may be mutated or deleted. | Storage-level WORM + reject on update/delete | Alert on any attempt |
+| I8 | A vendor cannot fulfil an order they did not accept (if accept flow exists). | Fulfilment status gated on acceptance | Reject + alert |
+| I9 | Kill switch state is monotonic per toggle event; no silent reverts. | Toggle event log + state derived from log | Freeze on inconsistency |
+| I10 | No business transaction may leave orphan entities (items without order, ledger without payment). | DB transaction + outbox | Freeze + reconciliation |
+| I11 | Refund cannot be requested on an un-captured payment. | Refund service checks Payment.status | Reject + alert |
+| I12 | Session token cannot be valid after revocation. | Session revocation checked on every request | Reject + alert on anomaly |
+
+**Rule:** Any code change that could weaken an invariant requires matrix-governance sign-off (see Section 15).
+
+---
+
+## 10. External Dependency Failure Matrix
+
+Every external dependency has an explicit failure strategy. **Fail-open** = degrade but continue serving requests. **Fail-closed** = reject the request (safer for money/auth). **Retry** = transient backoff. **Queue** = persist and process later. **User message** = what the user sees.
+
+| Dependency | Failure Mode | Strategy | User Message | Alert? |
+|------------|--------------|----------|--------------|--------|
+| **Razorpay (order create)** | Timeout / 5xx | Retry ×3 with backoff; then fail-closed | "Payment service busy. Please retry." | Yes, on sustained failure |
+| **Razorpay (capture/verify)** | Signature mismatch | Fail-closed; do not capture | "Payment could not be verified. No charge made." | Yes |
+| **Razorpay (refund)** | Gateway down | Queue refund; retry with backoff; REFUND_REQUESTED persists | "Refund is processing. You'll be notified." | Yes, if stuck > 1h |
+| **Razorpay (webhook)** | Duplicate | Idempotent dedup; 200 OK | N/A (no user) | No (expected) |
+| **Razorpay (webhook)** | Tampered signature | 400 reject | N/A | Yes |
+| **Firebase (phone OTP)** | Unavailable / config error | Fail-open to demo OTP (preview only); **production: fail-closed** | "Authentication unavailable. Please retry." | Yes |
+| **Firebase (Admin token verify)** | Unreachable | Fail-closed; reject session mint | "Could not verify identity. Please re-login." | Yes |
+| **FCM (push)** | Token stale / delivery fail | Token refresh; retry; email fallback | (Consumer sees email if push fails) | No, on single fail; Yes on rate spike |
+| **Email provider** | Bounce / throttle | Retry ×3; quarantine bad addresses | (User sees nothing; alt channel used) | Yes on bounce-rate spike |
+| **Maps / location** | Unavailable | Fail-open; ranking without distance | "Showing nearby restaurants" (degraded ranking) | No |
+| **Database** | Degraded / unavailable 30s | Fail-closed on writes; read-replica for reads if available | "Service temporarily unavailable. Please retry." | Yes immediately |
+| **Redis** | Unavailable | Auth/payment/admin-write: fail-closed (503); general API: fail-open (in-memory limiter) | "Service busy. Please retry." for fail-closed paths | Yes |
+| **WebSocket (socket.io)** | Disconnected | Client auto-reconnect + missed-event backfill from event log | "Reconnecting…" indicator; no silent gap | Yes if > N clients disconnected |
+| **SMS gateway (if separate from Firebase)** | Down | Queue pickup-OTP; consumer sees in-app OTP as fallback | In-app OTP visible | Yes |
+
+**Rule:** A dependency not listed here cannot be added to the system without a row in this table. No external call without a failure strategy.
+
+---
+
+## 11. Capability Lifecycle
+
+A capability is not "done" when code is merged. It moves through explicit lifecycle states, each a gate. A capability at a lower state cannot be relied upon by a capability at a higher state.
+
+```
+Proposed
+   ↓  [matrix row exists with failure + recovery defined]
+Specified
+   ↓  [all dependencies are themselves at least Specified; acceptance + test criteria written]
+Dependency-ready
+   ↓  [code merged; happy-path tests pass]
+Implemented
+   ↓  [happy-path verified in a realistic environment]
+Tested
+   ↓  [running in production-like env with observability live]
+Observed
+   ↓  [failure paths injected and verified; recovery confirmed]
+Failure-tested
+   ↓  [second-engineer review; invariant checks pass; sign-off]
+Production-ready
+```
+
+| State | Meaning | Gate to next |
+|-------|---------|--------------|
+| **Proposed** | A row in the matrix. | Failure + recovery + observability answers exist. |
+| **Specified** | 5 questions answered; acceptance + test criteria written. | All dependencies are at least Specified. |
+| **Dependency-ready** | Dependencies are at least Implemented. | Code merged; happy-path tests pass. |
+| **Implemented** | Code exists; unit + integration tests green. | Happy-path verified in staging. |
+| **Tested** | Happy path works in production-like env. | Observability live and emitting expected signals. |
+| **Observed** | Running with observability; baseline metrics captured. | Failure paths injected. |
+| **Failure-tested** | Failure + recovery paths verified by injection. | Second-engineer review; invariants pass. |
+| **Production-ready** | Signed off; may be relied upon by other capabilities. | — |
+
+**The two rules that make this real:**
+
+1. **"Code merged" ≠ "Production-ready."** A merged capability at `Implemented` cannot be a dependency for another capability's `Production-ready` claim.
+2. **No capability reaches `Production-ready` without passing `Failure-tested`.** Happy-path-only capabilities block launch.
+
+**Launch gate:** SnakZap launches only when **every P0 capability is at `Production-ready`** (state 8).
+
+---
+
+## 12. Cross-Cutting Concerns
 
 These apply horizontally across priorities and domains. Each must be defined before its dependent capabilities can be marked ready.
 
@@ -495,7 +655,7 @@ These apply horizontally across priorities and domains. Each must be defined bef
 
 ---
 
-## 10. Decision Log / Open Questions
+## 13. Decision Log / Open Questions
 
 These require stakeholder input before implementation. Listed here so they are not lost.
 
@@ -511,41 +671,58 @@ These require stakeholder input before implementation. Listed here so they are n
 | Q8 | Refund policy — auto vs manual above ₹X? | Manual above ₹1000 | P0-4 |
 | Q9 | Vendor payout frequency — daily or weekly? | Daily settlement, weekly payout | P1 settlement |
 | Q10 | PWA scope — full offline or graceful fallback? | Graceful fallback only | P1 PWA |
+| Q11 | CI/CD platform — GitHub Actions, GitLab CI, or other? | GitHub Actions default | P0-27 deployment |
+| Q12 | Standby region for DR, or single-region with backups? | Single-region + backups; RTO 4h accepted | P0-26 disaster recovery |
+| Q13 | Feature-flag system — LaunchDarkly, custom, or env-based? | Env-based initially; migrate later | P0-27 deployment |
+| Q14 | Outbox implementation — DB table + worker, or message broker? | DB table + worker (simpler) | P0-24 transactional integrity |
+| Q15 | Optimistic-lock retry policy — auto-retry N times or surface to user? | Auto-retry ×2; then surface conflict | P0-25 concurrency |
+| Q16 | Exception queue ownership — dedicated ops role or shared on-call? | Shared on-call initially | P0-28 + P1 admin exception queue |
 
 ---
 
-## 11. Acceptance — When Is the Matrix "Done"?
+## 14. Acceptance — When Is the Matrix "Done"?
 
 The matrix itself is "done" (ready to drive implementation) when:
 
-1. Every P0 capability has all 5 questions answered. ✅ (this v1.0)
-2. Every P1 capability has all 5 questions answered. ✅ (this v1.0, condensed)
-3. Actor's worst-day scenarios traced through capabilities. ✅ (this v1.0)
-4. Open questions logged with defaults. ✅ (this v1.0)
-5. Stakeholder sign-off on P0 scope. ⏳ (pending)
-6. P2/P3 inventory acknowledged as out-of-scope for v1 launch. ✅ (this v1.0)
+1. Every P0 capability has all 5 questions answered. ✅ (v1.1 — 28 P0 capabilities)
+2. Every P1 capability has all 5 questions answered. ✅ (v1.1, condensed — 22 P1 capabilities)
+3. Actor's worst-day scenarios traced through capabilities. ✅ (v1.1)
+4. Business invariants (Section 9) defined and enforcement specified. ✅ (v1.1 — 12 invariants)
+5. External dependency failure matrix (Section 10) complete. ✅ (v1.1 — 14 dependency scenarios)
+6. Capability lifecycle (Section 11) defined with explicit gates. ✅ (v1.1 — 8 states)
+7. Open questions logged with defaults. ✅ (v1.1)
+8. Stakeholder sign-off on P0 scope. ⏳ (pending)
+9. P2/P3 inventory acknowledged as out-of-scope for v1 launch. ✅ (v1.1)
 
-**A capability is "ready for production" (separate from the matrix being done) when:**
+**A capability is "Production-ready" (separate from the matrix being done) when it reaches state 8 of the Capability Lifecycle (Section 11):**
 
-- All 5 questions answered. ✅
-- Test criteria written and passing. ⏳
-- Failure path verified by injection. ⏳
-- Observability verified live. ⏳
-- Reviewed by a second engineer. ⏳
+- Specified (5 questions answered). ✅ at matrix v1.1
+- Dependency-ready (dependencies at least Implemented). ⏳
+- Implemented (code merged; happy-path tests pass). ⏳
+- Tested (happy-path verified in staging). ⏳
+- Observed (observability live; baseline captured). ⏳
+- Failure-tested (failure paths injected; recovery confirmed). ⏳
+- Reviewed by a second engineer; invariants pass. ⏳
+- → **Production-ready** (signed off). ⏳
+
+**Launch gate:** SnakZap launches only when **every P0 capability is at Production-ready (state 8)**. No exceptions, no "we'll fix it post-launch" for P0.
 
 ---
 
-## 12. Governance
+## 15. Governance
 
 - **Change control:** Any change to a P0 capability's acceptance criteria requires sign-off.
 - **Promotion rule:** A capability can be promoted to P0/P1 only when its failure + recovery is defined (the entry rule).
 - **Demotion rule:** A P0 capability found to have undefined failure semantics is demoted to "blocked" until resolved.
+- **Invariant protection:** Any code change that could weaken a Business Invariant (Section 9) requires matrix-governance sign-off. Invariants are laws, not guidelines.
+- **Lifecycle enforcement:** A capability may not be claimed as a dependency until it reaches at least `Dependency-ready` (state 3, Section 11). A capability may not gate launch until it reaches `Production-ready` (state 8).
+- **External dependency rule:** No new external dependency may be introduced without a row in the External Dependency Failure Matrix (Section 10).
 - **Review cadence:** Matrix reviewed at every P0 milestone; not ad-hoc.
 - **No implementation without matrix entry:** No code is written for a capability until it has a row in this matrix.
 
 ---
 
-## 13. Summary — The Shift This Document Represents
+## 16. Summary — The Shift This Document Represents
 
 | From (audit) | To (matrix) |
 |---------------|-------------|
@@ -554,9 +731,27 @@ The matrix itself is "done" (ready to drive implementation) when:
 | Priority by gut | Priority by money/trust impact + entry rule |
 | Demo readiness | Production readiness |
 | "Is it built?" | "Does it survive contact with reality?" |
+| "Code merged = done" | 8-state lifecycle; "Production-ready" only after failure-tested + reviewed |
+| Implicit consistency | 12 explicit Business Invariants enforced as laws |
+| Ad-hoc external calls | Every dependency has a fail-open/closed/queue strategy |
+| Known failures only | Unknown-exception handling freezes + alerts unknown states |
 
-This matrix is the gate. SnakZap launches when every P0 capability passes its test criteria — not before.
+This matrix is the gate. SnakZap launches only when **every P0 capability reaches `Production-ready` (state 8 of the Capability Lifecycle)** — not before, not with exceptions.
 
 ---
 
-*End of SnakZap Production Readiness Matrix v1.0.*
+## 17. Next Step (after sign-off)
+
+Once v1.1 is signed off, the next document is the **P0 Dependency Graph** — not implementation, not sprint breakdown.
+
+The Dependency Graph will define:
+- Which P0 capability must be built first (no dependents).
+- What each P0 capability requires its dependencies to be at (which lifecycle state).
+- Which capabilities unlock once a given capability reaches `Production-ready`.
+- The critical path to launch.
+
+Only after the Dependency Graph is reviewed does sprint breakdown begin.
+
+---
+
+*End of SnakZap Production Readiness Matrix v1.1.*

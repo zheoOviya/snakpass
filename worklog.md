@@ -171,3 +171,28 @@ Stage Summary:
 - Matrix v1.0 ready for stakeholder review and sign-off.
 - Next step (only after sign-off): derive implementation order from P0 dependencies, then begin P0 work — not before.
 - Key discipline enforced: "No code is written for a capability until it has a row in this matrix."
+
+---
+Task ID: 14
+Agent: main
+Task: Revise Production Readiness Matrix v1.0 → v1.1 per stakeholder preliminary review (7 corrections + capability lifecycle).
+
+Work Log:
+- Added Revision History section documenting v1.0 → v1.1 changes.
+- Added 7 new inventory gaps (G51–G57): transactional integrity, concurrency, DR-split-from-backup, deployment/rollback, external-dependency failure strategy, business invariants, unknown-exception handling.
+- Added 5 new P0 capabilities to the matrix (P0-24 to P0-28) with full rows (failure scenario, dependency, acceptance, test, owner).
+- Added detailed 5-question breakdowns for all 5 new P0 capabilities (Happy/Failure/Recovery/Money-Trust/Observability).
+- Added Section 9: Business Invariants — 12 laws (I1–I12) the system must never violate, with enforcement + violation-handling per invariant. Violations route to P0-28 unknown-exception handling.
+- Added Section 10: External Dependency Failure Matrix — 14 dependency scenarios (Razorpay variants, Firebase, FCM, email, maps, DB, Redis, WebSocket, SMS) each with fail-open/closed/retry/queue strategy + user message + alert policy.
+- Added Section 11: Capability Lifecycle — 8 states (Proposed → Specified → Dependency-ready → Implemented → Tested → Observed → Failure-tested → Production-ready) with explicit gates. Rule: "code merged" ≠ "production-ready"; no Production-ready without Failure-tested.
+- Renumbered sections: old 9-13 → 12-16; added Section 17: Next Step (P0 Dependency Graph).
+- Updated Section 14 (Acceptance) to reference new sections + lifecycle states; launch gate now explicitly "every P0 at Production-ready (state 8)".
+- Updated Section 15 (Governance) with invariant-protection, lifecycle-enforcement, and external-dependency rules.
+- Updated Section 16 (Summary) with 4 new "From → To" rows reflecting v1.1 shifts.
+- Added 6 new open questions (Q11–Q16) to Decision Log covering CI/CD, DR region, feature flags, outbox impl, lock retry policy, exception-queue ownership.
+- No code changed. No implementation. Document only.
+
+Stage Summary:
+- Matrix v1.1 ready for stakeholder sign-off review: 17 sections, 28 P0 capabilities, 22 P1, 12 business invariants, 14 external-dependency scenarios, 8-state capability lifecycle, 16 open questions.
+- Next document after sign-off: P0 Dependency Graph (not implementation, not sprints).
+- v1.1 explicitly addresses all 7 stakeholder corrections: transactional integrity (✅ P0-24), concurrency (✅ P0-25), DR≠backup (✅ P0-26), deployment/rollback (✅ P0-27), external dependency failure matrix (✅ Section 10), business invariants (✅ Section 9), unknown-failure handling (✅ P0-28) + capability lifecycle gate (✅ Section 11).
