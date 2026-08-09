@@ -1,7 +1,7 @@
-# SnakZap Production Readiness Matrix v1.1
+# SnakZap Production Readiness Matrix v1.2
 
 > **Document Type:** Specification & Decision Document
-> **Status:** Draft v1.1 — pending sign-off
+> **Status:** Draft v1.2 — pending sign-off
 > **NOT an implementation plan.** This document defines *what* must be true before SnakZap can serve a real paying customer, *how* each capability must behave under failure, and *how* we will know it is ready. Implementation order, code, and sprints are derived from this — not the other way around.
 
 ---
@@ -10,14 +10,14 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.1 |
+| Version | 1.2 |
 | Date | 2026-08-09 |
-| Status | Draft — awaiting review |
+| Status | Draft — awaiting traceability review |
 | Baseline | Uploaded audit (`zheo-main.zip` rebuild) + self-audit + stakeholder feedback |
 | Authors | Engineering + Product |
 | Reviewers | (pending) |
-| Supersedes | v1.0 (ad-hoc feature checklist audit) |
-| Next review | After P0 sign-off; before any P1 implementation begins |
+| Supersedes | v1.1 |
+| Next review | After P0 traceability + invariant map sign-off; before P0 Dependency Graph |
 
 ---
 
@@ -26,7 +26,8 @@
 | Version | Date | Changes | Trigger |
 |---------|------|---------|---------|
 | v1.0 | 2026-08-09 | Initial matrix: 5-question framework, actor's worst day, P0/P1/P2/P3 inventory, 23 P0 capabilities. | Self-audit + stakeholder feedback. |
-| v1.1 | 2026-08-09 | Added 5 new P0 capabilities: **Transactional Data Integrity, Concurrency / Race Conditions, Disaster Recovery (split from backup), Deployment & Rollback, Unknown-Exception Handling**. Added 3 new sections: **External Dependency Failure Matrix, Business Invariants, Capability Lifecycle**. Added capability lifecycle gate: "code merged" ≠ "production-ready". Added 7 new inventory gaps (G51–G57). | Stakeholder preliminary review — 7 corrections identified. |
+| v1.1 | 2026-08-09 | Added 5 new P0 capabilities (P0-24..P0-28): Transactional Data Integrity, Concurrency, DR, Deployment & Rollback, Unknown-Exception. Added 3 sections: Business Invariants, External Dependency Failure Matrix, Capability Lifecycle (8 states). Added G51–G57. | Stakeholder preliminary review — 7 corrections. |
+| v1.2 | 2026-08-09 | Refined P0-24 (idempotent business effect, not technical exactly-once), P0-25 (3 concurrency cases + duplicate-execution control), P0-26 (business recovery, not just DB restore), P0-27 (3 deployment classes: backward-compatible / expand-migrate-contract / breaking), P0-28 (3 blast-radius levels: transaction freeze / entity quarantine / system kill switch). Added invariant IDs I-01..I-12 with `Protects` column on P0 capabilities. Added `Affected P0` column to External Dependency Matrix. Added lifecycle state `Approved` (now 9 states). Strengthened P0 launch gate to 6 AND conditions. Added Section 18: P0 Traceability & Invariant Map. Updated Next-Step chain: Traceability Map → Dependency Graph → Critical Path → Implementation Order → Sprint Plan. Added 4 new open questions (Q17–Q20). | Stakeholder architectural review — 10 corrections. |
 
 ---
 
@@ -188,40 +189,42 @@ These gaps were identified during the rebuild audit and form the **starting inve
 
 ## 7. The Matrix
 
-Columns: **Priority | Domain | Capability | Failure Scenario | Dependency | Acceptance Criteria | Test Criteria | Owner**
+Columns: **ID | Domain | Capability | Failure Scenario | Dependency | Acceptance Criteria | Test Criteria | Protects (Invariants) | Owner**
 
 ### 7.1 P0 — Cannot Launch Without It
 
-| Priority | Domain | Capability | Failure Scenario | Dependency | Acceptance Criteria | Test Criteria | Owner |
-|----------|--------|------------|------------------|------------|---------------------|---------------|-------|
-| P0 | Payment | Razorpay order create + verify + capture | Gateway timeout / signature mismatch / double Pay click | Razorpay SDK, Payment model | Every payment has a verifiable captured state; no payment captured without verified signature | Idempotency test; signature-tamper test; double-submit test | Backend |
-| P0 | Payment | Payment ledger (double-entry) | Ledger write fails after capture | Payment model, DB txn | Every captured payment has matching ledger entries; ledger is append-only | Ledger integrity test; partial-failure test | Backend |
-| P0 | Payment | Payment reconciliation (gateway ↔ ledger) | Gateway says captured, DB says failed | Payment + scheduled job | Daily reconciliation report; mismatches surface in exception queue within 1 hour | Reconciliation job test; mismatch injection test | Backend |
-| P0 | Payment | Refund flow (full + partial) | Refund requested but gateway down / partial refund mismatch | Payment + Razorpay refund API | Refund has its own status lifecycle; partial refunds tracked; ledger updated atomically | Refund lifecycle test; partial-refund test; refund-during-outage test | Backend |
-| P0 | Payment | Webhook integrity (HMAC + idempotent) | Duplicate webhook / tampered signature / out-of-order | Payment + webhook endpoint | Duplicate webhooks deduped; tampered rejected; out-of-order handled | Duplicate injection test; signature tamper test; reorder test | Backend |
-| P0 | Order | State separation (Order / Payment / Fulfilment / Refund) | Order cancelled but payment captured | Order + Payment + Fulfilment + Refund models | Each dimension evolves independently; inconsistent combos surfaced in exception queue | State-transition matrix test; inconsistent-state detection test | Backend |
-| P0 | Order | Order state machine hardening | Invalid transition attempted / concurrent updates | Order model + optimistic locking | Invalid transitions rejected; concurrent updates serialised | Concurrency test; invalid-transition test | Backend |
-| P0 | Order | Idempotency on order creation | Double submit / retry storm | Order model + idempotency key | Same idempotency key returns same order; no duplicate orders created | Idempotency-key test; retry-storm test | Backend |
-| P0 | Auth | Server-side Firebase ID token verification | Forged client identity / expired token | Firebase Admin SDK + session | Server rejects unverified identity; sessions bound to verified phone | Token-forgery test; expired-token test | Backend |
-| P0 | Auth | Session integrity (refresh, revoke, active sessions) | Stolen session token / user logs out elsewhere | Session model | Sessions expireable, revocable; active-sessions list available | Session-revoke test; concurrent-session test | Backend |
-| P0 | Auth | OTP retry limits + phone validation | OTP brute-force / invalid phone format | OTP service + rate limiter | Max 5 OTP attempts / 3 sends per 10 min; phone E.164 validated | Brute-force test; invalid-phone test | Backend |
-| P0 | Security | Zod input validation on every API | Malformed payload / type confusion | Zod schemas per route | No API accepts unvalidated input; 400 on schema mismatch | Fuzz test per route; schema-mismatch test | Backend |
-| P0 | Security | Rate limiting (fail-closed for auth/payment/admin-write) | Redis down / abuse burst | Rate limiter (Redis or in-memory fallback) | Auth/payment/admin-write return 503 when limiter unavailable; general API fail-open | Fail-closed test; burst test | Backend |
-| P0 | Security | CSRF protection | Cross-site forged POST | CSRF token + SameSite cookie | State-changing POSTs require valid CSRF token | CSRF injection test | Backend |
-| P0 | Data | Database migrations (not `db:push`) | Schema drift / data loss on deploy | Prisma migrate + review process | Every schema change ships as reviewed migration; no data-destructive push | Migration rollback test; drift detection test | Backend |
-| P0 | Data | Backup + recovery | DB corruption / accidental delete | Backup schedule + restore drill | Daily backups; restore drill passes monthly; RPO ≤ 24h, RTO ≤ 4h | Restore drill test; backup integrity test | Backend |
-| P0 | Reliability | Idempotency on all critical writes | Retry storm / partial failure | Idempotency key on orders, payments, refunds, status updates | All critical writes idempotent; retries return same result | Idempotency test per critical write | Backend |
-| P0 | Reliability | Error handling (boundaries + consistent responses) | Unhandled exception / partial response | Error boundaries + error envelope | Every API returns consistent error envelope; UI shows actionable errors | Error-injection test per route | Full-stack |
-| P0 | Observability | Structured logging | Silent failure / untraceable error | Logger (structured JSON) | Every critical path logs structured event with trace id | Log-coverage test | Backend |
-| P0 | Observability | Health checks + basic metrics | Service silently degraded | Health endpoint + metrics export | `/health` reflects DB + Redis + gateway status; metrics exported | Health-probe test; metric-coverage test | Backend |
-| P0 | Observability | Alerting on P0 failures | Payment success rate < 95% / reconciliation mismatch | Alert rules + on-call | Alerts fire on defined thresholds; false-positive rate < 5% | Alert-trigger test; false-positive audit | Backend |
-| P0 | Audit | Audit trail integrity (immutable, complete) | Tampered audit log / missing entry | Audit model + append-only storage | Audit entries immutable; every admin/financial action audited | Tamper test; coverage test | Backend |
-| P0 | Governance | Kill switch fail-safe behaviour | Kill switch itself fails | Kill switch + fallback | Kill switch defaults to safe state on failure; toggles audited | Kill-switch-failure test | Backend |
-| P0 | Data | Transactional data integrity (cross-entity) | Order + items + payment + availability + audit event partially commit | DB transactions + outbox pattern | No partially committed business transaction leaves system in a silently-wrong state; all writes atomic or compensating | Partial-failure injection test; outbox-consistency test | Backend |
-| P0 | Reliability | Concurrency / race-condition control | Two users order last item simultaneously; vendor toggles availability mid-checkout; admin + vendor edit same order | Optimistic locking + row-level locks + atomic decrements | Concurrent writes serialised; no oversell; conflicts surface as retry/conflict not silent corruption | Concurrency test suite (last-item, mid-edit, dual-modifier); optimistic-lock conflict test | Backend |
-| P0 | Data | Disaster recovery (split from backup) | DB corruption / regional failure / restore drill fails | Backup + restore drill + documented runbook | RPO ≤ 24h, RTO ≤ 4h; restore drill passes monthly; backup-corruption detection on every backup; documented runbook | Restore-drill test; corruption-detection test; runbook-walkthrough test | Backend |
-| P0 | Reliability | Deployment & rollback | Bad release / migration incompatibility / failed deploy | CI/CD + health-checked deploy + feature flags + rollback automation | Rollback to previous known-good within 10 min; migrations forward+backward compatible; failed deploy auto-aborts; feature flags gate new paths | Rollback drill test; migration-compatibility test; failed-deploy-abort test | Backend |
-| P0 | Admin | Unknown-exception handling (unclassified states) | System reaches a state not in known state machine | Invariant checker + freeze + exception queue + alert | Unknown state freezes affected transaction, preserves evidence, creates exception queue entry, alerts; never silently ignored | Unknown-state injection test; freeze-and-alert test | Backend |
+The `Protects` column lists which Business Invariants (Section 9) the capability is responsible for upholding. A capability may not reach `Production-ready` until every invariant it protects is verified.
+
+| ID | Domain | Capability | Failure Scenario | Dependency | Acceptance Criteria | Test Criteria | Protects | Owner |
+|----|--------|------------|------------------|------------|---------------------|---------------|----------|-------|
+| P0-01 | Payment | Razorpay order create + verify + capture | Gateway timeout / signature mismatch / double Pay click | Razorpay SDK, Payment model | Every payment has a verifiable captured state; no payment captured without verified signature | Idempotency test; signature-tamper test; double-submit test | I-01, I-04 | Backend |
+| P0-02 | Payment | Payment ledger (double-entry) | Ledger write fails after capture | Payment model, DB txn | Every captured payment has matching ledger entries; ledger is append-only | Ledger integrity test; partial-failure test | I-06, I-10 | Backend |
+| P0-03 | Payment | Payment reconciliation (gateway ↔ ledger) | Gateway says captured, DB says failed | Payment + scheduled job | Daily reconciliation report; mismatches surface in exception queue within 1 hour | Reconciliation job test; mismatch injection test | I-01, I-06 | Backend |
+| P0-04 | Payment | Refund flow (full + partial) | Refund requested but gateway down / partial refund mismatch | Payment + Razorpay refund API | Refund has its own status lifecycle; partial refunds tracked; ledger updated atomically | Refund lifecycle test; partial-refund test; refund-during-outage test | I-03, I-06, I-11 | Backend |
+| P0-05 | Payment | Webhook integrity (HMAC + idempotent) | Duplicate webhook / tampered signature / out-of-order | Payment + webhook endpoint | Duplicate webhooks deduped; tampered rejected; out-of-order handled | Duplicate injection test; signature tamper test; reorder test | I-01, I-04 | Backend |
+| P0-06 | Order | State separation (Order / Payment / Fulfilment / Refund) | Order cancelled but payment captured | Order + Payment + Fulfilment + Refund models | Each dimension evolves independently; inconsistent combos surfaced in exception queue | State-transition matrix test; inconsistent-state detection test | I-01, I-02, I-08 | Backend |
+| P0-07 | Order | Order state machine hardening | Invalid transition attempted / concurrent updates | Order model + optimistic locking | Invalid transitions rejected; concurrent updates serialised | Concurrency test; invalid-transition test | I-02, I-08 | Backend |
+| P0-08 | Order | Idempotency on order creation | Double submit / retry storm | Order model + idempotency key | Same idempotency key returns same order; no duplicate orders created | Idempotency-key test; retry-storm test | I-02, I-10 | Backend |
+| P0-09 | Auth | Server-side Firebase ID token verification | Forged client identity / expired token | Firebase Admin SDK + session | Server rejects unverified identity; sessions bound to verified phone | Token-forgery test; expired-token test | I-12 | Backend |
+| P0-10 | Auth | Session integrity (refresh, revoke, active sessions) | Stolen session token / user logs out elsewhere | Session model | Sessions expireable, revocable; active-sessions list available | Session-revoke test; concurrent-session test | I-12 | Backend |
+| P0-11 | Auth | OTP retry limits + phone validation | OTP brute-force / invalid phone format | OTP service + rate limiter | Max 5 OTP attempts / 3 sends per 10 min; phone E.164 validated | Brute-force test; invalid-phone test | I-12 | Backend |
+| P0-12 | Security | Zod input validation on every API | Malformed payload / type confusion | Zod schemas per route | No API accepts unvalidated input; 400 on schema mismatch | Fuzz test per route; schema-mismatch test | (all, foundational) | Backend |
+| P0-13 | Security | Rate limiting (fail-closed for auth/payment/admin-write) | Redis down / abuse burst | Rate limiter (Redis or in-memory fallback) | Auth/payment/admin-write return 503 when limiter unavailable; general API fail-open | Fail-closed test; burst test | (protects P0-09..P0-11) | Backend |
+| P0-14 | Security | CSRF protection | Cross-site forged POST | CSRF token + SameSite cookie | State-changing POSTs require valid CSRF token | CSRF injection test | (all state-changing) | Backend |
+| P0-15 | Data | Database migrations (not `db:push`) | Schema drift / data loss on deploy | Prisma migrate + review process | Every schema change ships as reviewed migration; no data-destructive push | Migration rollback test; drift detection test | (all, foundational) | Backend |
+| P0-16 | Data | Backup | DB corruption / accidental delete | Backup schedule + corruption-detection | Daily backups; corruption-detection checksum on every backup; backup integrity verified | Backup-integrity test; corruption-detection test | (all, foundational) | Backend |
+| P0-17 | Reliability | Idempotency on all critical writes | Retry storm / partial failure | Idempotency key on orders, payments, refunds, status updates | All critical writes idempotent; retries return same result | Idempotency test per critical write | I-04, I-10 | Backend |
+| P0-18 | Reliability | Error handling (boundaries + consistent responses) | Unhandled exception / partial response | Error boundaries + error envelope | Every API returns consistent error envelope; UI shows actionable errors | Error-injection test per route | (all, foundational) | Full-stack |
+| P0-19 | Observability | Structured logging | Silent failure / untraceable error | Logger (structured JSON) | Every critical path logs structured event with trace id | Log-coverage test | (all, observability) | Backend |
+| P0-20 | Observability | Health checks + basic metrics | Service silently degraded | Health endpoint + metrics export | `/health` reflects DB + Redis + gateway status; metrics exported | Health-probe test; metric-coverage test | (all, observability) | Backend |
+| P0-21 | Observability | Alerting on P0 failures | Payment success rate < 95% / reconciliation mismatch | Alert rules + on-call | Alerts fire on defined thresholds; false-positive rate < 5% | Alert-trigger test; false-positive audit | (all, observability) | Backend |
+| P0-22 | Audit | Audit trail integrity (immutable, complete) | Tampered audit log / missing entry | Audit model + append-only storage | Audit entries immutable; every admin/financial action audited | Tamper test; coverage test | I-07 | Backend |
+| P0-23 | Governance | Kill switch fail-safe behaviour | Kill switch itself fails | Kill switch + fallback | Kill switch defaults to safe state on failure; toggles audited | Kill-switch-failure test | I-09 | Backend |
+| P0-24 | Data | Transactional data integrity (cross-entity) — see detailed breakdown | Order + items + payment + availability + audit event partially commit; outbox publisher crashes after commit | DB transactions + outbox pattern | Committed business transaction eventually produces its required event with **idempotent business effect** (exactly-once in business outcome, even if physical delivery occurs more than once); no orphan entities; no partial commits | Partial-failure injection test; outbox-crash test; idempotent-replay test | I-01, I-02, I-05, I-06, I-10 | Backend |
+| P0-25 | Reliability | Concurrency + duplicate-execution control — see detailed breakdown | (A) last-item inventory race; (B) state-transition race (vendor ACCEPT→CANCEL while admin CANCEL→OVERRIDE); (C) payment double-click / frontend retry | Optimistic locking + row-level locks + atomic decrements + idempotency keys | Concurrent writes serialised; no oversell; conflicts surface as retry/conflict not silent corruption; duplicate executions are deduped, not double-applied | Concurrency case A (last-item); case B (state-transition); case C (payment duplicate); optimistic-lock conflict test | I-02, I-04, I-05, I-10 | Backend |
+| P0-26 | Data | Disaster recovery (business recovery, not just DB restore) — see detailed breakdown | DB corruption / regional failure / restore leaves payments-in-gateway inconsistent with restored DB | Backup + restore drill + post-restore reconciliation + documented runbook | RPO ≤ 24h, RTO ≤ 4h; restore drill passes monthly; **post-restore business-state reconciliation**: gateway payments re-synced to restored DB (captured-but-DB-pending → reconciled or refunded); audit log re-verified; **NO-GO if any money state unresolved post-restore** | Restore-drill test; corruption-detection test; post-restore reconciliation test; runbook walkthrough | I-01, I-02, I-06, I-07, I-10 | Backend |
+| P0-27 | Reliability | Deployment & rollback (3 classes) — see detailed breakdown | Bad release / migration incompatibility / failed deploy / DB rollback unsafe | CI/CD + health-checked deploy + feature flags + 3 deployment classes | Application rollback ≤ 10 min for backward-compatible deploys; **expand-migrate-contract** for schema changes (no breaking migration without contract phase); breaking deploys gated + flagged; failed deploy auto-aborts; **DB rollback never assumed safe — contract migrations preserve old-version compatibility** | Rollback drill test (per class); expand-migrate-contract test; migration-compatibility test; failed-deploy-abort test | (all, foundational) | Backend |
+| P0-28 | Admin | Unknown-exception handling (3 blast-radius levels) — see detailed breakdown | System reaches a state not in known state machine | Invariant checker + 3-level blast-radius freeze + exception queue + alert | Unknown state triggers the **smallest sufficient** freeze level (transaction / entity / system kill switch), preserves evidence, creates exception queue entry, alerts; never silently ignored; never over-freezes (one malformed order does not stop the platform) | Unknown-state injection at each blast-radius level; freeze-precision test; over-freeze-prevention test | I-01..I-12 (all) | Backend |
 
 ### 7.2 P1 — Must Work Reliably After Launch
 
@@ -468,54 +471,74 @@ Each capability below has all five questions answered. A capability is **not rea
 4. **Money / Trust Impact:** **High.** Wrong default = either lost sales or unsafe orders.
 5. **Observability:** Kill-switch-state metric.
 
-### P0-24 · Transactional Data Integrity (cross-entity)
+### P0-24 · Transactional Data Integrity (cross-entity) — idempotent business effect
 
-1. **Happy Path:** Order creation writes Order + OrderItems + decrements availability + emits audit event atomically (DB transaction + outbox). Payment capture updates Payment + Ledger + Order status atomically.
-2. **Failure Path:** Partial failure mid-transaction → entire business transaction rolls back; no orphan OrderItems, no orphan ledger entries, no decremented availability without an order. Outbox ensures the audit event eventually emits even if the immediate publish fails.
-3. **Recovery Path:** Outbox processor retries event emission; reconciliation catches any drift between transactional writes and emitted events.
-4. **Money / Trust Impact:** **Critical.** A partially committed order (items without order, or captured payment without ledger entry) is exactly the class of bug that silently corrupts financial state.
-5. **Observability:** Outbox lag metric; partial-commit detector; alert on any orphan entity.
-
-### P0-25 · Concurrency / Race-Condition Control
-
-1. **Happy Path:** Two users checkout simultaneously; the last available item goes to one, the other gets a clear "sold out" message. Vendor toggles availability mid-checkout; cart re-validation surfaces the change.
+1. **Happy Path:** Order creation writes Order + OrderItems + decrements availability + writes outbox event atomically (single DB transaction). Payment capture updates Payment + Ledger + Order status atomically. The outbox publisher later delivers the event to notifications/analytics/settlement.
 2. **Failure Path:**
-   - **Last-item race:** both pass cart validation; one wins the atomic decrement, other gets conflict (409) not silent corruption.
-   - **Mid-checkout edit:** vendor marks item unavailable between validation and order create → order create re-checks inside transaction, rejects if state changed.
-   - **Dual-modifier:** admin and vendor edit same order concurrently → optimistic lock (version field) rejects the loser with retry guidance.
-3. **Recovery Path:** Loser retries with fresh state; UI shows updated availability/price.
-4. **Money / Trust Impact:** **Critical.** Overselling an unavailable item = vendor can't fulfil = refund + trust loss. Silent corruption of concurrent edits = wrong order state.
-5. **Observability:** Conflict-rate metric per resource; alert on conflict spike (indicates contention or bug).
+   - **Partial failure mid-transaction** → entire business transaction rolls back; no orphan OrderItems, no orphan ledger entries, no decremented availability without an order.
+   - **Outbox publisher crashes after commit** → the event row is already committed in the DB (part of the same transaction), so it is NOT lost. Publisher restarts and re-publishes. Consumers may receive the event more than once → consumers must be idempotent, so the **business effect is exactly-once** even if physical delivery is at-least-once.
+   - **Consumer crashes mid-handling** → event re-delivered; idempotency key on consumer side ensures no double-application.
+3. **Recovery Path:** Outbox processor retries indefinitely with backoff; reconciliation job catches drift between transactional writes and emitted events; consumers dedup via idempotency key. The committed business transaction is never lost.
+4. **Money / Trust Impact:** **Critical.** This is the difference between "DB is consistent" and "the world the DB describes matches the world the rest of the system acted on." A captured payment without a delivered settlement event = vendor never paid = silent money leak.
+5. **Observability:** Outbox lag metric (unpublished events age); publisher-retry metric; consumer-idempotency-dedup metric; alert on outbox lag > threshold; partial-commit detector; alert on any orphan entity.
 
-### P0-26 · Disaster Recovery (split from backup)
+> **Key principle (v1.2):** We do NOT chase technical "exactly-once delivery." We chase **idempotent business effect**: a committed transaction's consequences (notifications, ledger, settlement, audit) eventually apply exactly once in business outcome, even under crashes, retries, and duplicate delivery.
 
-1. **Happy Path:** Daily backup succeeds; restore drill passes monthly; runbook current.
+### P0-25 · Concurrency + Duplicate-Execution Control — 3 cases
+
+1. **Happy Path:** All three concurrency classes below resolve correctly under simultaneous access.
+2. **Failure Path — three distinct cases:**
+   - **Case A — Inventory / availability race:** Two users checkout the last available item simultaneously. Both pass cart validation, but the order-create transaction holds a row-level lock and decrements atomically. One wins; the other's transaction sees zero availability and returns 409 (clear "sold out"), not silent corruption. Protects I-05, I-10.
+   - **Case B — State-transition race:** Vendor sends `ACCEPT → CANCEL` while admin sends `CANCEL → OVERRIDE` on the same order. Optimistic locking (version field) rejects the loser with a 409 + retry guidance; the winner's transition applies. The state machine never has two "current" transitions. Protects I-02, I-08.
+   - **Case C — Payment duplicate execution:** User double-clicks Pay, or frontend retries. Idempotency key on the payment-create request dedupes; the second request returns the same Payment row, no second capture. Protects I-04.
+3. **Recovery Path:** Loser of any race retries with fresh state; UI shows updated availability/price/status. Duplicate-execution victims are transparent — second click is a no-op returning the first result.
+4. **Money / Trust Impact:** **Critical per case.** (A) Oversell = vendor can't fulfil = refund + trust loss. (B) Conflicting state transitions = order in wrong state = fulfilment or refund wrong. (C) Double-charge = direct consumer harm.
+5. **Observability:** Conflict-rate metric per case (A/B/C); idempotency-dedup-hit metric; alert on conflict spike (indicates contention or bug).
+
+### P0-26 · Disaster Recovery — business recovery, not just DB restore
+
+1. **Happy Path:** Daily backup succeeds with corruption-detection checksum; monthly restore drill passes; runbook current.
 2. **Failure Path:**
-   - Backup succeeds but is corrupt → corruption-detection checksum on every backup; alert if checksum mismatch.
-   - Regional failure → failover to standby region (or accept downtime within RTO).
-   - Restore drill fails → drill blocks release; root-caused before any deploy.
-3. **Recovery Path:** Restore from last-known-good backup per runbook; RTO ≤ 4h; data loss bounded by RPO ≤ 24h.
-4. **Money / Trust Impact:** **Critical.** Without recoverable backups, a single DB failure destroys all orders, payments, and audit history — unrecoverable.
-5. **Observability:** Backup-success + checksum metric; restore-drill-result metric; alert on any backup failure or drill failure.
+   - **Backup corrupt** → checksum mismatch → alert; last-known-good backup used.
+   - **Regional failure** → failover to standby region (or accept downtime within RTO).
+   - **Restore drill fails** → drill blocks release; root-caused before any deploy.
+   - **Restore leaves money state inconsistent (v1.2 critical addition):** Backup is 2h old. Razorpay captured 50 payments during those 2h, but restored DB shows them pending. This is NOT "restore complete" — it is a money-state mismatch that must be reconciled.
+3. **Recovery Path:**
+   - Restore from last-known-good backup per runbook (RTO ≤ 4h; RPO ≤ 24h).
+   - **Post-restore business-state reconciliation (v1.2):** Fetch gateway transaction list since backup point; re-sync each to restored DB — captured-but-DB-pending → mark captured + create ledger entry; or if order doesn't exist in restored DB → refund. Audit log re-verified for completeness.
+   - **NO-GO if any money state unresolved post-restore.** The system is not "recovered" until money + order + audit + event state are coherent.
+4. **Money / Trust Impact:** **Critical.** A "restored DB" with un-reconciled gateway payments = either lost money (captured but DB shows pending → never fulfilled, never refunded) or double-spend (DB shows pending → refund issued → but gateway already captured).
+5. **Observability:** Backup-success + checksum metric; restore-drill-result metric; **post-restore reconciliation result** (mismatch count); alert on any backup failure, drill failure, or unresolved money state post-restore.
 
-### P0-27 · Deployment & Rollback
+### P0-27 · Deployment & Rollback — 3 deployment classes
 
-1. **Happy Path:** New release deploys via health-checked pipeline; health checks pass; traffic shifts; feature flags gate new code paths.
-2. **Failure Path:**
-   - Health check fails post-deploy → auto-abort; traffic stays on previous version.
-   - Migration incompatible with running code → deploy blocked; backward-compatible migration required.
-   - Bad release reaches production → rollback to previous known-good within 10 min; feature flag can dark-kill new path.
-3. **Recovery Path:** Rollback procedure documented + drilled; migrations forward+backward compatible; feature flags as kill switch for in-flight code.
-4. **Money / Trust Impact:** **Critical.** A bad deploy with no rollback = indefinite outage = direct revenue loss + trust erosion.
-5. **Observability:** Deploy-success metric; rollback-time metric; alert on health-check degradation post-deploy.
+1. **Happy Path:** Release deploys via health-checked pipeline; class is identified pre-deploy; correct strategy applied.
+2. **Failure Path + class-specific handling:**
+   - **Class 1 — Backward-compatible:** Old and new app versions can coexist. Health check fails post-deploy → auto-abort, traffic stays on previous. Rollback ≤ 10 min (just traffic shift back).
+   - **Class 2 — Expand → Migrate → Contract (schema changes):** Schema change deployed in 3 phases — (expand) add new columns/tables, both versions work; (migrate) backfill in background; (contract) old version retired, old columns dropped. A rollback at any phase is safe because the previous phase's schema is still compatible. **No breaking migration ships without this contract phase.**
+   - **Class 3 — Breaking:** Old version immediately incompatible. Gated + flagged + requires explicit sign-off; rollback requires DB rollback too (which may be unsafe) → so breaking deploys require a forward-fix plan, not a rollback plan.
+3. **Recovery Path:**
+   - Class 1: traffic rollback ≤ 10 min.
+   - Class 2: rollback to previous phase (always safe).
+   - Class 3: forward-fix (rollback often unsafe for DB); breaking deploys thus carry the highest governance bar.
+4. **Money / Trust Impact:** **Critical.** A bad deploy with no safe rollback = indefinite outage. A breaking migration rolled back unsafely = data loss.
+5. **Observability:** Deploy-class label per deploy; deploy-success metric; rollback-time metric (per class); migration-compatibility check in CI; alert on health-check degradation post-deploy.
 
-### P0-28 · Unknown-Exception Handling (unclassified states)
+> **Key principle (v1.2):** Application rollback and DB rollback are different problems. The 10-minute rollback guarantee applies to backward-compatible (Class 1) deploys only. Schema changes must use expand-migrate-contract so rollback is always safe. Breaking changes accept forward-fix as the recovery path.
+
+### P0-28 · Unknown-Exception Handling — 3 blast-radius levels
 
 1. **Happy Path:** System stays within known state machines; no unknown states reached.
-2. **Failure Path:** System reaches a state not in any known state machine (e.g. Order status = "ZOMBIE" due to a bug, or Payment captured but no Order exists). Invariant checker detects it → freezes the affected transaction (no further transitions) → preserves evidence (full state snapshot + trace) → creates exception queue entry → alerts on-call.
-3. **Recovery Path:** Human investigates via exception queue; root-causes; either corrects state through audited manual action or marks as resolved-with-explanation. System never silently drops or auto-"fixes" unknown states.
-4. **Money / Trust Impact:** **Critical.** Silently ignoring unknown states is how money leaks compound undetected. Freezing + alerting contains the blast radius.
-5. **Observability:** Unknown-state counter metric; alert on any non-zero count; exception-queue-aging metric.
+2. **Failure Path:** System reaches a state not in any known state machine (e.g. Order status = "ZOMBIE", or Payment captured but no Order exists, or ledger imbalance detected). The invariant checker detects it and triggers the **smallest sufficient** freeze level:
+   - **Level 1 — Transaction freeze:** Only the affected order/payment is frozen (no further state transitions on it). The rest of the platform continues normally. Used when the anomaly is isolated to one business transaction.
+   - **Level 2 — Entity quarantine:** A whole entity is quarantined — e.g. a vendor whose orders keep producing anomalies, or a menu item with inconsistent state. New orders against that entity are blocked; existing ones elsewhere continue. Used when the anomaly appears systemic to one entity.
+   - **Level 3 — System kill switch:** Emergency shutdown of an entire subsystem (e.g. ordering, payments). This connects to the existing kill-switch architecture (P0-23). Used only when the anomaly threatens platform-wide integrity.
+   At every level: evidence preserved (full state snapshot + trace + invariant that was violated), exception queue entry created, on-call alerted.
+3. **Recovery Path:** Human investigates via exception queue; root-causes; corrects state through audited manual action or marks resolved-with-explanation; unfreezes the affected transaction/entity/subsystem. System never silently drops or auto-"fixes" unknown states.
+4. **Money / Trust Impact:** **Critical, but bounded.** Silently ignoring unknown states is how money leaks compound undetected. Over-freezing (Level 3 for a Level 1 problem) is how a single malformed order takes down the platform. The 3-level model contains blast radius appropriately.
+5. **Observability:** Unknown-state counter metric (per level); freeze-level distribution metric; alert on any non-zero count; exception-queue-aging metric; **over-freeze-prevention audit** (was Level 3 used when Level 1 would have sufficed?).
+
+> **Key principle (v1.2):** Freeze precision matters. The goal is not "freeze everything that looks weird" — it is "freeze the smallest scope that contains the anomaly, so the rest of the platform keeps serving customers."
 
 ---
 
@@ -553,20 +576,22 @@ Each capability below has all five questions answered. A capability is **not rea
 
 Invariants are not acceptance criteria — they are **laws** the system must never violate. Every P0 capability is tested against these. A violation of any invariant is, by definition, an **unknown exception** (see P0-28) and must be frozen + alerted, not silently corrected.
 
-| # | Invariant | Enforcement | Violation ⇒ |
-|---|-----------|-------------|-------------|
-| I1 | A captured payment cannot exist without a valid order. | Payment.orderId FK NOT NULL + transactional create | Freeze + exception queue |
-| I2 | A completed order cannot exist without a successful fulfilment. | Order.status transition guarded by fulfilment status | Freeze + exception queue |
-| I3 | Total refund amount across a payment cannot exceed the captured amount. | Refund service checks sum before creating | Reject + alert |
-| I4 | A payment cannot be captured twice. | Payment.status single-transition + idempotency key | Reject second capture + alert |
-| I5 | An order's items must all belong to the order's restaurant. | OrderItem.menuItemId → MenuItem.restaurantId == Order.restaurantId | Reject + alert |
-| I6 | Ledger must balance: sum of debits == sum of credits per order/payment. | Ledger integrity check hourly | Freeze affected + exception queue |
-| I7 | Audit log is append-only; no entry may be mutated or deleted. | Storage-level WORM + reject on update/delete | Alert on any attempt |
-| I8 | A vendor cannot fulfil an order they did not accept (if accept flow exists). | Fulfilment status gated on acceptance | Reject + alert |
-| I9 | Kill switch state is monotonic per toggle event; no silent reverts. | Toggle event log + state derived from log | Freeze on inconsistency |
-| I10 | No business transaction may leave orphan entities (items without order, ledger without payment). | DB transaction + outbox | Freeze + reconciliation |
-| I11 | Refund cannot be requested on an un-captured payment. | Refund service checks Payment.status | Reject + alert |
-| I12 | Session token cannot be valid after revocation. | Session revocation checked on every request | Reject + alert on anomaly |
+Each invariant has a stable ID (`I-01`..`I-12`) so capabilities and dependencies can reference it via a `Protects:` column (see Section 7.1 and the Traceability Map, Section 18).
+
+| ID | Name | Invariant (Law) | Enforcement | Violation ⇒ |
+|----|------|-----------------|-------------|-------------|
+| I-01 | Payment Integrity | A captured payment cannot exist without a valid order. | Payment.orderId FK NOT NULL + transactional create | Freeze + exception queue |
+| I-02 | Order Integrity | A completed order cannot exist without a successful fulfilment. | Order.status transition guarded by fulfilment status | Freeze + exception queue |
+| I-03 | Refund Integrity | Total refund amount across a payment cannot exceed the captured amount. | Refund service checks sum before creating | Reject + alert |
+| I-04 | Capture Uniqueness | A payment cannot be captured twice. | Payment.status single-transition + idempotency key | Reject second capture + alert |
+| I-05 | Item-Order Consistency | An order's items must all belong to the order's restaurant. | OrderItem.menuItemId → MenuItem.restaurantId == Order.restaurantId | Reject + alert |
+| I-06 | Ledger Balance | Ledger must balance: sum of debits == sum of credits per order/payment. | Ledger integrity check hourly | Freeze affected + exception queue |
+| I-07 | Audit Integrity | Audit log is append-only; no entry may be mutated or deleted. | Storage-level WORM + reject on update/delete | Alert on any attempt |
+| I-08 | Fulfilment Authorization | A vendor cannot fulfil an order they did not accept (if accept flow exists). | Fulfilment status gated on acceptance | Reject + alert |
+| I-09 | Kill-Switch Monotonicity | Kill switch state is monotonic per toggle event; no silent reverts. | Toggle event log + state derived from log | Freeze on inconsistency |
+| I-10 | Transactional Completeness | No business transaction may leave orphan entities (items without order, ledger without payment). | DB transaction + outbox | Freeze + reconciliation |
+| I-11 | Refund Precondition | Refund cannot be requested on an un-captured payment. | Refund service checks Payment.status | Reject + alert |
+| I-12 | Session Revocation | Session token cannot be valid after revocation. | Session revocation checked on every request | Reject + alert on anomaly |
 
 **Rule:** Any code change that could weaken an invariant requires matrix-governance sign-off (see Section 15).
 
@@ -574,24 +599,26 @@ Invariants are not acceptance criteria — they are **laws** the system must nev
 
 ## 10. External Dependency Failure Matrix
 
-Every external dependency has an explicit failure strategy. **Fail-open** = degrade but continue serving requests. **Fail-closed** = reject the request (safer for money/auth). **Retry** = transient backoff. **Queue** = persist and process later. **User message** = what the user sees.
+Every external dependency has an explicit failure strategy. **Fail-open** = degrade but continue serving requests. **Fail-closed** = reject the request (safer for money/auth). **Retry** = transient backoff. **Queue** = persist and process later. **User message** = what the user sees. The `Affected P0` column links each dependency failure to the capabilities it can compromise.
 
-| Dependency | Failure Mode | Strategy | User Message | Alert? |
-|------------|--------------|----------|--------------|--------|
-| **Razorpay (order create)** | Timeout / 5xx | Retry ×3 with backoff; then fail-closed | "Payment service busy. Please retry." | Yes, on sustained failure |
-| **Razorpay (capture/verify)** | Signature mismatch | Fail-closed; do not capture | "Payment could not be verified. No charge made." | Yes |
-| **Razorpay (refund)** | Gateway down | Queue refund; retry with backoff; REFUND_REQUESTED persists | "Refund is processing. You'll be notified." | Yes, if stuck > 1h |
-| **Razorpay (webhook)** | Duplicate | Idempotent dedup; 200 OK | N/A (no user) | No (expected) |
-| **Razorpay (webhook)** | Tampered signature | 400 reject | N/A | Yes |
-| **Firebase (phone OTP)** | Unavailable / config error | Fail-open to demo OTP (preview only); **production: fail-closed** | "Authentication unavailable. Please retry." | Yes |
-| **Firebase (Admin token verify)** | Unreachable | Fail-closed; reject session mint | "Could not verify identity. Please re-login." | Yes |
-| **FCM (push)** | Token stale / delivery fail | Token refresh; retry; email fallback | (Consumer sees email if push fails) | No, on single fail; Yes on rate spike |
-| **Email provider** | Bounce / throttle | Retry ×3; quarantine bad addresses | (User sees nothing; alt channel used) | Yes on bounce-rate spike |
-| **Maps / location** | Unavailable | Fail-open; ranking without distance | "Showing nearby restaurants" (degraded ranking) | No |
-| **Database** | Degraded / unavailable 30s | Fail-closed on writes; read-replica for reads if available | "Service temporarily unavailable. Please retry." | Yes immediately |
-| **Redis** | Unavailable | Auth/payment/admin-write: fail-closed (503); general API: fail-open (in-memory limiter) | "Service busy. Please retry." for fail-closed paths | Yes |
-| **WebSocket (socket.io)** | Disconnected | Client auto-reconnect + missed-event backfill from event log | "Reconnecting…" indicator; no silent gap | Yes if > N clients disconnected |
-| **SMS gateway (if separate from Firebase)** | Down | Queue pickup-OTP; consumer sees in-app OTP as fallback | In-app OTP visible | Yes |
+| Dependency | Failure Mode | Strategy | User Message | Alert? | Affected P0 |
+|------------|--------------|----------|--------------|--------|-------------|
+| **Razorpay (order create)** | Timeout / 5xx | Retry ×3 with backoff; then fail-closed | "Payment service busy. Please retry." | Yes, on sustained failure | P0-01, P0-03 |
+| **Razorpay (capture/verify)** | Signature mismatch | Fail-closed; do not capture | "Payment could not be verified. No charge made." | Yes | P0-01, P0-05, I-01, I-04 |
+| **Razorpay (refund)** | Gateway down | Queue refund; retry with backoff; REFUND_REQUESTED persists | "Refund is processing. You'll be notified." | Yes, if stuck > 1h | P0-04, P0-03 |
+| **Razorpay (webhook)** | Duplicate | Idempotent dedup; 200 OK | N/A (no user) | No (expected) | P0-05, I-04 |
+| **Razorpay (webhook)** | Tampered signature | 400 reject | N/A | Yes | P0-05, P0-28, I-01 |
+| **Firebase (phone OTP)** | Unavailable / config error | Fail-open to demo OTP (preview only); **production: fail-closed** | "Authentication unavailable. Please retry." | Yes | P0-09, P0-11 |
+| **Firebase (Admin token verify)** | Unreachable | Fail-closed; reject session mint | "Could not verify identity. Please re-login." | Yes | P0-09, P0-10, I-12 |
+| **FCM (push)** | Token stale / delivery fail | Token refresh; retry; email fallback | (Consumer sees email if push fails) | No, on single fail; Yes on rate spike | (P1 notification — degraded, not P0) |
+| **Email provider** | Bounce / throttle | Retry ×3; quarantine bad addresses | (User sees nothing; alt channel used) | Yes on bounce-rate spike | (P1 notification — degraded, not P0) |
+| **Maps / location** | Unavailable | Fail-open; ranking without distance | "Showing nearby restaurants" (degraded ranking) | No | (P1 discovery — degraded, not P0) |
+| **Database** | Degraded / unavailable 30s | Fail-closed on writes; read-replica for reads if available | "Service temporarily unavailable. Please retry." | Yes immediately | P0-24, P0-25, P0-26, I-01..I-10 (all data P0s) |
+| **Redis** | Unavailable | Auth/payment/admin-write: fail-closed (503); general API: fail-open (in-memory limiter) | "Service busy. Please retry." for fail-closed paths | Yes | P0-13, P0-10 (sessions) |
+| **WebSocket (socket.io)** | Disconnected | Client auto-reconnect + missed-event backfill from event log | "Reconnecting…" indicator; no silent gap | Yes if > N clients disconnected | (P1 realtime — degraded, not P0) |
+| **SMS gateway (if separate from Firebase)** | Down | Queue pickup-OTP; consumer sees in-app OTP as fallback | In-app OTP visible | Yes | (P1 notification — degraded, not P0) |
+| **Outbox publisher (internal worker)** | Crashes / stalled | Event row already committed; publisher restarts and re-publishes; consumers idempotent | N/A | Yes, on lag > threshold | P0-24 |
+| **CI/CD pipeline** | Deploy fails mid-way | Auto-abort; traffic stays on previous version | N/A | Yes | P0-27 |
 
 **Rule:** A dependency not listed here cannot be added to the system without a row in this table. No external call without a failure strategy.
 
@@ -599,7 +626,7 @@ Every external dependency has an explicit failure strategy. **Fail-open** = degr
 
 ## 11. Capability Lifecycle
 
-A capability is not "done" when code is merged. It moves through explicit lifecycle states, each a gate. A capability at a lower state cannot be relied upon by a capability at a higher state.
+A capability is not "done" when code is merged. It moves through explicit lifecycle states, each a gate. A capability at a lower state cannot be relied upon by a capability at a higher state. Automated tests prove system behavior; the final `Approved` state proves a human business owner accepts the residual risk.
 
 ```
 Proposed
@@ -615,7 +642,11 @@ Tested
 Observed
    ↓  [failure paths injected and verified; recovery confirmed]
 Failure-tested
-   ↓  [second-engineer review; invariant checks pass; sign-off]
+   ↓  [second-engineer review; invariant checks pass]
+Reviewed
+   ↓  [business owner accepts residual risk; sign-off]
+Approved
+   ↓  [final production gate]
 Production-ready
 ```
 
@@ -628,14 +659,17 @@ Production-ready
 | **Tested** | Happy path works in production-like env. | Observability live and emitting expected signals. |
 | **Observed** | Running with observability; baseline metrics captured. | Failure paths injected. |
 | **Failure-tested** | Failure + recovery paths verified by injection. | Second-engineer review; invariants pass. |
-| **Production-ready** | Signed off; may be relied upon by other capabilities. | — |
+| **Reviewed** | Second engineer reviewed; invariants verified; technical sign-off. | Business owner accepts residual risk. |
+| **Approved** | Business owner has accepted the risk profile; governance sign-off recorded. | Final production gate. |
+| **Production-ready** | Approved + all launch-gate AND-conditions met. May be relied upon. | — |
 
-**The two rules that make this real:**
+**The three rules that make this real:**
 
 1. **"Code merged" ≠ "Production-ready."** A merged capability at `Implemented` cannot be a dependency for another capability's `Production-ready` claim.
-2. **No capability reaches `Production-ready` without passing `Failure-tested`.** Happy-path-only capabilities block launch.
+2. **No capability reaches `Production-ready` without passing `Failure-tested` AND `Reviewed` AND `Approved`.** Happy-path-only capabilities block launch. Automated tests are necessary but not sufficient — a human must accept the risk.
+3. **`Approved` is a business decision, not a technical one.** It records that a business owner understands the failure modes, the residual risk, and the recovery procedure — and accepts launching with them.
 
-**Launch gate:** SnakZap launches only when **every P0 capability is at `Production-ready`** (state 8).
+**Launch gate (see Section 14 for full conditions):** SnakZap launches only when **every P0 capability is at `Production-ready`** AND all launch-gate AND-conditions hold.
 
 ---
 
@@ -677,6 +711,10 @@ These require stakeholder input before implementation. Listed here so they are n
 | Q14 | Outbox implementation — DB table + worker, or message broker? | DB table + worker (simpler) | P0-24 transactional integrity |
 | Q15 | Optimistic-lock retry policy — auto-retry N times or surface to user? | Auto-retry ×2; then surface conflict | P0-25 concurrency |
 | Q16 | Exception queue ownership — dedicated ops role or shared on-call? | Shared on-call initially | P0-28 + P1 admin exception queue |
+| Q17 | Outbox consumer idempotency key — order id or event id? | Event id (allows multiple event types per order) | P0-24 |
+| Q18 | Freeze blast-radius escalation — auto-escalate Level 1 → 2 → 3, or human-escalated only? | Human-escalated; auto only on invariant I-01/I-04 (money) violation | P0-28 |
+| Q19 | Deployment class classification — pre-deploy automated check, or manual label? | Automated check via migration-analysis tool; manual override requires sign-off | P0-27 |
+| Q20 | Business owner for `Approved` lifecycle state — per capability, or single product owner? | Single product owner for v1; per-capability owners post-launch | Capability lifecycle |
 
 ---
 
@@ -684,28 +722,43 @@ These require stakeholder input before implementation. Listed here so they are n
 
 The matrix itself is "done" (ready to drive implementation) when:
 
-1. Every P0 capability has all 5 questions answered. ✅ (v1.1 — 28 P0 capabilities)
-2. Every P1 capability has all 5 questions answered. ✅ (v1.1, condensed — 22 P1 capabilities)
-3. Actor's worst-day scenarios traced through capabilities. ✅ (v1.1)
-4. Business invariants (Section 9) defined and enforcement specified. ✅ (v1.1 — 12 invariants)
-5. External dependency failure matrix (Section 10) complete. ✅ (v1.1 — 14 dependency scenarios)
-6. Capability lifecycle (Section 11) defined with explicit gates. ✅ (v1.1 — 8 states)
-7. Open questions logged with defaults. ✅ (v1.1)
-8. Stakeholder sign-off on P0 scope. ⏳ (pending)
-9. P2/P3 inventory acknowledged as out-of-scope for v1 launch. ✅ (v1.1)
+1. Every P0 capability has all 5 questions answered. ✅ (v1.2 — 28 P0 capabilities)
+2. Every P1 capability has all 5 questions answered. ✅ (v1.2, condensed — 22 P1 capabilities)
+3. Actor's worst-day scenarios traced through capabilities. ✅ (v1.2)
+4. Business invariants (Section 9) defined with stable IDs + enforcement + violation-handling. ✅ (v1.2 — 12 invariants I-01..I-12)
+5. External dependency failure matrix (Section 10) complete with `Affected P0` linkage. ✅ (v1.2 — 16 dependency scenarios)
+6. Capability lifecycle (Section 11) defined with explicit gates including `Approved`. ✅ (v1.2 — 9 states)
+7. Traceability map (Section 18) linking capabilities ↔ invariants ↔ dependencies ↔ tests ↔ observability. ✅ (v1.2)
+8. Open questions logged with defaults. ✅ (v1.2 — 20 open questions)
+9. Stakeholder sign-off on P0 scope. ⏳ (pending)
+10. P2/P3 inventory acknowledged as out-of-scope for v1 launch. ✅ (v1.2)
 
-**A capability is "Production-ready" (separate from the matrix being done) when it reaches state 8 of the Capability Lifecycle (Section 11):**
+**A capability is "Production-ready" (separate from the matrix being done) when it reaches state 9 of the Capability Lifecycle (Section 11):**
 
-- Specified (5 questions answered). ✅ at matrix v1.1
+- Specified (5 questions answered). ✅ at matrix v1.2
 - Dependency-ready (dependencies at least Implemented). ⏳
 - Implemented (code merged; happy-path tests pass). ⏳
 - Tested (happy-path verified in staging). ⏳
 - Observed (observability live; baseline captured). ⏳
 - Failure-tested (failure paths injected; recovery confirmed). ⏳
-- Reviewed by a second engineer; invariants pass. ⏳
-- → **Production-ready** (signed off). ⏳
+- Reviewed (second-engineer; invariants verified). ⏳
+- Approved (business owner accepts residual risk). ⏳
+- → **Production-ready**. ⏳
 
-**Launch gate:** SnakZap launches only when **every P0 capability is at Production-ready (state 8)**. No exceptions, no "we'll fix it post-launch" for P0.
+### 14.1 P0 Launch Gate — 6 AND-conditions (PRODUCTION GO / NO-GO)
+
+SnakZap launches **only when ALL six conditions hold simultaneously.** Any single failure ⇒ NO-GO.
+
+| # | Condition | Evidence |
+|---|-----------|----------|
+| 1 | **All P0 capabilities at `Production-ready`** (lifecycle state 9) | Capability lifecycle tracker — every P0 row green |
+| 2 | **All P0 invariants verified** (I-01..I-12) | Invariant-checker test suite green; no unresolved violations |
+| 3 | **All critical external-dependency scenarios tested** | Dependency matrix (Section 10) — every row with a P0 `Affected P0` link has been failure-injected |
+| 4 | **DR drill passed** (including post-restore business-state reconciliation) | P0-26 restore-drill report; no unresolved money state |
+| 5 | **Rollback drill passed** (per deployment class) | P0-27 rollback-drill report; Class 1 ≤ 10 min verified |
+| 6 | **No unresolved P0 exception** in the exception queue | Exception queue empty of P0-class entries; any open entries have an accepted-risk record |
+
+**Verdict:** Conditions 1–6 all green ⇒ **PRODUCTION GO.** Any red ⇒ **NO-GO**, no exceptions, no "we'll fix it post-launch" for P0.
 
 ---
 
@@ -715,8 +768,9 @@ The matrix itself is "done" (ready to drive implementation) when:
 - **Promotion rule:** A capability can be promoted to P0/P1 only when its failure + recovery is defined (the entry rule).
 - **Demotion rule:** A P0 capability found to have undefined failure semantics is demoted to "blocked" until resolved.
 - **Invariant protection:** Any code change that could weaken a Business Invariant (Section 9) requires matrix-governance sign-off. Invariants are laws, not guidelines.
-- **Lifecycle enforcement:** A capability may not be claimed as a dependency until it reaches at least `Dependency-ready` (state 3, Section 11). A capability may not gate launch until it reaches `Production-ready` (state 8).
+- **Lifecycle enforcement:** A capability may not be claimed as a dependency until it reaches at least `Dependency-ready` (state 3, Section 11). A capability may not gate launch until it reaches `Production-ready` (state 9, which requires `Approved` — business-owner sign-off).
 - **External dependency rule:** No new external dependency may be introduced without a row in the External Dependency Failure Matrix (Section 10).
+- **Traceability rule:** Every P0 capability must list which invariants it `Protects` (Section 7.1). Every invariant must have at least one protecting capability (Section 18.2). Gaps are matrix defects.
 - **Review cadence:** Matrix reviewed at every P0 milestone; not ad-hoc.
 - **No implementation without matrix entry:** No code is written for a capability until it has a row in this matrix.
 
@@ -731,27 +785,138 @@ The matrix itself is "done" (ready to drive implementation) when:
 | Priority by gut | Priority by money/trust impact + entry rule |
 | Demo readiness | Production readiness |
 | "Is it built?" | "Does it survive contact with reality?" |
-| "Code merged = done" | 8-state lifecycle; "Production-ready" only after failure-tested + reviewed |
-| Implicit consistency | 12 explicit Business Invariants enforced as laws |
-| Ad-hoc external calls | Every dependency has a fail-open/closed/queue strategy |
-| Known failures only | Unknown-exception handling freezes + alerts unknown states |
+| "Code merged = done" | 9-state lifecycle; "Production-ready" only after failure-tested + reviewed + approved |
+| Implicit consistency | 12 explicit Business Invariants (I-01..I-12) enforced as laws |
+| Ad-hoc external calls | Every dependency has a fail-open/closed/queue strategy + `Affected P0` link |
+| Known failures only | Unknown-exception handling freezes + alerts unknown states (3 blast-radius levels) |
+| Technical exactly-once | Idempotent business effect (outbox + idempotent consumers) |
+| "DB restore = recovered" | Business recovery — post-restore money/order/audit state reconciled |
+| "10-min rollback" blanket promise | Per deployment class: backward-compatible / expand-migrate-contract / breaking |
+| "Freeze everything weird" | Smallest-sufficient freeze scope (transaction / entity / system) |
+| Parallel lists (caps, invariants, deps, tests) | Traceability map links them first-class (Section 18) |
+| "All tests green = launch" | 6 AND-condition launch gate (caps + invariants + dep tests + DR drill + rollback drill + zero P0 exceptions) |
 
-This matrix is the gate. SnakZap launches only when **every P0 capability reaches `Production-ready` (state 8 of the Capability Lifecycle)** — not before, not with exceptions.
+This matrix is the gate. SnakZap launches only when **all 6 launch-gate AND-conditions (Section 14.1) are green** — not before, not with exceptions.
 
 ---
 
 ## 17. Next Step (after sign-off)
 
-Once v1.1 is signed off, the next document is the **P0 Dependency Graph** — not implementation, not sprint breakdown.
+Once v1.2 is signed off, the next artifacts follow a strict chain — **no implementation, no sprints, until each link is reviewed.**
 
-The Dependency Graph will define:
+```
+v1.2 Matrix (this document)
+        ↓  [sign-off]
+P0 Traceability & Invariant Map (Section 18, foundation laid in this version)
+        ↓  [review]
+P0 Dependency Graph (technical + business/feature dependencies)
+        ↓  [review]
+Critical Path to Launch
+        ↓  [review]
+Implementation Order
+        ↓  [review]
+Sprint Plan
+        ↓
+Implementation begins
+```
+
+The **P0 Traceability & Invariant Map** (Section 18) is the immediate next artifact because the matrix currently lists capabilities, invariants, dependencies, and tests as parallel lists — without explicit links between them, a dependency graph would be built on assumptions. The traceability map makes those links first-class.
+
+The **P0 Dependency Graph** then builds on the traceability map to define:
 - Which P0 capability must be built first (no dependents).
 - What each P0 capability requires its dependencies to be at (which lifecycle state).
 - Which capabilities unlock once a given capability reaches `Production-ready`.
 - The critical path to launch.
+- **Business/feature dependencies preserved** (e.g. prepaid + quick reorder, POS + settlement, live-kitchen + push notifications — interactions called out in the Strategic Blueprint), not just technical dependencies.
 
-Only after the Dependency Graph is reviewed does sprint breakdown begin.
+Only after the Dependency Graph + Critical Path are reviewed does sprint breakdown begin.
 
 ---
 
-*End of SnakZap Production Readiness Matrix v1.1.*
+## 18. P0 Traceability & Invariant Map (v1.2 foundation)
+
+This section is the **bridge** between the matrix's parallel lists (capabilities / invariants / dependencies / tests / observability) and the upcoming P0 Dependency Graph. It makes the relationships first-class so the dependency graph is built on facts, not assumptions.
+
+### 18.1 Master chain
+
+Every P0 capability traces through this chain. A break at any link is a matrix defect.
+
+```
+Capability (P0-##)
+    ↓  Protects →
+Invariant (I-##)
+    ↓  Enforced by →
+Acceptance criterion + Test criterion
+    ↓  Verified via →
+Failure-injection scenario
+    ↓  Recovered via →
+Recovery procedure
+    ↓  Observed via →
+Metric / log / alert
+    ↓  Triggered by failure of →
+External dependency (Section 10 row)
+    ↓  Lifecycle gate →
+Production-ready (state 9)
+```
+
+### 18.2 Capability → Invariant coverage
+
+Which invariants each P0 capability protects (consolidated from Section 7.1 `Protects` column). Every invariant must have at least one protecting capability; gaps are matrix defects.
+
+| Invariant | Protected by (P0 capabilities) |
+|-----------|-------------------------------|
+| I-01 Payment Integrity | P0-01, P0-03, P0-05, P0-06, P0-24, P0-26 |
+| I-02 Order Integrity | P0-06, P0-07, P0-08, P0-24, P0-25, P0-26 |
+| I-03 Refund Integrity | P0-04 |
+| I-04 Capture Uniqueness | P0-01, P0-05, P0-17, P0-25 |
+| I-05 Item-Order Consistency | P0-24, P0-25 |
+| I-06 Ledger Balance | P0-02, P0-03, P0-04, P0-24, P0-26 |
+| I-07 Audit Integrity | P0-22, P0-26 |
+| I-08 Fulfilment Authorization | P0-06, P0-07, P0-25 |
+| I-09 Kill-Switch Monotonicity | P0-23 |
+| I-10 Transactional Completeness | P0-02, P0-08, P0-17, P0-24, P0-25, P0-26 |
+| I-11 Refund Precondition | P0-04 |
+| I-12 Session Revocation | P0-09, P0-10, P0-11 |
+
+**Coverage rule:** Any invariant with zero protectors is a matrix defect. Any P0 capability protecting no invariant is either foundational (Zod, migrations, observability — which protect *all* invariants indirectly) or a candidate for demotion.
+
+### 18.3 Dependency → Capability impact (consolidated)
+
+Which P0 capabilities each external-dependency failure can compromise (from Section 10 `Affected P0` column). Every P0 capability that depends on an external system must appear here.
+
+| Dependency failure | Compromises P0 capabilities |
+|--------------------|------------------------------|
+| Razorpay order create timeout | P0-01, P0-03 |
+| Razorpay capture/verify mismatch | P0-01, P0-05 (and invariants I-01, I-04) |
+| Razorpay refund gateway down | P0-04, P0-03 |
+| Razorpay webhook duplicate | P0-05 (and I-04) |
+| Razorpay webhook tampered | P0-05, P0-28 (and I-01) |
+| Firebase phone OTP unavailable | P0-09, P0-11 |
+| Firebase Admin verify unreachable | P0-09, P0-10 (and I-12) |
+| Database degraded/unavailable | P0-24, P0-25, P0-26 (and all data invariants I-01..I-10) |
+| Redis unavailable | P0-13, P0-10 |
+| Outbox publisher stalled | P0-24 |
+| CI/CD pipeline failure | P0-27 |
+
+### 18.4 Test → Capability mapping (principle)
+
+Every P0 capability has at least one test criterion (Section 7.1). The traceability map requires:
+- Each test criterion links to the capability it validates.
+- Each test criterion links to the invariant(s) it verifies.
+- A test that verifies no invariant is either a happy-path smoke test (acceptable but not sufficient for `Production-ready`) or a candidate for removal.
+
+This mapping is the input to the **P0 Dependency Graph** — it tells us which capabilities share test infrastructure, which invariants cross multiple capabilities (and thus need cross-capability test coordination), and which dependencies block the most capabilities (highest-priority hardening targets).
+
+### 18.5 Status of this section in v1.2
+
+v1.2 lays the **foundation** for the traceability map:
+- ✅ Invariant IDs (I-01..I-12) stable.
+- ✅ `Protects` column on every P0 capability (Section 7.1).
+- ✅ `Affected P0` column on every dependency row (Section 10).
+- ✅ Coverage tables (18.2, 18.3) populated.
+
+The **full** traceability map (every test → every invariant → every capability → every dependency, with lifecycle state per capability) is the next artifact after v1.2 sign-off. It will live as a separate document referenced by this matrix, because its size warrants it.
+
+---
+
+*End of SnakZap Production Readiness Matrix v1.2.*

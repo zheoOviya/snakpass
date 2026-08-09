@@ -196,3 +196,33 @@ Stage Summary:
 - Matrix v1.1 ready for stakeholder sign-off review: 17 sections, 28 P0 capabilities, 22 P1, 12 business invariants, 14 external-dependency scenarios, 8-state capability lifecycle, 16 open questions.
 - Next document after sign-off: P0 Dependency Graph (not implementation, not sprints).
 - v1.1 explicitly addresses all 7 stakeholder corrections: transactional integrity (✅ P0-24), concurrency (✅ P0-25), DR≠backup (✅ P0-26), deployment/rollback (✅ P0-27), external dependency failure matrix (✅ Section 10), business invariants (✅ Section 9), unknown-failure handling (✅ P0-28) + capability lifecycle gate (✅ Section 11).
+
+---
+Task ID: 15
+Agent: main
+Task: Revise Production Readiness Matrix v1.1 → v1.2 per stakeholder architectural review (10 corrections + traceability map + Approved lifecycle state + 6-condition launch gate).
+
+Work Log:
+- Updated header/metadata to v1.2; added Revision History entry documenting all v1.2 changes.
+- Refined 5 P0 capabilities' detailed 5-question breakdowns:
+  - P0-24: idempotent business effect (not technical exactly-once) — outbox + idempotent consumers; key principle added.
+  - P0-25: 3 concurrency cases (A inventory race / B state-transition race / C payment duplicate) + duplicate-execution control renamed.
+  - P0-26: business recovery, not just DB restore — post-restore money-state reconciliation; NO-GO if unresolved money state.
+  - P0-27: 3 deployment classes (backward-compatible / expand-migrate-contract / breaking); key principle: app rollback ≠ DB rollback.
+  - P0-28: 3 blast-radius freeze levels (transaction / entity quarantine / system kill switch); smallest-sufficient scope; over-freeze-prevention audit.
+- Added stable invariant IDs I-01..I-12 with Names (Payment Integrity, Order Integrity, etc.) in Section 9.
+- Added `Protects` column to every P0 row in Section 7.1 matrix table linking capability → invariants.
+- Added `Affected P0` column to every External Dependency row in Section 10 linking dependency failure → capabilities compromised. Also added 2 new dependency rows (Outbox publisher, CI/CD pipeline).
+- Added lifecycle state `Approved` (business-owner sign-off) between `Reviewed` and `Production-ready` — lifecycle now 9 states. Added rule: automated tests necessary but not sufficient; human must accept residual risk.
+- Added Section 14.1: P0 Launch Gate — 6 AND-conditions (all P0 Production-ready + all invariants verified + all critical dep scenarios tested + DR drill passed + rollback drill passed + no unresolved P0 exception). GO/NO-GO verdict.
+- Added Section 18: P0 Traceability & Invariant Map — master chain (Capability → Invariant → Acceptance → Test → Failure-injection → Recovery → Observability → Dependency → Lifecycle gate), capability→invariant coverage table (18.2), dependency→capability impact table (18.3), test→capability mapping principle (18.4), v1.2 foundation status (18.5).
+- Updated Section 17 (Next Step) with explicit chain: v1.2 → Traceability Map → Dependency Graph → Critical Path → Implementation Order → Sprint Plan. Noted business/feature dependencies must be preserved (Strategic Blueprint interactions).
+- Updated Section 15 (Governance) with traceability rule + `Approved` reference.
+- Updated Section 16 (Summary) with 6 new "From → To" rows reflecting v1.2 shifts (exactly-once→idempotent effect, DB restore→business recovery, blanket rollback→per-class, freeze-all→smallest-sufficient, parallel lists→traceability, tests-green→6-AND-gate).
+- Added 4 new open questions (Q17–Q20): outbox idempotency key, freeze escalation policy, deployment class classification, Approved-state business owner.
+- No code changed. No implementation. Document only.
+
+Stage Summary:
+- Matrix v1.2 ready for stakeholder traceability review: 18 sections, 28 P0 capabilities (each with Protects column), 12 business invariants (I-01..I-12), 16 external-dependency scenarios (each with Affected P0), 9-state capability lifecycle (including Approved), 6-condition launch gate, Section 18 traceability foundation, 20 open questions.
+- v1.2 addresses all 10 stakeholder corrections: P0-24 idempotent effect (✅), P0-25 3 concurrency cases + duplicate execution (✅), P0-26 business recovery (✅), P0-27 3 deploy classes (✅), P0-28 3 blast-radius levels (✅), invariant IDs + Protects column (✅), dependency Affected-P0 column (✅), traceability matrix (✅ Section 18), Approved lifecycle state (✅), 6-AND launch gate (✅).
+- Next document after sign-off: full P0 Traceability & Invariant Map (separate doc), then P0 Dependency Graph, then Critical Path, then Implementation Order, then Sprint Plan. Implementation only after that chain.
