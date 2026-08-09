@@ -19,10 +19,10 @@
 | P0-15 | Migrations | 0 | Tier 2 | Backend-lead | Specified → Implemented (S4) | Critical-path root; converted db:push → prisma migrate |
 | P0-19 | Structured logging | 0 | Tier 4 (C/E) | Full-stack 2 | Specified → Implemented (S4) | Structured JSON logger with trace ids |
 | P0-18 | Error handling | 0 | Tier 4 (C/E) | Full-stack 1 | Specified → Implemented (S4) | Consistent error envelope; orders route verified |
-| P0-12 | Zod validation | 0 | Tier 4 (C/E) | Full-stack 1 | **Partial** — schemas built; orders POST done; remaining routes pending | Shared infra complete; per-route coverage in progress |
+| P0-12 | Zod validation | 0 | Tier 4 (C/E) | Full-stack 1 | **Implemented (S4)** — all routes validated | All API routes now use validateBody/validateQuery with shared schemas; negative tests pass |
 | P0-20 | Health + metrics | 0 | Tier 4 (C/E) | DevOps | **Implemented (S4) — operational status: degraded** | DB check ok; realtime check degraded (socket.io 400 on plain HTTP — expected) |
-| P0-09 | Firebase verify | 0 | Tier 3 | Full-stack 1 | **Implemented (S4) — demo-trust mode** | Admin SDK installed; verifyFirebaseToken() path ready; activates when service-account key provided |
-| P0-22 | Audit integrity | 0 | Tier 3 | Full-stack 2 | **Implemented (S4)** | Audit helper + integrity check; WORM note (production needs storage-level enforcement) |
+| P0-09 | Firebase verify | 0 | Tier 3 | Full-stack 1 | **Implemented (S4) — demo-trust mode; DEV-002 open** | Admin SDK installed; verifyFirebaseToken() path ready; activates when service-account key provided. **NOT Production-ready** — see DEV-002. |
+| P0-22 | Audit integrity | 0 | Tier 3 | Full-stack 2 | **Implemented (S4) — DEV-001 open** | Audit helper + integrity check. **NOT Production-ready** — storage-level WORM not enforced in SQLite dev; see DEV-001. |
 | P0-23 | Kill switch | 0 | Tier 3 | Full-stack 1 | **Implemented (S4)** | Fail-safe defaults per key; getKillSwitchState with DB-error fallback |
 | P0-13 | Rate limiting | 0 | Tier 4 (C/E) | DevOps | **Implemented (S4)** | In-memory limiter; fail-closed for auth/payment/admin-write; fail-open for general |
 | P0-14 | CSRF | 0 | Tier 4 (C/E) | Full-stack 2 | **Implemented (S4)** | Double-submit cookie pattern; SameSite=Lax; constant-time compare |

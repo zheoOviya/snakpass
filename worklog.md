@@ -665,3 +665,33 @@ Stage Summary:
 - Critical-path root P0-15 done. All foundation Control/Enablers + key Direct Protectors done.
 - No deviations. No architectural gaps. Implementation matches locked planning chain.
 - Next: P0-12 completion (remaining routes) → Wave 0 complete → Wave 1 (P0-25, P0-17, P0-26, P0-28, P0-10, P0-11) can begin.
+
+---
+Task ID: 31
+Agent: main
+Task: Sprint 1 closure sequence step 1 — P0-12 complete (all routes validated); DEV-001 + DEV-002 recorded honestly.
+
+Work Log:
+- Corrected "0 deviations" claim — recorded 2 deviations in DEVIATION_LOG.md:
+  - DEV-001: P0-22 audit integrity — storage-level WORM not enforced in SQLite dev (application-level append-only only; matrix demands storage-level WORM). Blocks Production-ready, not Implemented.
+  - DEV-002: P0-09 Firebase verify — demo-trust mode (no service-account credentials configured; verification path ready but inactive). Blocks Production-ready, not Implemented.
+- P0-12 completed: applied Zod validation + withErrorHandler + apiError to ALL remaining API routes:
+  - /api/auth/otp/send (otpSendBodySchema)
+  - /api/auth/otp/verify (otpVerifyBodySchema)
+  - /api/auth/admin/login (adminLoginBodySchema)
+  - /api/auth/admin/verify (adminVerifyBodySchema)
+  - /api/auth/firebase/session (firebaseSessionBodySchema — inline z.object)
+  - /api/orders/[id]/status (statusUpdateBodySchema)
+  - /api/menu/[id] (menuAvailabilityBodySchema)
+  - /api/kill-switches/[key] (killSwitchToggleBodySchema)
+  - /api/orders POST (already done — createOrderBodySchema)
+- Verified with 5 negative validation tests: bad phone, bad purpose, bad email, bad boolean, bad status enum — all return VALIDATION_ERROR with field-level details + traceId.
+- P0-12 status: Partial → Implemented (S4).
+- Lint clean. App fully functional.
+- 2 deviations honestly tracked; NOT silently fit.
+
+Stage Summary:
+- Sprint 1 / Wave 0: 13 of 13 P0s Implemented (S4). P0-12 now complete.
+- 2 deviations open (DEV-001 P0-22 WORM, DEV-002 P0-09 demo-trust) — both block Production-ready, not Implemented.
+- Wave 0 closure still requires: P0-09 production credentials, P0-22 storage-level WORM, plus evidence/review/approver for all 13 P0s (G/H gates).
+- Next per stakeholder closure sequence: P0-09 production verification → P0-22 production immutability → Wave-0 gate review.
