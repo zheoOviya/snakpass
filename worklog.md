@@ -426,3 +426,42 @@ Stage Summary:
 - Risk concentrates on critical prefix (P0-24 + P0-01 have direct failure-propagation edges).
 - Artifact 4 — Implementation Order: UNLOCKED. Will sequence within critical-path constraint, interleaving slack branches into parallel slots, respecting F-node joins as sync points.
 - No implementation. No code. Document only.
+
+---
+Task ID: 23
+Agent: main
+Task: Apply 3 graph-semantics corrections to Artifact 3 per stakeholder conditional-acceptance review.
+
+Work Log:
+- Correction 1 — Separate "longest path" from "launch-critical surface": Rewrote Section 8 into two explicit outputs:
+  - 8.A Structural Critical Path (B/F topology → longest dependency chains) — pure graph-theoretic; the two co-critical paths + dependency-graph bottleneck prefix.
+  - 8.B Risk-Critical Surface (P-edge weighting + launch-gate mandatory + F-sync → high-risk launch surface) — 4-tier risk ranking; Tier 1 (P0-24, P0-01, P0-07), Tier 2 (path members), Tier 3 (launch-mandatory despite slack: P0-26 DR, P0-28, P0-22, P0-23, P0-09), Tier 4 (lower-risk parallel).
+  - 8.C Relationship: three distinct questions (topology / risk-concentration / launch-completeness). Critical path ≠ launch criticality ≠ launch gate.
+  - Added explicit statement: "Longest dependency path ≠ complete launch criticality." A delay in P0-26 (DR drill, path length 1) can block launch even though it is not on the longest chain.
+- Correction 2 — F-node classification: Replaced homogeneous "F-nodes are path-length-neutral joins" with 5-class framework:
+  - Synergy (no path/sync effect)
+  - Synchronization (joint readiness + interaction test; extends effective launch-readiness, not length)
+  - Security/Integrity synchronization (subset of sync; upholds a security/integrity invariant)
+  - Precedence (promoted to B-edge; DOES extend path length)
+  - Interaction-test-only (launch-gate constraint at P2/P3)
+  - Classified all 9 F-nodes (8 original + 1 new):
+    - QR Pickup + OTP Pickup → Security/Integrity synchronization (NEW — added per stakeholder instruction; I-13 core promise; Blueprint treats QR+OTP as synergistic primary mechanisms)
+    - Kill Switch + Order Intake → Precedence (promoted to B-edge: P0-01 --B--> P0-23)
+    - Prepaid + Quick Reorder → Synchronization
+    - Live Kitchen + Push → Synchronization
+    - POS + Settlement → Synchronization (P0 part) + Interaction-test-only (P3 part)
+    - Wallet + Loyalty → Interaction-test-only (P2)
+    - Group Order + Concurrency → Interaction-test-only (P3)
+    - Geo-fence + Pickup → Security/Integrity synchronization (caution flag G04)
+    - Catering + State Machine → Interaction-test-only (P3, caution C01)
+- Correction 3 — Soften "launch bottleneck" → "dependency-graph bottleneck": Replaced all 4 standalone "launch bottleneck"/"true bottleneck" usages with "dependency-graph bottleneck" + explicit wording-discipline note: "This is a dependency-graph bottleneck — a statement about topology, not schedule. Calling it 'the launch bottleneck' would be premature: actual launch bottleneck status depends on real duration/effort, readiness gates, and parallel capacity, which are modeled in Artifact 4."
+- Softened Section 7 risk-weighting insight: "launch risk concentrates" → "dependency-graph risk concentration"; added pointer that full launch-risk surface is broader (Section 8.B).
+- Updated Section 9 (what this does NOT do) with 3 new discipline items; updated Section 10 sign-off table with new criteria rows.
+- No architectural redesign. No new P0/invariant. Graph topology unchanged; only semantics/integrity corrections.
+
+Stage Summary:
+- Artifact 3 — Critical Path to Launch: 3 corrections applied. Ready for re-review → ACCEPTED.
+- Two explicit outputs: Structural Critical Path (8.A) + Risk-Critical Surface (8.B).
+- F-nodes now classified into 5 types; QR+OTP is Security/Integrity synchronization (new); KillSwitch+OrderIntake promoted to Precedence (B-edge).
+- "launch bottleneck" → "dependency-graph bottleneck" everywhere.
+- No implementation. No code. Document only.
