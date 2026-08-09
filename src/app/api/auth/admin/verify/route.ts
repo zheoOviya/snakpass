@@ -2,23 +2,21 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { verifyOtp } from '@/lib/otp-service'
 import { createSession, setSessionCookie } from '@/lib/session'
+import { validateBody, adminVerifyBodySchema } from '@/lib/validation'
+import { withErrorHandler, apiError } from '@/lib/errors'
 
 // POST /api/auth/admin/verify  { otpId, code }
-// Step 2 of 2FA: verify the OTP, issue session.
-export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null)
-  if (!body?.otpId || !body.code) {
-    return NextResponse.json({ error: 'otpId and code required' }, { status: 400 })
-  }
+export const POST = (req: NextRequest) => withErrorHandler(async () => {
+  const { otpId, code } = await validateBody(req, adminVerifyBodySchema)
 
-  const result = await verifyOtp(String(body.otpId), String(body.code))
+  const result = await verifyOtp(otpId, code)
   if (!result.ok || result.purpose !== 'admin_2fa') {
-    return NextResponse.json({ error: 'Invalid or expired 2FA code' }, { status: 401 })
+    return apiError('AUTHENTICATION_REQUIRED', 'Invalid or expired 2FA code', 401)
   }
 
   const user = await db.user.findUnique({ where: { email: result.target! } })
   if (!user || !['ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
-    return NextResponse.json({ error: 'Not an admin account' }, { status: 403 })
+    return apiError('AUTHORIZATION_DENIED', 'Not an admin account', 403)
   }
 
   const token = await createSession(user.id, user.role)
@@ -36,4 +34,4 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     user: { id: user.id, phone: user.phone, name: user.name, role: user.role, email: user.email },
   })
-}
+})
