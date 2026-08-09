@@ -495,3 +495,32 @@ Stage Summary:
 - Topology changed (P0-23→P0-01 B-edge added); original P0-06 depth error corrected.
 - Ready for re-review → ACCEPTED.
 - No implementation. No code. Document only.
+
+---
+Task ID: 25
+Agent: main
+Task: Artifact 3 final verification — mechanical depth recurrence per node (stakeholder's last consistency check).
+
+Work Log:
+- Applied recurrence depth(node) = 1 + max(depth of every blocking B-predecessor) to every P0 node.
+- Built blocking B-predecessors map for all 15 non-root P0s (only blocking edges counted; P0-13→P0-11 non-blocking excluded).
+- Computed depth table bottom-up for the 11 nodes requested + P0-07 terminus:
+  - P0-09 (root, d=0), P0-15 (root, d=0), P0-23 (root, d=0)
+  - P0-25 (d=1), P0-24 (d=2 via P0-25), P0-01 (d=3 via P0-24 max)
+  - P0-02 (d=4), P0-05 (d=4), P0-04 (d=5 via P0-02 max)
+  - P0-06 (d=6 via P0-04 max — corrected; P0-05 at d=4 does not extend)
+  - P0-07 (d=7 via P0-06 max)
+- Explicitly verified P0-05 off-path: depth 4, but P0-06's max predecessor is P0-04 (depth 5), not P0-05 (depth 4). P0-05 is a parallel join, not on the critical path. Correctly Tier 4.
+- Explicitly verified P0-23 off-path: depth 0 root, predecessor of P0-01, but P0-01's max predecessor is P0-24 (depth 2), not P0-23 (depth 0). The promoted F→B edge is a JOIN (synchronization), not path-extending.
+- Result mathematically confirmed: single critical path of 7 edges (8 nodes):
+  P0-15 (d=0) → P0-25 (d=1) → P0-24 (d=2) → P0-01 (d=3) → P0-02 (d=4) → P0-04 (d=5) → P0-06 (d=6) → P0-07 (d=7)
+- No other leaf reaches depth 7 (P0-03 d=5, P0-08 d=3, P0-26 d=1, P0-28 d=1).
+- Added Section 2.A (Mechanical Depth Verification) with full predecessor map + depth table + key-verification notes for P0-05 and P0-23.
+- Updated sign-off table with new criterion: "Mechanical depth recurrence verified per node".
+- No architectural change. No new P0/invariant. Math verification only.
+
+Stage Summary:
+- Artifact 3 — Critical Path to Launch: mechanical verification COMPLETE. Single 7-edge critical path mathematically confirmed via per-node recurrence.
+- P0-05 and P0-23 explicitly shown off-path with depth arithmetic (not assertion).
+- Ready for FINAL ACCEPTED → Artifact 4 (Implementation Order) unlock.
+- No implementation. No code. Math verification only.
