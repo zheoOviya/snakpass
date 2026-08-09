@@ -354,3 +354,29 @@ Stage Summary:
 - No matrix defects remain. No v1.5 changes required by G-F1.
 - Artifact 2 — P0 Dependency Graph: UNLOCKED. Will use v1.4 traceability table (technical deps) + G-F1 mapping (business deps + feature interactions).
 - No implementation. No code. Documents only.
+
+---
+Task ID: 20
+Agent: main
+Task: Build Artifact 2 — P0 Dependency Graph (5 edge types, DAG, no implementation order derivation).
+
+Work Log:
+- Created P0_DEPENDENCY_GRAPH.md (400 lines) as Artifact 2.
+- Defined 5 edge types: Technical (--T-->), Business (--B-->), Feature interaction (--F-->), Failure propagation (--P-->), Critical-path metadata (blocking/non-blocking/parallelizable).
+- Built node catalog: all 28 P0s with lifecycle state (all S2), type (Direct Protector / Control/Enabler), protects, technical deps.
+- Mapped Technical edges (~30): P0 → infrastructure (DB cluster = 16 P0s, Redis = 4, Razorpay = 3, observability = 3, Firebase = 1, CI/CD = 1). Identified DB as single largest shared dependency.
+- Mapped Business edges (31): core flow Auth→Order→Payment→Fulfilment→Pickup→Settlement + cross-cutting integrity. 27 blocking, 2 non-blocking, 2 parallelizable clusters.
+- Mapped Feature interaction edges (8 nodes from G-F1): Prepaid+Reorder, POS+Settlement, LiveKitchen+Push, Wallet+Loyalty, GroupOrder+Concurrency, Geo-fence+Pickup (caution), Catering+StateMachine (caution), KillSwitch+OrderIntake. Each imposes cross-P0 blocking requirement.
+- Mapped Failure propagation (12 scenarios from matrix Section 10): dependency failure → affected P0s → invariants at risk → Blueprint Risk ID.
+- Added Critical-path metadata per edge — characterized as blocking/non-blocking/parallelizable, NOT implementation sequence.
+- Graph integrity checks: DAG verified (no cycles), 0 orphans, 11 roots identified (foundation layer), 6 leaves identified (top of stack), 11 mid-layer.
+- Shared-infrastructure concentration analysis: DB = 16 P0s (highest leverage), Redis = 4, Razorpay = 3.
+- Strict rule held: NO implementation order derived. Graph is structural fact, not a plan. Artifact 3 computes critical path; Artifact 4 sequences.
+- No new P0/invariant added.
+
+Stage Summary:
+- Artifact 2 — P0 Dependency Graph: DRAFT COMPLETE. Pending stakeholder review.
+- DAG confirmed: 28 nodes, 11 roots, 6 leaves, 0 cycles, 0 orphans.
+- DB hardening cluster (P0-15, 16, 24, 25, 26) identified as highest-leverage — 16 P0s depend on DB.
+- Artifact 3 — Critical Path to Launch: UNLOCKED. Will compute longest blocking path from roots to leaves, factoring feature-interaction nodes.
+- No implementation. No code. Document only.
