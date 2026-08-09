@@ -380,3 +380,21 @@ Stage Summary:
 - DB hardening cluster (P0-15, 16, 24, 25, 26) identified as highest-leverage — 16 P0s depend on DB.
 - Artifact 3 — Critical Path to Launch: UNLOCKED. Will compute longest blocking path from roots to leaves, factoring feature-interaction nodes.
 - No implementation. No code. Document only.
+
+---
+Task ID: 21
+Agent: main
+Task: Fix 4 graph integrity/semantics corrections in Artifact 2 per stakeholder conditional-acceptance review.
+
+Work Log:
+- Correction 1 — Root count: "11 roots" → "12 roots". The list (P0-12,13,14,15,16,18,19,20,21,22,23,27) had 12 items but summary said 11. Fixed in Section 8.2 and Section 9 summary table. Mid-layer recalculated: 11 (both B-in and B-out). Added "Isolated (both root and leaf — control only): 1 (P0-27)" row to summary.
+- Correction 2 — P0-27 semantics: Added explicit clarification that P0-27 (Deployment & Rollback) is an "isolated control node" — it appears in both root and leaf lists because in the B-edge graph it has no B-in and no B-out. Its relationship to other P0s is a control/foundation dependency (enables safe rollout), NOT a business functional prerequisite. Added rule: "Artifact 3 must NOT treat P0-27 as an ordinary business critical-path edge — it must not force 'implement P0-27 before everything.'"
+- Correction 3 — Failure-propagation edges: Added explicit rule in Section 6 that `--P-->` edges do NOT create implementation precedence. "A P-edge describes what is compromised when a dependency fails — it is a risk/criticality signal, not a build-order constraint." Added example: "Razorpay-failure --P--> P0-01 means 'if Razorpay fails, P0-01 is compromised'; it does NOT mean 'P0-01 must be implemented before Razorpay.'" Rule: "Artifact 3 must use P-edges to weight criticality/risk on the critical path, but must never treat them as dependency edges for longest-path calculation." Also added to Section 10 (What this graph does NOT do).
+- Correction 4 — "single point of compromise" reworded: Changed to "highest-centrality shared dependency" (Section 6 insight) and "Highest-centrality shared dependency" (Section 8.5 risk column) and "highest-centrality cluster" (Section 8.5 insight). Also softened Section 8.5 insight to clarify it "informs risk weighting, not the path itself" — whether DB lands on the critical path is for Artifact 3 to compute from B-edges and F-edges.
+- No architectural redesign. No new P0/invariant. Graph structure unchanged; only integrity/semantics corrections.
+
+Stage Summary:
+- Artifact 2 — P0 Dependency Graph: 4 corrections applied. Ready for re-review → ACCEPTED.
+- Graph topology: 28 nodes, 12 roots (incl. P0-27 isolated), 6 leaves (incl. P0-27 isolated), 11 mid-layer, 0 cycles, 0 orphans.
+- Edge semantics now explicit: B-edges and F-edges drive longest-path; P-edges inform risk only; P0-27 is control-only (parallel, not blocking).
+- No implementation. No code. Document only.
