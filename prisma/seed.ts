@@ -11,12 +11,19 @@ async function main() {
   await db.orderItem.deleteMany()
   await db.order.deleteMany()
   await db.menuItem.deleteMany()
+  await db.session.deleteMany()
+  await db.otpRequest.deleteMany()
+  await db.orderItem.deleteMany()
+  await db.order.deleteMany()
+  await db.menuItem.deleteMany()
   await db.restaurant.deleteMany()
   await db.user.deleteMany()
   await db.auditLog.deleteMany()
   await db.killSwitch.deleteMany()
 
-  // Users
+  // Users — consumer + vendor use phone OTP; admin uses email+password+2FA OTP.
+  // Demo admin password: admin123 (scrypt-hashed below).
+  const { hashPassword } = await import('../src/lib/password')
   const consumer = await db.user.create({
     data: { phone: '+919876500001', name: 'Aarav Sharma', role: 'CONSUMER', spiceTolerance: 3, walletBalance: 25000 },
   })
@@ -24,7 +31,14 @@ async function main() {
     data: { phone: '+919876500002', name: 'Spice Junction Owner', role: 'VENDOR_OWNER', spiceTolerance: 4 },
   })
   const adminUser = await db.user.create({
-    data: { phone: '+919876500003', name: 'Ops Admin', role: 'SUPER_ADMIN', spiceTolerance: 2 },
+    data: {
+      phone: '+919876500003',
+      email: 'admin@snakzap.com',
+      passwordHash: await hashPassword('admin123'),
+      name: 'Ops Admin',
+      role: 'SUPER_ADMIN',
+      spiceTolerance: 2,
+    },
   })
 
   // Restaurants
@@ -85,37 +99,37 @@ async function main() {
   type Dish = { name: string; desc: string; price: number; spice: number; veg: boolean; cat: string; img: string }
   const menus: Record<string, Dish[]> = {
     [r1.id]: [
-      { name: 'Butter Chicken', desc: 'Tandoori chicken in rich tomato-butter gravy', price: 32000, spice: 2, veg: false, cat: 'Mains', img: '/images/d1.jpg' },
-      { name: 'Paneer Tikka Masala', desc: 'Char-grilled paneer in spiced onion gravy', price: 28000, spice: 2, veg: true, cat: 'Mains', img: '/images/d2.jpg' },
-      { name: 'Dal Makhani', desc: 'Slow-cooked black lentils, cream & butter', price: 22000, spice: 1, veg: true, cat: 'Mains', img: '/images/d3.jpg' },
-      { name: 'Butter Naan', desc: 'Tandoor-baked flatbread brushed with butter', price: 6000, spice: 0, veg: true, cat: 'Breads', img: '/images/d4.jpg' },
-      { name: 'Garlic Naan', desc: 'Naan topped with garlic & coriander', price: 8000, spice: 0, veg: true, cat: 'Breads', img: '/images/d5.jpg' },
-      { name: 'Gulab Jamun (2 pcs)', desc: 'Warm milk dumplings in saffron syrup', price: 12000, spice: 0, veg: true, cat: 'Desserts', img: '/images/d6.jpg' },
-      { name: 'Sweet Lassi', desc: 'Chilled yogurt drink with cardamom', price: 9000, spice: 0, veg: true, cat: 'Beverages', img: '/images/d7.jpg' },
+      { name: 'Butter Chicken', desc: 'Tandoori chicken in rich tomato-butter gravy', price: 32000, spice: 2, veg: false, cat: 'Mains', img: '/images/svg/curry-chicken.svg' },
+      { name: 'Paneer Tikka Masala', desc: 'Char-grilled paneer in spiced onion gravy', price: 28000, spice: 2, veg: true, cat: 'Mains', img: '/images/svg/curry-paneer.svg' },
+      { name: 'Dal Makhani', desc: 'Slow-cooked black lentils, cream & butter', price: 22000, spice: 1, veg: true, cat: 'Mains', img: '/images/svg/dal.svg' },
+      { name: 'Butter Naan', desc: 'Tandoor-baked flatbread brushed with butter', price: 6000, spice: 0, veg: true, cat: 'Breads', img: '/images/svg/naan.svg' },
+      { name: 'Garlic Naan', desc: 'Naan topped with garlic & coriander', price: 8000, spice: 0, veg: true, cat: 'Breads', img: '/images/svg/naan-garlic.svg' },
+      { name: 'Gulab Jamun (2 pcs)', desc: 'Warm milk dumplings in saffron syrup', price: 12000, spice: 0, veg: true, cat: 'Desserts', img: '/images/svg/gulab-jamun.svg' },
+      { name: 'Sweet Lassi', desc: 'Chilled yogurt drink with cardamom', price: 9000, spice: 0, veg: true, cat: 'Beverages', img: '/images/svg/lassi.svg' },
     ],
     [r2.id]: [
-      { name: 'Masala Dosa', desc: 'Crispy rice crepe with spiced potato', price: 14000, spice: 1, veg: true, cat: 'Mains', img: '/images/d1.jpg' },
-      { name: 'Idli Sambar (3 pcs)', desc: 'Steamed rice cakes with lentil stew', price: 11000, spice: 1, veg: true, cat: 'Mains', img: '/images/d2.jpg' },
-      { name: 'Medu Vada (2 pcs)', desc: 'Crispy lentil donuts with chutney', price: 10000, spice: 1, veg: true, cat: 'Starters', img: '/images/d3.jpg' },
-      { name: 'Uttapam', desc: 'Thick pancake with onion-tomato topping', price: 13000, spice: 1, veg: true, cat: 'Mains', img: '/images/d4.jpg' },
-      { name: 'Filter Coffee', desc: 'South-style frothy decoction coffee', price: 6000, spice: 0, veg: true, cat: 'Beverages', img: '/images/d5.jpg' },
-      { name: 'Coconut Chutney Bowl', desc: 'Fresh coconut chutney with tempering', price: 4000, spice: 1, veg: true, cat: 'Starters', img: '/images/d6.jpg' },
+      { name: 'Masala Dosa', desc: 'Crispy rice crepe with spiced potato', price: 14000, spice: 1, veg: true, cat: 'Mains', img: '/images/svg/dosa.svg' },
+      { name: 'Idli Sambar (3 pcs)', desc: 'Steamed rice cakes with lentil stew', price: 11000, spice: 1, veg: true, cat: 'Mains', img: '/images/svg/idli.svg' },
+      { name: 'Medu Vada (2 pcs)', desc: 'Crispy lentil donuts with chutney', price: 10000, spice: 1, veg: true, cat: 'Starters', img: '/images/svg/vada.svg' },
+      { name: 'Uttapam', desc: 'Thick pancake with onion-tomato topping', price: 13000, spice: 1, veg: true, cat: 'Mains', img: '/images/svg/uttapam.svg' },
+      { name: 'Filter Coffee', desc: 'South-style frothy decoction coffee', price: 6000, spice: 0, veg: true, cat: 'Beverages', img: '/images/svg/coffee.svg' },
+      { name: 'Coconut Chutney Bowl', desc: 'Fresh coconut chutney with tempering', price: 4000, spice: 1, veg: true, cat: 'Starters', img: '/images/svg/chutney.svg' },
     ],
     [r3.id]: [
-      { name: 'Chilli Paneer', desc: 'Indo-Chinese paneer in spicy soy glaze', price: 26000, spice: 3, veg: true, cat: 'Starters', img: '/images/d1.jpg' },
-      { name: 'Veg Hakka Noodles', desc: 'Wok-tossed noodles with crunchy veg', price: 22000, spice: 2, veg: true, cat: 'Mains', img: '/images/d2.jpg' },
-      { name: 'Gobi Manchurian', desc: 'Crispy cauliflower in tangy manchurian sauce', price: 20000, spice: 3, veg: true, cat: 'Starters', img: '/images/d3.jpg' },
-      { name: 'Schezwan Fried Rice', desc: 'Spicy schezwan rice with vegetables', price: 21000, spice: 3, veg: true, cat: 'Mains', img: '/images/d4.jpg' },
-      { name: 'Chicken Chilli', desc: 'Battered chicken in spicy sauce', price: 30000, spice: 3, veg: false, cat: 'Starters', img: '/images/d5.jpg' },
-      { name: 'Spring Rolls (4 pcs)', desc: 'Crispy rolls with veg filling', price: 14000, spice: 1, veg: true, cat: 'Starters', img: '/images/d6.jpg' },
+      { name: 'Chilli Paneer', desc: 'Indo-Chinese paneer in spicy soy glaze', price: 26000, spice: 3, veg: true, cat: 'Starters', img: '/images/svg/chilli-paneer.svg' },
+      { name: 'Veg Hakka Noodles', desc: 'Wok-tossed noodles with crunchy veg', price: 22000, spice: 2, veg: true, cat: 'Mains', img: '/images/svg/noodles.svg' },
+      { name: 'Gobi Manchurian', desc: 'Crispy cauliflower in tangy manchurian sauce', price: 20000, spice: 3, veg: true, cat: 'Starters', img: '/images/svg/manchurian.svg' },
+      { name: 'Schezwan Fried Rice', desc: 'Spicy schezwan rice with vegetables', price: 21000, spice: 3, veg: true, cat: 'Mains', img: '/images/svg/fried-rice.svg' },
+      { name: 'Chicken Chilli', desc: 'Battered chicken in spicy sauce', price: 30000, spice: 3, veg: false, cat: 'Starters', img: '/images/svg/chilli-chicken.svg' },
+      { name: 'Spring Rolls (4 pcs)', desc: 'Crispy rolls with veg filling', price: 14000, spice: 1, veg: true, cat: 'Starters', img: '/images/svg/spring-roll.svg' },
     ],
     [r4.id]: [
-      { name: 'Chocolate Truffle Pastry', desc: 'Rich dark chocolate ganache cake', price: 15000, spice: 0, veg: true, cat: 'Desserts', img: '/images/d1.jpg' },
-      { name: 'Red Velvet Slice', desc: 'Moist red velvet with cream cheese', price: 16000, spice: 0, veg: true, cat: 'Desserts', img: '/images/d2.jpg' },
-      { name: 'Blueberry Cheesecake', desc: 'Baked cheesecake with blueberry compote', price: 18000, spice: 0, veg: true, cat: 'Desserts', img: '/images/d3.jpg' },
-      { name: 'Cappuccino', desc: 'Espresso with steamed milk foam', price: 10000, spice: 0, veg: true, cat: 'Beverages', img: '/images/d4.jpg' },
-      { name: 'Cold Coffee', desc: 'Blended iced coffee with ice cream', price: 12000, spice: 0, veg: true, cat: 'Beverages', img: '/images/d5.jpg' },
-      { name: 'Croissant', desc: 'Flaky buttery French pastry', price: 9000, spice: 0, veg: true, cat: 'Desserts', img: '/images/d6.jpg' },
+      { name: 'Chocolate Truffle Pastry', desc: 'Rich dark chocolate ganache cake', price: 15000, spice: 0, veg: true, cat: 'Desserts', img: '/images/svg/pastry-choco.svg' },
+      { name: 'Red Velvet Slice', desc: 'Moist red velvet with cream cheese', price: 16000, spice: 0, veg: true, cat: 'Desserts', img: '/images/svg/pastry-redvelvet.svg' },
+      { name: 'Blueberry Cheesecake', desc: 'Baked cheesecake with blueberry compote', price: 18000, spice: 0, veg: true, cat: 'Desserts', img: '/images/svg/cheesecake.svg' },
+      { name: 'Cappuccino', desc: 'Espresso with steamed milk foam', price: 10000, spice: 0, veg: true, cat: 'Beverages', img: '/images/svg/cappuccino.svg' },
+      { name: 'Cold Coffee', desc: 'Blended iced coffee with ice cream', price: 12000, spice: 0, veg: true, cat: 'Beverages', img: '/images/svg/cold-coffee.svg' },
+      { name: 'Croissant', desc: 'Flaky buttery French pastry', price: 9000, spice: 0, veg: true, cat: 'Desserts', img: '/images/svg/croissant.svg' },
     ],
   }
 

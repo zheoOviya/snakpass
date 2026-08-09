@@ -1,10 +1,15 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { getAdminId } from '@/lib/auth'
+import { getSessionUser } from '@/lib/session'
 
 // PATCH /api/menu/[id]  body: { isAvailable }
+// Requires an authenticated vendor/admin session.
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
+  const session = await getSessionUser()
+  if (!session || !['VENDOR_OWNER', 'VENDOR_STAFF', 'ADMIN', 'SUPER_ADMIN'].includes(session.role)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
   const body = await req.json().catch(() => null)
   if (typeof body?.isAvailable !== 'boolean') {
     return NextResponse.json({ error: 'isAvailable boolean required' }, { status: 400 })
@@ -16,11 +21,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     select: { id: true, name: true, isAvailable: true, restaurantId: true },
   })
 
-  const adminId = await getAdminId()
   await db.auditLog.create({
     data: {
-      actorId: adminId,
-      actorRole: 'VENDOR_OWNER',
+      actorId: session.userId,
+      actorRole: session.role,
       action: 'MENU_AVAILABILITY',
       metadata: JSON.stringify({ itemId: id, name: item.name, available: body.isAvailable }),
     },

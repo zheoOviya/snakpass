@@ -16,6 +16,8 @@ datasource db {
 model User {
   id              String   @id @default(cuid())
   phone           String   @unique
+  email           String?  @unique
+  passwordHash    String?
   name            String?
   role            String   @default("CONSUMER") // CONSUMER | VENDOR_OWNER | ADMIN | SUPER_ADMIN
   spiceTolerance  Int      @default(3) // 0..5
@@ -23,6 +25,33 @@ model User {
   createdAt       DateTime @default(now())
   orders          Order[]
   auditLogs       AuditLog[]
+  sessions        Session[]
+}
+
+// ----------------------------------------
+// Auth context (OTP + sessions)
+// ----------------------------------------
+model OtpRequest {
+  id        String   @id @default(cuid())
+  channel   String   // 'phone' | 'email'
+  target    String   // phone number or email
+  purpose   String   // 'consumer_login' | 'vendor_login' | 'admin_2fa' | 'pickup'
+  codeHash  String   // scrypt hash of the 6-digit code
+  consumed  Boolean  @default(false)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([target, purpose])
+}
+
+model Session {
+  token     String   @id
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  @@index([userId])
 }
 
 // ----------------------------------------

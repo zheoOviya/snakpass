@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 300">
+  <defs>
+    <linearGradient id="bg12" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF6EC"/><stop offset="1" stop-color="#FBE6CE"/>
+    </linearGradient>
+    <linearGradient id="steel12" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#D8DCDE"/><stop offset="1" stop-color="#8B9298"/>
+    </linearGradient>
+    <linearGradient id="coffee12" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5C3010"/><stop offset="1" stop-color="#3A1B05"/>
+    </linearGradient>
+  </defs>
+  <rect width="400" height="300" fill="url(#bg12)"/>
+  <ellipse cx="200" cy="270" rx="150" ry="14" fill="#000" opacity="0.08"/>
+  <ellipse cx="130" cy="240" rx="80" ry="22" fill="url(#steel12)"/>
+  <ellipse cx="130" cy="235" rx="68" ry="16" fill="#3A1B05"/>
+  <ellipse cx="130" cy="232" rx="60" ry="12" fill="url(#coffee12)"/>
+  <ellipse cx="115" cy="228" rx="18" ry="3" fill="#8B5A2B" opacity="0.6"/>
+  <path d="M225 110 L240 250 Q240 270 260 270 L290 270 Q310 270 310 250 L325 110 Z" fill="url(#steel12)"/>
+  <ellipse cx="275" cy="110" rx="50" ry="10" fill="#5C6168"/>
+  <ellipse cx="275" cy="108" rx="48" ry="8" fill="#9CA3A8"/>
+  <ellipse cx="275" cy="108" rx="46" ry="7" fill="url(#coffee12)"/>
+  <ellipse cx="275" cy="105" rx="44" ry="8" fill="#A8693A" opacity="0.7"/>
+  <ellipse cx="270" cy="100" rx="14" ry="4" fill="#D9A06A" opacity="0.7"/>
+  <path d="M260 80 Q255 65 265 50 Q270 35 260 25" stroke="#FFFFFF" stroke-width="3" fill="none" opacity="0.7"/>
+  <path d="M280 85 Q275 70 285 55 Q290 40 280 30" stroke="#FFFFFF" stroke-width="3" fill="none" opacity="0.6"/>
+  <line x1="240" y1="125" x2="245" y2="245" stroke="#FFFFFF" stroke-width="4" opacity="0.4"/>
+</svg>

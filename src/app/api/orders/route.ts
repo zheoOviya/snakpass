@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { getConsumerId } from '@/lib/auth'
+import { getSessionUser } from '@/lib/session'
 import { emitOrderCreated } from '@/lib/realtime'
 
 // GET /api/orders?role=consumer|vendor|admin&restaurantId=&status=&limit=
@@ -10,11 +10,13 @@ export async function GET(req: NextRequest) {
   const status = req.nextUrl.searchParams.get('status')
   const limit = Math.min(Number(req.nextUrl.searchParams.get('limit') ?? '100'), 200)
 
-  const consumerId = await getConsumerId()
+  const session = await getSessionUser()
 
   const where: Record<string, unknown> = {}
   if (role === 'consumer') {
-    where.userId = consumerId
+    // Authenticated consumers see only their own orders.
+    if (!session) return NextResponse.json({ orders: [] })
+    where.userId = session.userId
   }
   if (restaurantId) where.restaurantId = restaurantId
   if (status) where.status = status
@@ -73,7 +75,11 @@ export async function POST(req: NextRequest) {
     }
   }
 
-  const consumerId = await getConsumerId()
+  const session = await getSessionUser()
+  if (!session) {
+    return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+  }
+  const consumerId = session.userId
   const restaurant = await db.restaurant.findUnique({ where: { id: body.restaurantId } })
   if (!restaurant || !restaurant.isActive || restaurant.isSuspended) {
     return NextResponse.json({ error: 'Restaurant unavailable' }, { status: 400 })
