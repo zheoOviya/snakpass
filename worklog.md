@@ -286,3 +286,37 @@ Stage Summary:
 - Single substantive question for stakeholder: expand P0-07 scope to include pickup-event attribution, OR create new P0-29 (Pickup Audit Attribution)?
 - After G-B1 decision → v1.4 → Blueprint feature mapping (G-F1) → Artifact 2 (Dependency Graph).
 - No implementation. No code. Document only.
+
+---
+Task ID: 18
+Agent: main
+Task: Apply v1.4 changes per stakeholder G-B1 decision (expand P0-07, no P0-29) + Query A reinterpretation (Direct Protector vs Control/Enabler); re-run Traceability Map coverage queries.
+
+Work Log:
+- Updated PRODUCTION_READINESS_MATRIX.md to v1.4 (1024 lines). Changes applied EXACTLY per stakeholder instruction — no extras:
+  - P0-07 acceptance expanded: 8 pickup-attribution conditions for PICKED_UP transition (correct order_id, authorized collector, QR+OTP both, audit event with 5 fields, immutable trail linkage, duplicate-pickup idempotent reject, cross-credential prevention, attribution-failure blocks transition).
+  - P0-07 test criteria expanded: 5 new tests (correct collector, wrong collector, QR/OTP failure, duplicate pickup, attribution/audit persistence).
+  - P0-07 → I-13 mapping now fully owned; P0-07 → P0-22 evidence linkage defined (mechanism → truth → evidence).
+  - P0-07 NOT renamed "Pickup Audit Attribution" — attribution is an integrity condition of the transition, owned by state-machine capability.
+  - Direct Protector vs Control/Enabler classification added to Section 7.1. 10 foundational P0s (P0-12,13,14,15,16,18,19,20,21,27) reclassified as Control/Enablers; Protects notation updated from (foundational)/(observability) to (Control/Enabler).
+  - Architectural Law 6 added: "An invariant describes a truth that must never be violated; a capability describes the mechanism that enforces or preserves that truth."
+  - I-14 coverage note reworded per stakeholder text: "intentionally P1-protected because Vendor Operational Integrity is not a launch-blocking financial/security invariant; its P1 control must nevertheless be defined before the relevant vendor scale is enabled."
+  - P0 count unchanged (28); invariant count unchanged (14); no P0-29; no new invariant; no Dependency Graph; no implementation.
+- Re-ran P0_TRACEABILITY_MAP.md against v1.4 (159 lines). Coverage query results:
+  - A (P0→invariant): PARTIAL → **PASS** (18 Direct Protectors + 10 Control/Enablers classified; "indirectly protects" framing eliminated)
+  - B (invariant→P0): PARTIAL → **PASS** (I-14 explicitly documented P1-protected exception; not a silent rule)
+  - C (P0→failure test): STRUCTURAL PASS (P0-07 now 7 tests)
+  - D (dependency→scenario): PASS
+  - E (failure→recovery): STRUCTURAL PASS
+  - F (P0→observable signal): STRUCTURAL PASS
+  - G (P0→approver): FAIL (0/28 — expected-empty-pending-implementation)
+  - H (P0→test evidence): FAIL (0/28 — expected-empty-pending-implementation)
+- Gap resolution: G-B1 RESOLVED (P0-07 expanded); G-A1 RESOLVED (classification); G-B2 RESOLVED (wording). G-G1, G-H1, G-F1 remain (not matrix defects — pending implementation/cross-reference).
+- Gate 1 (Matrix Completion, A–F): **GREEN**. Matrix formal sign-off **UNBLOCKED**.
+- Gate 2 (Production Readiness, G+H): remains pending implementation (blocks launch, not Artifact 2).
+
+Stage Summary:
+- Matrix v1.4 complete and formally sign-off-eligible (no matrix defects remain).
+- Traceability Map v1.4 re-run: 3 PASS (A, B, D) + 3 STRUCTURAL PASS (C, E, F) + 2 FAIL (G, H — expected, pending implementation).
+- Next: populate G-F1 (Strategic Blueprint feature mapping) → Artifact 2 (P0 Dependency Graph).
+- No implementation. No code. Documents only.
