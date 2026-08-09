@@ -1,7 +1,7 @@
-# SnakZap Production Readiness Matrix v1.3
+# SnakZap Production Readiness Matrix v1.4
 
 > **Document Type:** Specification & Decision Document
-> **Status:** Draft v1.3 — conceptually approved; formal sign-off pending traceability coverage check
+> **Status:** Draft v1.4 — G-B1 resolved (P0-07 expanded, no P0-29); Query A reinterpreted via Direct Protector vs Control/Enabler classification
 > **NOT an implementation plan.** This document defines *what* must be true before SnakZap can serve a real paying customer, *how* each capability must behave under failure, and *how* we will know it is ready. Implementation order, code, and sprints are derived from this — not the other way around.
 
 ---
@@ -10,14 +10,14 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.3 |
+| Version | 1.4 |
 | Date | 2026-08-09 |
-| Status | Conceptually approved; formal sign-off pending traceability coverage check |
+| Status | G-B1 resolved; Query A reinterpreted; awaiting Artifact 1 re-run |
 | Baseline | Uploaded audit (`zheo-main.zip` rebuild) + self-audit + stakeholder feedback + Strategic Blueprint cross-reference |
 | Authors | Engineering + Product |
 | Reviewers | (pending formal sign-off) |
-| Supersedes | v1.2 |
-| Next review | After P0 Traceability & Invariant Map passes all 8 coverage queries (A–H) |
+| Supersedes | v1.3 |
+| Next review | After Artifact 1 (P0 Traceability Map) re-runs coverage queries against v1.4 |
 
 ---
 
@@ -28,7 +28,8 @@
 | v1.0 | 2026-08-09 | Initial matrix: 5-question framework, actor's worst day, P0/P1/P2/P3 inventory, 23 P0 capabilities. | Self-audit + stakeholder feedback. |
 | v1.1 | 2026-08-09 | Added 5 new P0 capabilities (P0-24..P0-28): Transactional Data Integrity, Concurrency, DR, Deployment & Rollback, Unknown-Exception. Added 3 sections: Business Invariants, External Dependency Failure Matrix, Capability Lifecycle (8 states). Added G51–G57. | Stakeholder preliminary review — 7 corrections. |
 | v1.2 | 2026-08-09 | Refined P0-24 (idempotent business effect), P0-25 (3 concurrency cases), P0-26 (business recovery), P0-27 (3 deploy classes), P0-28 (3 blast-radius levels). Added invariant IDs I-01..I-12 with `Protects` column. Added `Affected P0` column to dependency matrix. Added lifecycle state `Approved` (9 states). Strengthened launch gate to 6 AND conditions. Added Section 18: Traceability foundation. | Stakeholder architectural review — 10 corrections. |
-| v1.3 | 2026-08-09 | Added 2 invariants: **I-13 Pickup/Handoff Integrity** (right order → right customer via QR+OTP — was a genuine gap; I-08 covers vendor-side authorization, not customer-side handoff) and **I-14 Vendor Operational Integrity** (vendor workload ≤ capacity; protected by P1 busy-mode, linked to I-02 order integrity). Added **Architectural Law** (business recovery coherence). Added **separation of duties** for `Approved` (developer cannot self-approve P0). Added launch-gate condition 7 (**no expired exception waiver**; P0 exceptions require owner + expiry + mitigation + approval). Cross-linked Section 10 dependency matrix to Strategic Blueprint risk register. Added observability cross-cutting note. Expanded Section 18: 8 coverage queries (A–H) as pass/fail spec for the Traceability Map; Strategic Blueprint feature→capability→invariant mapping requirement. Added 4 open questions (Q21–Q24). | Stakeholder v1.2 review — conceptually approved, final gate = traceability coverage check. |
+| v1.3 | 2026-08-09 | Added invariants I-13 (Pickup/Handoff Integrity) + I-14 (Vendor Operational Integrity). Added 5 Architectural Laws. Added separation of duties for `Approved`. Added launch-gate condition 7 (no expired waiver). Cross-linked Section 10 to Strategic Blueprint risk register. Added observability cross-cutting note. Expanded Section 18: 8 coverage queries (A–H) + Strategic Blueprint feature mapping requirement. Added Q21–Q24. | Stakeholder v1.2 review — conceptually approved, final gate = traceability coverage check. |
+| v1.4 | 2026-08-09 | **G-B1 resolved: expanded P0-07 (Order State Machine Hardening) acceptance criteria** to include 8 pickup-attribution conditions for the PICKED_UP transition (correct order_id, authorized collector, QR/OTP verification, immutable audit event with 5 fields, duplicate-pickup idempotent reject, cross-credential prevention, attribution-failure blocks transition). P0-07 → I-13 mapping now fully owned; **no P0-29 created**. Added 5 new P0-07 test criteria (correct collector, wrong collector, QR/OTP failure, duplicate pickup, attribution/audit persistence). Added P0-07 → P0-22 evidence linkage. **Query A reinterpreted**: introduced **Direct Protector vs Control/Enabler** classification — 10 foundational P0s reclassified as Control/Enablers (they detect/enable, not enforce business truths); `Protects` notation updated from `(foundational)`/`(observability)` to `(Control/Enabler)`. Added **Architectural Law 6**: "An invariant describes a truth that must never be violated; a capability describes the mechanism that enforces or preserves that truth." Updated I-14 wording to be explicit about P1-protection rationale (not launch-blocking financial/security invariant). P0 count unchanged at 28; invariant count unchanged at 14; no new capabilities; no new invariants. | Stakeholder G-B1 decision + Query A interpretation correction. |
 
 ---
 
@@ -196,6 +197,14 @@ Columns: **ID | Domain | Capability | Failure Scenario | Dependency | Acceptance
 
 The `Protects` column lists which Business Invariants (Section 9) the capability is responsible for upholding. A capability may not reach `Production-ready` until every invariant it protects is verified.
 
+**Capability classification (v1.4):** Every P0 is one of two types:
+- **Direct Protector** — a capability that *enforces* one or more business invariants directly (e.g. P0-01 enforces I-01 Payment Integrity by rejecting unsigned captures). Its `Protects` column lists specific I-xx IDs.
+- **Control/Enabler** — a capability that *detects, enables, or preserves* the system but does not enforce a specific business truth (e.g. P0-19 logging detects failures but does not enforce payment integrity; P0-15 migrations preserve schema but do not enforce any single invariant). Its `Protects` column reads `(Control/Enabler)`.
+
+This distinction matters for Coverage Query A (Section 18.5): a Direct Protector must map to ≥1 specific invariant; a Control/Enabler legitimately does not. Calling observability an "indirect protector of I-01" would distort the architecture — observability detects I-01 violations, it does not enforce them. The classification keeps ownership honest.
+
+**Architectural Law 6 (v1.4):** *An invariant describes a truth that must never be violated; a capability describes the mechanism that enforces or preserves that truth.* Direct Protectors enforce; Control/Enablers preserve the conditions under which Direct Protectors can function. Both are P0; their relationship to invariants differs.
+
 | ID | Domain | Capability | Failure Scenario | Dependency | Acceptance Criteria | Test Criteria | Protects | Owner |
 |----|--------|------------|------------------|------------|---------------------|---------------|----------|-------|
 | P0-01 | Payment | Razorpay order create + verify + capture | Gateway timeout / signature mismatch / double Pay click | Razorpay SDK, Payment model | Every payment has a verifiable captured state; no payment captured without verified signature | Idempotency test; signature-tamper test; double-submit test | I-01, I-04 | Backend |
@@ -209,22 +218,22 @@ The `Protects` column lists which Business Invariants (Section 9) the capability
 | P0-09 | Auth | Server-side Firebase ID token verification | Forged client identity / expired token | Firebase Admin SDK + session | Server rejects unverified identity; sessions bound to verified phone | Token-forgery test; expired-token test | I-12 | Backend |
 | P0-10 | Auth | Session integrity (refresh, revoke, active sessions) | Stolen session token / user logs out elsewhere | Session model | Sessions expireable, revocable; active-sessions list available | Session-revoke test; concurrent-session test | I-12 | Backend |
 | P0-11 | Auth | OTP retry limits + phone validation | OTP brute-force / invalid phone format | OTP service + rate limiter | Max 5 OTP attempts / 3 sends per 10 min; phone E.164 validated | Brute-force test; invalid-phone test | I-12 | Backend |
-| P0-12 | Security | Zod input validation on every API | Malformed payload / type confusion | Zod schemas per route | No API accepts unvalidated input; 400 on schema mismatch | Fuzz test per route; schema-mismatch test | (all, foundational) | Backend |
-| P0-13 | Security | Rate limiting (fail-closed for auth/payment/admin-write) | Redis down / abuse burst | Rate limiter (Redis or in-memory fallback) | Auth/payment/admin-write return 503 when limiter unavailable; general API fail-open | Fail-closed test; burst test | (protects P0-09..P0-11) | Backend |
-| P0-14 | Security | CSRF protection | Cross-site forged POST | CSRF token + SameSite cookie | State-changing POSTs require valid CSRF token | CSRF injection test | (all state-changing) | Backend |
-| P0-15 | Data | Database migrations (not `db:push`) | Schema drift / data loss on deploy | Prisma migrate + review process | Every schema change ships as reviewed migration; no data-destructive push | Migration rollback test; drift detection test | (all, foundational) | Backend |
-| P0-16 | Data | Backup | DB corruption / accidental delete | Backup schedule + corruption-detection | Daily backups; corruption-detection checksum on every backup; backup integrity verified | Backup-integrity test; corruption-detection test | (all, foundational) | Backend |
+| P0-12 | Security | Zod input validation on every API | Malformed payload / type confusion | Zod schemas per route | No API accepts unvalidated input; 400 on schema mismatch | Fuzz test per route; schema-mismatch test | (Control/Enabler) | Backend |
+| P0-13 | Security | Rate limiting (fail-closed for auth/payment/admin-write) | Redis down / abuse burst | Rate limiter (Redis or in-memory fallback) | Auth/payment/admin-write return 503 when limiter unavailable; general API fail-open | Fail-closed test; burst test | (Control/Enabler; enables P0-09..P0-11 to function safely) | Backend |
+| P0-14 | Security | CSRF protection | Cross-site forged POST | CSRF token + SameSite cookie | State-changing POSTs require valid CSRF token | CSRF injection test | (Control/Enabler; enables all state-changing writes to be safe) | Backend |
+| P0-15 | Data | Database migrations (not `db:push`) | Schema drift / data loss on deploy | Prisma migrate + review process | Every schema change ships as reviewed migration; no data-destructive push | Migration rollback test; drift detection test | (Control/Enabler) | Backend |
+| P0-16 | Data | Backup | DB corruption / accidental delete | Backup schedule + corruption-detection | Daily backups; corruption-detection checksum on every backup; backup integrity verified | Backup-integrity test; corruption-detection test | (Control/Enabler) | Backend |
 | P0-17 | Reliability | Idempotency on all critical writes | Retry storm / partial failure | Idempotency key on orders, payments, refunds, status updates | All critical writes idempotent; retries return same result | Idempotency test per critical write | I-04, I-10 | Backend |
-| P0-18 | Reliability | Error handling (boundaries + consistent responses) | Unhandled exception / partial response | Error boundaries + error envelope | Every API returns consistent error envelope; UI shows actionable errors | Error-injection test per route | (all, foundational) | Full-stack |
-| P0-19 | Observability | Structured logging | Silent failure / untraceable error | Logger (structured JSON) | Every critical path logs structured event with trace id | Log-coverage test | (all, observability) | Backend |
-| P0-20 | Observability | Health checks + basic metrics | Service silently degraded | Health endpoint + metrics export | `/health` reflects DB + Redis + gateway status; metrics exported | Health-probe test; metric-coverage test | (all, observability) | Backend |
-| P0-21 | Observability | Alerting on P0 failures | Payment success rate < 95% / reconciliation mismatch | Alert rules + on-call | Alerts fire on defined thresholds; false-positive rate < 5% | Alert-trigger test; false-positive audit | (all, observability) | Backend |
+| P0-18 | Reliability | Error handling (boundaries + consistent responses) | Unhandled exception / partial response | Error boundaries + error envelope | Every API returns consistent error envelope; UI shows actionable errors | Error-injection test per route | (Control/Enabler) | Full-stack |
+| P0-19 | Observability | Structured logging | Silent failure / untraceable error | Logger (structured JSON) | Every critical path logs structured event with trace id | Log-coverage test | (Control/Enabler) | Backend |
+| P0-20 | Observability | Health checks + basic metrics | Service silently degraded | Health endpoint + metrics export | `/health` reflects DB + Redis + gateway status; metrics exported | Health-probe test; metric-coverage test | (Control/Enabler) | Backend |
+| P0-21 | Observability | Alerting on P0 failures | Payment success rate < 95% / reconciliation mismatch | Alert rules + on-call | Alerts fire on defined thresholds; false-positive rate < 5% | Alert-trigger test; false-positive audit | (Control/Enabler) | Backend |
 | P0-22 | Audit | Audit trail integrity (immutable, complete) | Tampered audit log / missing entry | Audit model + append-only storage | Audit entries immutable; every admin/financial action audited | Tamper test; coverage test | I-07 | Backend |
 | P0-23 | Governance | Kill switch fail-safe behaviour | Kill switch itself fails | Kill switch + fallback | Kill switch defaults to safe state on failure; toggles audited | Kill-switch-failure test | I-09 | Backend |
 | P0-24 | Data | Transactional data integrity (cross-entity) — see detailed breakdown | Order + items + payment + availability + audit event partially commit; outbox publisher crashes after commit | DB transactions + outbox pattern | Committed business transaction eventually produces its required event with **idempotent business effect** (exactly-once in business outcome, even if physical delivery occurs more than once); no orphan entities; no partial commits | Partial-failure injection test; outbox-crash test; idempotent-replay test | I-01, I-02, I-05, I-06, I-10 | Backend |
 | P0-25 | Reliability | Concurrency + duplicate-execution control — see detailed breakdown | (A) last-item inventory race; (B) state-transition race (vendor ACCEPT→CANCEL while admin CANCEL→OVERRIDE); (C) payment double-click / frontend retry | Optimistic locking + row-level locks + atomic decrements + idempotency keys | Concurrent writes serialised; no oversell; conflicts surface as retry/conflict not silent corruption; duplicate executions are deduped, not double-applied | Concurrency case A (last-item); case B (state-transition); case C (payment duplicate); optimistic-lock conflict test | I-02, I-04, I-05, I-10 | Backend |
 | P0-26 | Data | Disaster recovery (business recovery, not just DB restore) — see detailed breakdown | DB corruption / regional failure / restore leaves payments-in-gateway inconsistent with restored DB | Backup + restore drill + post-restore reconciliation + documented runbook | RPO ≤ 24h, RTO ≤ 4h; restore drill passes monthly; **post-restore business-state reconciliation**: gateway payments re-synced to restored DB (captured-but-DB-pending → reconciled or refunded); audit log re-verified; **NO-GO if any money state unresolved post-restore** | Restore-drill test; corruption-detection test; post-restore reconciliation test; runbook walkthrough | I-01, I-02, I-06, I-07, I-10 | Backend |
-| P0-27 | Reliability | Deployment & rollback (3 classes) — see detailed breakdown | Bad release / migration incompatibility / failed deploy / DB rollback unsafe | CI/CD + health-checked deploy + feature flags + 3 deployment classes | Application rollback ≤ 10 min for backward-compatible deploys; **expand-migrate-contract** for schema changes (no breaking migration without contract phase); breaking deploys gated + flagged; failed deploy auto-aborts; **DB rollback never assumed safe — contract migrations preserve old-version compatibility** | Rollback drill test (per class); expand-migrate-contract test; migration-compatibility test; failed-deploy-abort test | (all, foundational) | Backend |
+| P0-27 | Reliability | Deployment & rollback (3 classes) — see detailed breakdown | Bad release / migration incompatibility / failed deploy / DB rollback unsafe | CI/CD + health-checked deploy + feature flags + 3 deployment classes | Application rollback ≤ 10 min for backward-compatible deploys; **expand-migrate-contract** for schema changes (no breaking migration without contract phase); breaking deploys gated + flagged; failed deploy auto-aborts; **DB rollback never assumed safe — contract migrations preserve old-version compatibility** | Rollback drill test (per class); expand-migrate-contract test; migration-compatibility test; failed-deploy-abort test | (Control/Enabler) | Backend |
 | P0-28 | Admin | Unknown-exception handling (3 blast-radius levels) — see detailed breakdown | System reaches a state not in known state machine | Invariant checker + 3-level blast-radius freeze + exception queue + alert | Unknown state triggers the **smallest sufficient** freeze level (transaction / entity / system kill switch), preserves evidence, creates exception queue entry, alerts; never silently ignored; never over-freezes (one malformed order does not stop the platform) | Unknown-state injection at each blast-radius level; freeze-precision test; over-freeze-prevention test | I-01..I-14 (all) | Backend |
 
 ### 7.2 P1 — Must Work Reliably After Launch
@@ -336,13 +345,32 @@ Each capability below has all five questions answered. A capability is **not rea
 4. **Money / Trust Impact:** **Critical.** Inconsistent states = money leaks.
 5. **Observability:** Invariant checker hourly; alert on any inconsistent combo.
 
-### P0-7 · Order State Machine Hardening
+### P0-7 · Order State Machine Hardening (v1.4 — pickup attribution expanded)
 
-1. **Happy Path:** Valid transitions only (CONFIRMED → PREPARING → ALMOST_READY → READY → PICKED_UP).
-2. **Failure Path:** Invalid transition → 409; concurrent update → optimistic lock rejects; retry.
-3. **Recovery Path:** Manual override via admin with audit.
-4. **Money / Trust Impact:** **High.** Wrong state = wrong fulfilment = vendor/consumer confusion.
-5. **Observability:** Transition log; alert on invalid-transition attempts.
+1. **Happy Path:** Valid transitions only (CONFIRMED → PREPARING → ALMOST_READY → READY → PICKED_UP). The PICKED_UP transition is the highest-integrity transition in the system — it marks the handoff of food to the customer. As of v1.4, PICKED_UP is valid **only when all 8 attribution conditions hold**:
+   1. Correct `order_id` resolved and verified.
+   2. Authorized collector/customer identity verified.
+   3. Required QR + OTP verification succeeded (both, per I-13 + Q21).
+   4. Pickup event persisted with at minimum: `order_id`, collector identity/reference, timestamp, verification method/result, actor/source.
+   5. Pickup event written to the immutable audit trail (links to P0-22 evidence).
+   6. Duplicate pickup attempt idempotently rejected/handled (no double-PICKED_UP).
+   7. Cross-credential pickup impossible (one order's credential cannot pick up another order).
+   8. Attribution failure blocks the PICKED_UP transition and activates the exception/recovery path (does not silently mark picked up).
+2. **Failure Path:** Invalid transition → 409; concurrent update → optimistic lock rejects loser with retry guidance; pickup verification failure (any of conditions 1–3, 6, 7 fail) → transition blocked, order stays READY, exception path activates.
+3. **Recovery Path:** Manual override via admin with audit (for state-machine conflicts); for attribution failures, exception queue entry created per P0-28 blast-radius Level 1 (transaction freeze on the affected order) — human investigates, corrects, and re-attempts pickup.
+4. **Money / Trust Impact:** **High → Critical (v1.4).** Wrong state = wrong fulfilment. A PICKED_UP without verified attribution = food handed to the wrong person = direct consumer harm + trust destruction + potential refund liability. I-13 (Pickup/Handoff Integrity) is now fully owned by P0-07.
+5. **Observability:** Transition log; alert on invalid-transition attempts; **pickup-verification log** (per attempt: order_id, collector, method, result); alert on attribution-failure rate; P0-22 audit-trail linkage verified on every PICKED_UP.
+
+**Test criteria (v1.4 — expanded):**
+- Concurrency test (existing)
+- Invalid-transition test (existing)
+- **Pickup-verification: correct collector** — valid QR+OTP, correct order → PICKED_UP succeeds, audit event persisted with all 5 fields.
+- **Pickup-verification: wrong collector** — credential belongs to a different order/customer → transition blocked (condition 7), exception path activates.
+- **Pickup-verification: QR/OTP failure** — missing or mismatched QR or OTP → transition blocked (condition 3), clear error to operator.
+- **Pickup-verification: duplicate pickup** — second PICKED_UP attempt on already-picked order → idempotent reject (condition 6), no double-transition.
+- **Pickup-verification: attribution/audit persistence** — after a successful PICKED_UP, the audit event is present in P0-22's immutable trail with all 5 required fields; tamper attempt detected.
+
+**Evidence linkage (v1.4):** P0-07 enforces I-13 at the transition gate; the resulting pickup event flows to P0-22 (Audit Integrity) as immutable evidence. The relationship is: **P0-07 (mechanism) → I-13 (truth enforced) → P0-22 (evidence preserved)**. P0-07 is NOT renamed "Pickup Audit Attribution" — attribution is an integrity condition of the PICKED_UP transition, owned by the state-machine capability. P0-22 remains the audit-trail owner; P0-07 remains the transition owner.
 
 ### P0-8 · Idempotency on Order Creation
 
@@ -596,7 +624,7 @@ Each invariant has a stable ID (`I-01`..`I-12`) so capabilities and dependencies
 | I-13 | Pickup / Handoff Integrity | A completed pickup must be attributable to the correct order and an authorized collector (QR + OTP both verified; pickup event auditable to order + customer). | Pickup service requires both QR-scan and OTP match before marking PICKED_UP; pickup event links order_id + collector identity + timestamp | Reject pickup + alert; freeze order if mismatch |
 | I-14 | Vendor Operational Integrity | A vendor must not receive uncontrolled workload beyond their declared operational capacity (busy-mode / pause / kitchen-load limits enforced). | Vendor capacity flag + order-intake gate; new orders blocked when vendor in paused/over-capacity state | Reject new order (clear "vendor busy" message); existing orders unaffected |
 
-**Coverage note (v1.3):** I-13 was a genuine gap in v1.2 — I-08 (Fulfilment Authorization) covers *vendor-side* authorization ("vendor can't fulfil an order they didn't accept"), but did not cover *customer-side* handoff correctness ("the right order goes to the right customer"). SnakZap's core promise (Strategic Blueprint: pickup experience = correct order to correct customer via QR + OTP) required this as a first-class invariant. I-14 captures the vendor-overload failure mode (Strategic Blueprint simulated scenario: active restaurants overwhelmed → vendor NPS drop); it is protected primarily by P1 busy-mode but is linked to I-02 (order integrity) because an overloaded vendor cannot reliably fulfil orders.
+**Coverage note (v1.4):** I-13 was a genuine gap in v1.2 — I-08 (Fulfilment Authorization) covers *vendor-side* authorization ("vendor can't fulfil an order they didn't accept"), but did not cover *customer-side* handoff correctness ("the right order goes to the right customer"). SnakZap's core promise (Strategic Blueprint: pickup experience = correct order to correct customer via QR + OTP) required this as a first-class invariant. **As of v1.4, I-13 is fully owned by P0-07** (Order State Machine Hardening) — the PICKED_UP transition now requires verified pickup attribution (8 conditions, see P0-07 detailed breakdown). No separate P0-29 was created; attribution is an integrity condition of the transition, not a standalone capability. I-14 captures the vendor-overload failure mode (Strategic Blueprint simulated scenario: active restaurants overwhelmed → vendor NPS drop). **I-14 is intentionally P1-protected because Vendor Operational Integrity is not a launch-blocking financial/security invariant; its P1 control (busy-mode) must nevertheless be defined before the relevant vendor scale is enabled.** This is consistent with the Strategic Blueprint's operational risk register (vendor overload is a documented risk). I-14 is linked to I-02 as a risk amplifier — an overloaded vendor cannot reliably fulfil orders — but is not itself a direct money/order integrity law.
 
 **Rule:** Any code change that could weaken an invariant requires matrix-governance sign-off (see Section 15).
 
@@ -696,6 +724,8 @@ These are the highest-level principles of the system — above invariants, above
 > **Law 4 — Pickup Correctness:** No order is marked PICKED_UP without verified handoff (QR + OTP) attributable to the correct order and an authorized collector. (Enforced by I-13, P0-07.)
 
 > **Law 5 — Separation of Duties:** No P0 capability is self-approved. The developer is never the `Reviewed` or `Approved` signatory. (Enforced by Section 11, rule 4.)
+
+> **Law 6 — Invariant vs Capability Separation (v1.4):** *An invariant describes a truth that must never be violated; a capability describes the mechanism that enforces or preserves that truth.* Direct Protectors enforce invariants; Control/Enablers preserve the conditions under which Direct Protectors can function. This separation keeps ownership honest: observability detects I-01 violations, it does not enforce I-01. (Enforced by Section 7.1 classification + Section 18.5 Coverage Query A interpretation.)
 
 ### 12.2 Cross-cutting capabilities table
 
@@ -911,10 +941,10 @@ Which invariants each P0 capability protects (consolidated from Section 7.1 `Pro
 | I-10 Transactional Completeness | P0-02, P0-08, P0-17, P0-24, P0-25, P0-26 |
 | I-11 Refund Precondition | P0-04 |
 | I-12 Session Revocation | P0-09, P0-10, P0-11 |
-| I-13 Pickup / Handoff Integrity | P0-07 (state machine PICKED_UP gate), P0-28 (unknown-exception on handoff mismatch) |
-| I-14 Vendor Operational Integrity | (P1 busy-mode — primary protector; linked to I-02 because vendor overload → order integrity risk) |
+| I-13 Pickup / Handoff Integrity | **P0-07 (fully owned as of v1.4 — PICKED_UP transition requires verified attribution)**, P0-28 (unknown-exception on handoff mismatch) |
+| I-14 Vendor Operational Integrity | P0-28 (backstop only); **primary protector is P1 busy-mode** — intentionally P1-protected (not launch-blocking financial/security invariant); P1 control must be defined before vendor scale is enabled |
 
-**Coverage rule:** Any invariant with zero protectors is a matrix defect. Any P0 capability protecting no invariant is either foundational (Zod, migrations, observability — which protect *all* invariants indirectly) or a candidate for demotion. I-14 is intentionally protected by a P1 capability (busy-mode) — this is acceptable because vendor overload degrades but does not immediately corrupt money/order state; it is linked to I-02 as a risk amplifier, not a direct protector.
+**Coverage rule (v1.4):** Any invariant with zero protectors is a matrix defect. **P0 capabilities are classified as Direct Protectors (must map to ≥1 specific invariant) or Control/Enablers (legitimately map to none — they detect/enable, not enforce).** Control/Enablers are not "indirect protectors" — that framing distorts architecture (observability detects I-01 violations, it does not enforce them). I-14 is an explicitly documented P1-protected exception, not a silent rule introduction.
 
 ### 18.3 Dependency → Capability impact (consolidated)
 
@@ -991,4 +1021,4 @@ The **full** traceability map (single table, one row per P0 capability, all colu
 
 ---
 
-*End of SnakZap Production Readiness Matrix v1.3.*
+*End of SnakZap Production Readiness Matrix v1.4.*

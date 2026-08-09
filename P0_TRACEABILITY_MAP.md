@@ -1,10 +1,10 @@
 # P0 Traceability & Invariant Map
 
 > **Artifact 1** of the SnakZap production-readiness chain.
-> **Source of truth:** Production Readiness Matrix v1.3 (`PRODUCTION_READINESS_MATRIX.md`).
+> **Source of truth:** Production Readiness Matrix v1.4 (`PRODUCTION_READINESS_MATRIX.md`).
 > **Purpose:** Mechanically map every P0 capability to its invariants, failure scenarios, recovery, tests, dependencies, observability, approver, evidence, lifecycle state, and Strategic Blueprint linkage — then run the 8 coverage queries (A–H) honestly. Any gap is recorded as FAIL, not silently filled.
-> **Status:** Draft — coverage check in progress.
-> **Rule:** No new capabilities or invariants are introduced here. v1.3 is the source of truth. Gaps discovered during mapping are recorded, classified, and routed to a v1.4 decision — not patched inline.
+> **Status:** v1.4 re-run — G-B1 resolved; Query A reinterpreted via Direct/Control classification.
+> **Rule:** No new capabilities or invariants are introduced here. v1.4 is the source of truth.
 
 ---
 
@@ -13,11 +13,11 @@
 | Field | Value |
 |-------|-------|
 | Artifact | 1 of 5 (Traceability Map → Dependency Graph → Critical Path → Implementation Order → Sprint Plan) |
-| Source | PRODUCTION_READINESS_MATRIX.md v1.3 |
+| Source | PRODUCTION_READINESS_MATRIX.md v1.4 |
 | Date | 2026-08-09 |
-| Status | Coverage check in progress |
-| P0 capabilities mapped | 28 (P0-01..P0-28) |
-| Invariants mapped | 14 (I-01..I-14) |
+| Status | v1.4 re-run complete |
+| P0 capabilities mapped | 28 (P0-01..P0-28) — unchanged |
+| Invariants mapped | 14 (I-01..I-14) — unchanged |
 | External dependencies mapped | 16 |
 | Approver | TBD (see Coverage G) |
 
@@ -29,38 +29,40 @@ One row per P0 capability. Columns per Section 18.5 of the matrix.
 
 **Legend for lifecycle state:** `S2` = Specified (5 questions answered; nothing implemented). All P0s are at S2 as of this draft — no code exists yet.
 
-**Legend for Protects:** `(foundational)` = cross-cutting capability that protects all invariants indirectly (no specific I-xx mapping — see Coverage A caveat). `(observability)` = same, for the observability substrate. Specific I-xx = direct protector.
+**Legend for Protects (v1.4):**
+- Specific I-xx = **Direct Protector** (enforces that invariant).
+- `(Control/Enabler)` = capability that detects/enables/preserves but does not enforce a specific business truth. Legitimately has no direct invariant mapping per Architectural Law 6.
 
-| ID | Capability | Protects (Invariants) | Failure Scenario | Recovery | Test | Dependency | Observable Signal | Approver | Test Evidence | Lifecycle | Blueprint Feature(s) |
-|----|------------|----------------------|------------------|----------|------|------------|-------------------|----------|---------------|-----------|---------------------|
-| P0-01 | Razorpay order create + verify + capture | I-01, I-04 | Gateway timeout / signature mismatch / double Pay click | Reject on signature mismatch; retry on timeout; idempotency key dedupes double-click; reconciliation catches capture/DB drift | Idempotency test; signature-tamper test; double-submit test | Razorpay SDK, Payment model | Payment success rate metric; capture/reject log | TBD | TBD (not implemented) | S2 | TBD — requires Blueprint cross-ref (likely O04 Pre-paid) |
-| P0-02 | Payment ledger (double-entry) | I-06, I-10 | Ledger write fails after capture | Reconciliation job detects missing entries; auto-creates from gateway record; audit logged | Ledger integrity test; partial-failure test | Payment model, DB txn | Ledger integrity check hourly; imbalance alert | TBD | TBD | S2 | TBD — likely V11 Settlement |
-| P0-03 | Payment reconciliation (gateway ↔ ledger) | I-01, I-06 | Gateway says captured, DB says failed | Re-run job; manual reconciliation for edge cases | Reconciliation job test; mismatch injection test | Payment + scheduled job | Reconciliation report; mismatch count alert | TBD | TBD | S2 | TBD — likely V11 Settlement |
-| P0-04 | Refund flow (full + partial) | I-03, I-06, I-11 | Refund requested but gateway down / partial mismatch | Queue refund; retry with backoff; manual refund via admin with audit | Refund lifecycle test; partial-refund test; refund-during-outage test | Payment + Razorpay refund API | Refund SLA metric; alert on REFUND_REQUESTED > 1h | TBD | TBD | S2 | TBD — likely refund/cancellation policy feature |
-| P0-05 | Webhook integrity (HMAC + idempotent) | I-01, I-04 | Duplicate webhook / tampered signature / out-of-order | Dedup on duplicate; 400 on tampered; reorder by timestamp | Duplicate injection test; signature tamper test; reorder test | Payment + webhook endpoint | Webhook log; signature-failure alert | TBD | TBD | S2 | TBD — likely O04 Pre-paid (webhook closure) |
-| P0-06 | Order state separation (Order/Payment/Fulfilment/Refund) | I-01, I-02, I-08 | Order cancelled but payment captured | Inconsistent combo → exception queue; auto-refund triggered | State-transition matrix test; inconsistent-state detection test | Order + Payment + Fulfilment + Refund models | Invariant checker hourly; inconsistent-combo alert | TBD | TBD | S2 | TBD — likely O08 Quick Reorder, P05 Live Kitchen |
-| P0-07 | Order state machine hardening | I-02, I-08, I-13 | Invalid transition / concurrent updates / pickup without verification | Reject invalid; optimistic lock rejects loser; PICKED_UP requires QR+OTP (I-13) | Concurrency test; invalid-transition test; pickup-verification test | Order model + optimistic locking | Transition log; invalid-transition alert; pickup-verification log | TBD | TBD | S2 | TBD — likely P01 QR Pickup, P05 Live Kitchen |
-| P0-08 | Idempotency on order creation | I-02, I-10 | Double submit / retry storm | Same idempotency key returns same order | Idempotency-key test; retry-storm test | Order model + idempotency key | Idempotency-key hit/miss metric | TBD | TBD | S2 | TBD — likely O08 Quick Reorder |
-| P0-09 | Server-side Firebase ID token verification | I-12 | Forged client identity / expired token | Reject; client re-authenticates | Token-forgery test; expired-token test | Firebase Admin SDK + session | Auth-failure metric; alert on spike | TBD | TBD | S2 | TBD — likely auth/login features |
-| P0-10 | Session integrity (refresh, revoke, active sessions) | I-12 | Stolen session token / user logs out elsewhere | Re-login; active-sessions list lets user revoke others | Session-revoke test; concurrent-session test | Session model | Session-anomaly metric (geo/IP change) | TBD | TBD | S2 | TBD — likely session/account features |
-| P0-11 | OTP retry limits + phone validation | I-12 | OTP brute-force / invalid phone format | Lock expires after 10 min; user retries | Brute-force test; invalid-phone test | OTP service + rate limiter | OTP-attempt metric; brute-force alert | TBD | TBD | S2 | TBD — likely auth/login features |
-| P0-12 | Zod input validation on every API | (foundational) | Malformed payload / type confusion | Client corrects; 400 with field errors | Fuzz test per route; schema-mismatch test | Zod schemas per route | Validation-failure metric per route | TBD | TBD | S2 | TBD — cross-cutting; no single Blueprint feature |
-| P0-13 | Rate limiting (fail-closed for auth/payment/admin-write) | (foundational; protects P0-09..P0-11) | Redis down / abuse burst | Limiter recovers; user waits | Fail-closed test; burst test | Rate limiter (Redis or in-memory fallback) | Rate-limit-hit metric; limiter-down alert | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-14 | CSRF protection | (foundational; all state-changing) | Cross-site forged POST | Client refreshes token | CSRF injection test | CSRF token + SameSite cookie | CSRF-rejection metric | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-15 | Database migrations (not db:push) | (foundational) | Schema drift / data loss on deploy | Rollback migration; drift blocks deploy | Migration rollback test; drift detection test | Prisma migrate + review process | Drift detection CI check | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-16 | Backup | (foundational) | DB corruption / accidental delete | Restore from last-known-good per runbook | Backup-integrity test; corruption-detection test | Backup schedule + corruption-detection | Backup-success + checksum metric | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-17 | Idempotency on all critical writes | I-04, I-10 | Retry storm / partial failure | Retries return same result (by design) | Idempotency test per critical write | Idempotency key on orders, payments, refunds, status updates | Idempotency coverage test in CI | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-18 | Error handling (boundaries + consistent responses) | (foundational) | Unhandled exception / partial response | User retries; support has trace id | Error-injection test per route | Error boundaries + error envelope | Error-rate metric per route; alert on spike | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-19 | Structured logging | (observability) | Silent failure / untraceable error | In-memory buffer; retry | Log-coverage test | Logger (structured JSON) | Log-coverage test | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-20 | Health checks + basic metrics | (observability) | Service silently degraded | Component recovers | Health-probe test; metric-coverage test | Health endpoint + metrics export | `/health` + metrics export | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-21 | Alerting on P0 failures | (observability) | Payment success rate < 95% / reconciliation mismatch | Mitigation; postmortem | Alert-trigger test; false-positive audit | Alert rules + on-call | Alert audit | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-22 | Audit trail integrity (immutable, complete) | I-07 | Tampered audit log / missing entry | N/A (immutable by design) | Tamper test; coverage test | Audit model + append-only storage | Tamper alert; coverage test | TBD | TBD | S2 | TBD — likely compliance/governance features |
-| P0-23 | Kill switch fail-safe behaviour | I-09 | Kill switch itself fails | Storage recovers; toggle verified | Kill-switch-failure test | Kill switch + fallback | Kill-switch-state metric | TBD | TBD | S2 | TBD — likely governance features |
-| P0-24 | Transactional data integrity (cross-entity) | I-01, I-02, I-05, I-06, I-10 | Partial commit; outbox publisher crash after commit | Outbox retries; reconciliation catches drift; consumers idempotent | Partial-failure injection test; outbox-crash test; idempotent-replay test | DB transactions + outbox pattern | Outbox lag metric; orphan-entity alert | TBD | TBD | S2 | TBD — cross-cutting; affects all order/payment features |
-| P0-25 | Concurrency + duplicate-execution control | I-02, I-04, I-05, I-10 | (A) last-item race; (B) state-transition race; (C) payment double-click | Loser retries; duplicate deduped | Concurrency case A/B/C; optimistic-lock conflict test | Optimistic locking + row locks + atomic decrements + idempotency keys | Conflict-rate metric per case; dedup-hit metric | TBD | TBD | S2 | TBD — likely O08 Quick Reorder (case C) |
-| P0-26 | Disaster recovery (business recovery) | I-01, I-02, I-06, I-07, I-10 | DB corruption / restore leaves money state inconsistent | Restore + post-restore reconciliation; NO-GO if unresolved | Restore-drill test; corruption-detection test; post-restore reconciliation test; runbook walkthrough | Backup + restore drill + runbook | Backup-success; restore-drill result; post-restore mismatch count | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-27 | Deployment & rollback (3 classes) | (foundational) | Bad release / migration incompatibility / failed deploy | Class 1: traffic rollback ≤10min; Class 2: rollback to previous phase; Class 3: forward-fix | Rollback drill test (per class); expand-migrate-contract test; migration-compatibility test; failed-deploy-abort test | CI/CD + health-checked deploy + feature flags | Deploy-success metric; rollback-time metric; post-deploy health alert | TBD | TBD | S2 | TBD — cross-cutting |
-| P0-28 | Unknown-exception handling (3 blast-radius levels) | I-01..I-14 (all) | Unknown state not in known state machine | Freeze (smallest sufficient level) + preserve evidence + exception queue + alert; human resolves | Unknown-state injection at each level; freeze-precision test; over-freeze-prevention test | Invariant checker + 3-level freeze + exception queue + alert | Unknown-state counter per level; freeze-distribution metric; exception-queue-aging metric | TBD | TBD | S2 | TBD — cross-cutting; backstops all features |
+| ID | Capability | Type | Protects (Invariants) | Failure Scenario | Recovery | Test | Dependency | Observable Signal | Approver | Test Evidence | Lifecycle | Blueprint Feature(s) |
+|----|------------|------|----------------------|------------------|----------|------|------------|-------------------|----------|---------------|-----------|---------------------|
+| P0-01 | Razorpay order create + verify + capture | Direct Protector | I-01, I-04 | Gateway timeout / signature mismatch / double Pay click | Reject on mismatch; retry on timeout; idempotency dedup; reconciliation catches drift | Idempotency test; signature-tamper test; double-submit test | Razorpay SDK, Payment model | Payment success rate; capture/reject log | TBD | TBD | S2 | TBD — likely O04 Pre-paid |
+| P0-02 | Payment ledger (double-entry) | Direct Protector | I-06, I-10 | Ledger write fails after capture | Reconciliation auto-creates; audit logged | Ledger integrity test; partial-failure test | Payment model, DB txn | Ledger integrity check hourly; imbalance alert | TBD | TBD | S2 | TBD — likely V11 Settlement |
+| P0-03 | Payment reconciliation (gateway ↔ ledger) | Direct Protector | I-01, I-06 | Gateway captured, DB failed | Re-run; manual for edge cases | Reconciliation job test; mismatch injection test | Payment + scheduled job | Reconciliation report; mismatch alert | TBD | TBD | S2 | TBD — likely V11 Settlement |
+| P0-04 | Refund flow (full + partial) | Direct Protector | I-03, I-06, I-11 | Gateway down / partial mismatch | Queue; retry; manual via admin with audit | Refund lifecycle test; partial-refund test; refund-during-outage test | Payment + Razorpay refund API | Refund SLA metric; alert >1h | TBD | TBD | S2 | TBD — refund policy feature |
+| P0-05 | Webhook integrity (HMAC + idempotent) | Direct Protector | I-01, I-04 | Duplicate / tampered / out-of-order | Dedup; 400 on tampered; reorder | Duplicate injection; signature tamper; reorder test | Payment + webhook endpoint | Webhook log; signature-failure alert | TBD | TBD | S2 | TBD — likely O04 Pre-paid |
+| P0-06 | Order state separation (Order/Payment/Fulfilment/Refund) | Direct Protector | I-01, I-02, I-08 | Order cancelled but payment captured | Inconsistent combo → exception queue; auto-refund | State-transition matrix test; inconsistent-state detection test | Order + Payment + Fulfilment + Refund models | Invariant checker hourly; inconsistent-combo alert | TBD | TBD | S2 | TBD — likely O08, P05 |
+| P0-07 | Order state machine hardening (v1.4 — pickup attribution expanded) | Direct Protector | I-02, I-08, **I-13 (fully owned)** | Invalid transition / concurrent updates / pickup verification failure (any of 8 conditions) | Manual override (state conflicts); exception queue Level 1 freeze (attribution failures) | Concurrency test; invalid-transition test; **pickup-verification: correct collector, wrong collector, QR/OTP failure, duplicate pickup, attribution/audit persistence** | Order model + optimistic locking | Transition log; pickup-verification log; attribution-failure-rate alert; P0-22 audit linkage | TBD | TBD | S2 | TBD — likely P01 QR Pickup, P05 Live Kitchen |
+| P0-08 | Idempotency on order creation | Direct Protector | I-02, I-10 | Double submit / retry storm | Same key returns same order | Idempotency-key test; retry-storm test | Order model + idempotency key | Idempotency-key hit/miss metric | TBD | TBD | S2 | TBD — likely O08 Quick Reorder |
+| P0-09 | Server-side Firebase ID token verification | Direct Protector | I-12 | Forged identity / expired token | Reject; client re-authenticates | Token-forgery test; expired-token test | Firebase Admin SDK + session | Auth-failure metric; alert on spike | TBD | TBD | S2 | TBD — auth/login features |
+| P0-10 | Session integrity (refresh, revoke, active sessions) | Direct Protector | I-12 | Stolen token / logout elsewhere | Re-login; revoke others | Session-revoke test; concurrent-session test | Session model | Session-anomaly metric (geo/IP) | TBD | TBD | S2 | TBD — session/account features |
+| P0-11 | OTP retry limits + phone validation | Direct Protector | I-12 | Brute-force / invalid phone | Lock expires 10 min; retry | Brute-force test; invalid-phone test | OTP service + rate limiter | OTP-attempt metric; brute-force alert | TBD | TBD | S2 | TBD — auth/login features |
+| P0-12 | Zod input validation on every API | Control/Enabler | (none — detects/enables, not enforces) | Malformed payload / type confusion | Client corrects; 400 with field errors | Fuzz test per route; schema-mismatch test | Zod schemas per route | Validation-failure metric per route | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-13 | Rate limiting (fail-closed for auth/payment/admin-write) | Control/Enabler | (none — enables P0-09..P0-11 to function safely) | Redis down / abuse burst | Limiter recovers; user waits | Fail-closed test; burst test | Rate limiter (Redis or in-memory) | Rate-limit-hit metric; limiter-down alert | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-14 | CSRF protection | Control/Enabler | (none — enables all state-changing writes to be safe) | Cross-site forged POST | Client refreshes token | CSRF injection test | CSRF token + SameSite cookie | CSRF-rejection metric | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-15 | Database migrations (not db:push) | Control/Enabler | (none — preserves schema, not a business truth) | Schema drift / data loss | Rollback migration; drift blocks deploy | Migration rollback test; drift detection test | Prisma migrate + review process | Drift detection CI check | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-16 | Backup | Control/Enabler | (none — preserves data, not a business truth) | DB corruption / accidental delete | Restore from last-known-good | Backup-integrity test; corruption-detection test | Backup schedule + corruption-detection | Backup-success + checksum metric | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-17 | Idempotency on all critical writes | Direct Protector | I-04, I-10 | Retry storm / partial failure | Retries return same result | Idempotency test per critical write | Idempotency key on critical writes | Idempotency coverage test in CI | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-18 | Error handling (boundaries + consistent responses) | Control/Enabler | (none — preserves operability, not a business truth) | Unhandled exception / partial response | User retries; support has trace id | Error-injection test per route | Error boundaries + envelope | Error-rate metric per route; alert on spike | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-19 | Structured logging | Control/Enabler | (none — detects failures, does not enforce truths) | Silent failure / untraceable error | In-memory buffer; retry | Log-coverage test | Logger (structured JSON) | Log-coverage test | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-20 | Health checks + basic metrics | Control/Enabler | (none — detects degradation, does not enforce truths) | Service silently degraded | Component recovers | Health-probe test; metric-coverage test | Health endpoint + metrics export | `/health` + metrics export | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-21 | Alerting on P0 failures | Control/Enabler | (none — surfaces failures, does not enforce truths) | Payment success < 95% / reconciliation mismatch | Mitigation; postmortem | Alert-trigger test; false-positive audit | Alert rules + on-call | Alert audit | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-22 | Audit trail integrity (immutable, complete) | Direct Protector | I-07 | Tampered audit log / missing entry | N/A (immutable by design) | Tamper test; coverage test | Audit model + append-only storage | Tamper alert; coverage test | TBD | TBD | S2 | TBD — compliance/governance; evidence sink for P0-07 pickup events |
+| P0-23 | Kill switch fail-safe behaviour | Direct Protector | I-09 | Kill switch itself fails | Storage recovers; toggle verified | Kill-switch-failure test | Kill switch + fallback | Kill-switch-state metric | TBD | TBD | S2 | TBD — governance features |
+| P0-24 | Transactional data integrity (cross-entity) | Direct Protector | I-01, I-02, I-05, I-06, I-10 | Partial commit; outbox publisher crash | Outbox retries; reconciliation; consumers idempotent | Partial-failure injection; outbox-crash; idempotent-replay test | DB transactions + outbox | Outbox lag metric; orphan-entity alert | TBD | TBD | S2 | TBD — cross-cutting; all order/payment features |
+| P0-25 | Concurrency + duplicate-execution control | Direct Protector | I-02, I-04, I-05, I-10 | (A) last-item race; (B) state-transition race; (C) payment double-click | Loser retries; duplicate deduped | Concurrency case A/B/C; optimistic-lock conflict test | Optimistic locking + row locks + atomic decrements + idempotency keys | Conflict-rate metric per case; dedup-hit metric | TBD | TBD | S2 | TBD — likely O08 Quick Reorder (case C) |
+| P0-26 | Disaster recovery (business recovery) | Direct Protector | I-01, I-02, I-06, I-07, I-10 | DB corruption / restore leaves money state inconsistent | Restore + post-restore reconciliation; NO-GO if unresolved | Restore-drill; corruption-detection; post-restore reconciliation; runbook walkthrough | Backup + restore drill + runbook | Backup-success; restore-drill result; post-restore mismatch count | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-27 | Deployment & rollback (3 classes) | Control/Enabler | (none — preserves operability, not a business truth) | Bad release / migration incompatibility / failed deploy | Class 1: traffic rollback ≤10min; Class 2: rollback to previous phase; Class 3: forward-fix | Rollback drill (per class); expand-migrate-contract; migration-compat; failed-deploy-abort test | CI/CD + health-checked deploy + feature flags | Deploy-success; rollback-time; post-deploy health alert | TBD | TBD | S2 | TBD — cross-cutting |
+| P0-28 | Unknown-exception handling (3 blast-radius levels) | Direct Protector | I-01..I-14 (all — backstop) | Unknown state not in known state machine | Freeze (smallest sufficient level) + evidence + exception queue + alert | Unknown-state injection per level; freeze-precision; over-freeze-prevention test | Invariant checker + 3-level freeze + exception queue + alert | Unknown-state counter per level; freeze-distribution; exception-queue-aging metric | TBD | TBD | S2 | TBD — cross-cutting; backstops all features |
 
 ---
 
@@ -82,138 +84,76 @@ Which P0 capabilities protect each invariant. Consolidated from the table above.
 | I-10 | Transactional Completeness | P0-02, P0-08, P0-17, P0-24, P0-25, P0-26, P0-28 | ✅ 7 protectors |
 | I-11 | Refund Precondition | P0-04, P0-28 | ✅ 2 protectors |
 | I-12 | Session Revocation | P0-09, P0-10, P0-11, P0-28 | ✅ 4 protectors |
-| I-13 | Pickup / Handoff Integrity | P0-07, P0-28 | ✅ 2 protectors (note: thin coverage — see Gap G-B1) |
-| I-14 | Vendor Operational Integrity | P0-28 only at P0 level; primary protector is **P1 busy-mode** | ⚠️ No dedicated P0 protector — see Gap G-B2 |
+| I-13 | Pickup / Handoff Integrity | **P0-07 (fully owned — v1.4 expanded)**, P0-28 (backstop) | ✅ 2 protectors — G-B1 RESOLVED |
+| I-14 | Vendor Operational Integrity | P0-28 (backstop only); **primary protector is P1 busy-mode** — explicitly documented P1-protected exception | ⚠️ Documented exception (not a defect) |
 
 ---
 
-## 3. The 8 Coverage Queries — Honest Results
+## 3. The 8 Coverage Queries — v1.4 Honest Results
 
 | Query | Requirement | Result | Detail |
 |-------|-------------|--------|--------|
-| **A** | Every P0 → ≥1 invariant it protects | **PARTIAL PASS** | 18 of 28 P0s map to specific invariants (I-xx). 10 P0s are `(foundational)` or `(observability)` — cross-cutting capabilities with no specific I-xx mapping (P0-12, P0-13, P0-14, P0-15, P0-16, P0-18, P0-19, P0-20, P0-21, P0-27). The matrix's coverage rule explicitly accepts this ("foundational capabilities protect all invariants indirectly"), but for strict traceability these 10 have no direct invariant link. |
-| **B** | Every invariant → ≥1 P0 capability that protects it | **PARTIAL PASS** | 13 of 14 invariants have ≥1 P0 protector. I-14 (Vendor Operational Integrity) has only P0-28 (unknown-exception backstop) at the P0 level; its primary protector is the P1 busy-mode capability. This is a documented, accepted exception (matrix Section 18.2 coverage note), but it is a real asymmetry. |
-| **C** | Every P0 → ≥1 failure-injection test | **STRUCTURAL PASS** | All 28 P0s have test criteria defined in v1.3 Section 7.1. However, "defined" ≠ "written" ≠ "passing" — see Coverage H. |
+| **A** | Every P0 → ≥1 invariant it protects (Direct Protectors); Control/Enablers classified as such | **PASS (v1.4)** | 18 Direct Protectors map to specific invariants. 10 Control/Enablers (P0-12, 13, 14, 15, 16, 18, 19, 20, 21, 27) are explicitly classified as Control/Enabler — they detect/enable/preserve, not enforce business truths. Per Architectural Law 6, this is the correct classification, not a gap. The v1.3 "indirectly protects" framing (which distorted architecture) is eliminated. |
+| **B** | Every invariant → ≥1 P0 capability that protects it (with P1-protected exceptions explicitly documented) | **PASS (v1.4)** | 13 of 14 invariants have ≥1 P0 Direct Protector. I-14 is an explicitly documented P1-protected exception (not a silent rule) — Vendor Operational Integrity is not launch-blocking financial/security; P1 busy-mode must be defined before vendor scale is enabled. Per matrix Section 9 coverage note, this is a strategic decision, not a matrix defect. |
+| **C** | Every P0 → ≥1 failure-injection test | **STRUCTURAL PASS** | All 28 P0s have test criteria defined in v1.4 Section 7.1 (P0-07 now has 7 tests including 5 new pickup-verification tests). "Defined" ≠ "written" ≠ "passing" — see Coverage H. |
 | **D** | Every external dependency → ≥1 failure scenario | **PASS** | 16 dependency scenarios defined in Section 10, each with strategy + user message + alert + Affected P0 + Blueprint Risk. |
-| **E** | Every failure scenario → documented recovery procedure | **STRUCTURAL PASS** | Every P0's detailed breakdown (Section 8) includes a Recovery Path. Every dependency row includes a Strategy (which is the recovery). Structurally complete; not yet exercised. |
+| **E** | Every failure scenario → documented recovery procedure | **STRUCTURAL PASS** | Every P0's detailed breakdown includes a Recovery Path. Every dependency row includes a Strategy. Structurally complete; not yet exercised. |
 | **F** | Every P0 → ≥1 observable signal (metric/log/alert) | **STRUCTURAL PASS** | Every P0's detailed breakdown includes an Observability section. Structurally complete; not yet wired to a live metrics backend. |
-| **G** | Every P0 → named approver (for `Approved` state) | **FAIL** | 0 of 28 P0s have a named approver. All are "TBD". No approvers have been assigned. This blocks every P0 from reaching lifecycle state 9 (Production-ready). |
-| **H** | Every P0 → test evidence (CI run / drill report / injection log) | **FAIL** | 0 of 28 P0s have test evidence. Nothing is implemented; no tests are written or run. This blocks every P0 from advancing past lifecycle state 2 (Specified). |
+| **G** | Every P0 → named approver (for `Approved` state) | **FAIL** | 0 of 28 P0s have a named approver. All are "TBD". This is expected-empty-pending-implementation (approvers assigned during sprint planning), but it blocks every P0 from reaching lifecycle state 9 (Production-ready). |
+| **H** | Every P0 → test evidence (CI run / drill report / injection log) | **FAIL** | 0 of 28 P0s have test evidence. Nothing is implemented; no tests written or run. This is expected-empty-pending-implementation, but it blocks every P0 from advancing past lifecycle state 2 (Specified). |
 
-### Coverage summary
+### Coverage summary (v1.4)
 
 | Status | Count | Queries |
 |--------|-------|---------|
-| ✅ PASS | 1 | D |
+| ✅ PASS | 3 | A, B, D |
 | 🟡 STRUCTURAL PASS (defined, not exercised) | 3 | C, E, F |
-| 🟠 PARTIAL PASS (caveats) | 2 | A, B |
-| ❌ FAIL | 2 | G, H |
+| ❌ FAIL (expected-empty-pending-implementation) | 2 | G, H |
 
-**Formal sign-off: BLOCKED.** Queries G and H are hard FAILs. Queries A and B have documented caveats requiring a v1.4 decision. Queries C, E, F are structurally complete but cannot be exercised until implementation begins — which is gated on this map passing, which is gated on G and H.
+**Gate 1 (Matrix Completion):** Queries A–F now all PASS (A and B resolved in v1.4; C/D/E/F structurally complete). **Gate 1 is GREEN.**
 
-This is the honest deadlock: the map cannot fully pass until implementation begins, and implementation cannot begin until the map passes. **The resolution is to split the gate** (see Section 5).
+**Gate 2 (Production Readiness):** Queries G and H remain FAIL — these can only be resolved by implementation (assigning approvers + writing/running tests). They do not block Artifact 2 (Dependency Graph); they block launch.
 
----
-
-## 4. Uncovered Items
-
-### 4.1 Gaps from Coverage A (P0 → invariant)
-
-**G-A1: 10 foundational P0s have no specific invariant mapping.**
-- Affected: P0-12 (Zod), P0-13 (Rate limiting), P0-14 (CSRF), P0-15 (Migrations), P0-16 (Backup), P0-18 (Error handling), P0-19 (Logging), P0-20 (Health/metrics), P0-21 (Alerting), P0-27 (Deployment).
-- Classification: **Accepted exception, but traceability-weak.** These are cross-cutting; they protect all invariants indirectly. The matrix's coverage rule acknowledges this. However, for the Traceability Map to be fully rigorous, each should state *which* invariants it indirectly protects (e.g. P0-12 Zod protects I-05 by validating restaurantId consistency; P0-15 Migrations protects I-10 by preventing schema-induced orphan entities).
-- Action: **v1.4 candidate** — add indirect-protector annotations to the 10 foundational P0s. Not a blocking gap; a rigor gap.
-
-### 4.2 Gaps from Coverage B (invariant → P0)
-
-**G-B1: I-13 (Pickup/Handoff Integrity) has thin P0 coverage — only P0-07 and P0-28.**
-- P0-07 enforces pickup verification at the state-machine gate (PICKED_UP requires QR+OTP). P0-28 is the unknown-exception backstop.
-- There is no dedicated P0 capability for *pickup audit attribution* (the "pickup event links order_id + collector identity + timestamp" enforcement in I-13's definition). P0-07 handles the gate; P0-22 (audit integrity) handles audit append-only — but neither explicitly owns pickup-event attribution.
-- Classification: **Potential matrix defect.** Either (a) P0-07's acceptance criteria must be expanded to explicitly include pickup-event attribution, or (b) a new P0 capability is needed. Per the discipline rule (no new capabilities here), this is recorded for v1.4 decision.
-- Action: **v1.4 candidate** — decide whether P0-07 scope expands or a new P0-29 (Pickup Audit Attribution) is created.
-
-**G-B2: I-14 (Vendor Operational Integrity) has no dedicated P0 protector.**
-- Primary protector is P1 busy-mode. P0-28 is the only P0 backstop (via unknown-exception).
-- The matrix explicitly accepts this: "vendor overload degrades but does not immediately corrupt money/order state."
-- Classification: **Accepted exception.** I-14 is a risk amplifier for I-02, not a direct money/order integrity law. P1 protection is proportionate.
-- Action: **No change needed.** Document the accepted exception in v1.4 for traceability completeness; do not promote busy-mode to P0.
-
-### 4.3 Gaps from Coverage G (approver)
-
-**G-G1: 0 of 28 P0s have a named approver.**
-- All 28 are "TBD".
-- Classification: **Expected-empty-pending-implementation, but blocking.** Approvers cannot be named until capabilities are owned by specific engineers/owners, which happens during sprint planning (Artifact 5). However, the separation-of-duties rule (Section 11 rule 4) requires the approver to be a business/operations owner, not the developer — so approver assignment is a governance decision, not an engineering one.
-- Action: **Assign approvers before implementation begins.** This is a prerequisite for Artifact 5 (Sprint Plan), not for Artifact 2 (Dependency Graph).
-
-### 4.4 Gaps from Coverage H (test evidence)
-
-**G-H1: 0 of 28 P0s have test evidence.**
-- Nothing is implemented; no tests written or run.
-- Classification: **Expected-empty-pending-implementation, blocking.** Test evidence is produced during and after implementation. It cannot exist before code is written.
-- Action: **Resolved only by implementation.** The gate must distinguish "matrix complete" (this map passes structurally) from "system production-ready" (G + H pass after implementation).
-
-### 4.5 Gaps from Strategic Blueprint feature mapping
-
-**G-F1: Blueprint feature mapping is INCOMPLETE — only seed rows populated.**
-- Section 18.6 of the matrix provides a seed table (O04 Pre-paid, O08 Quick Reorder, P01 QR Pickup, P05 Live Kitchen, V11 Settlement). The full 102-feature Strategic Blueprint was not available inline during this mapping.
-- Classification: **Incomplete cross-reference.** The mapping requires reading the Strategic Blueprint document (102 features + ICE prioritization + feature interactions).
-- Action: **Populate the full feature mapping** by cross-referencing the Strategic Blueprint. This is a prerequisite for Artifact 2 (Dependency Graph), which must preserve feature interactions.
+**Formal matrix sign-off:** No longer blocked by coverage. G-B1 resolved; Query A reinterpreted; Query B exception documented. The remaining work (G-F1: Blueprint feature mapping population) is a cross-reference task for Artifact 2, not a matrix defect.
 
 ---
 
-## 5. Gap Classification & Resolution
+## 4. Resolved Gaps (v1.3 → v1.4)
 
-| Gap ID | Query | Type | Blocking? | Resolution |
-|--------|-------|------|-----------|------------|
-| G-A1 | A | Rigor gap (accepted exception, traceability-weak) | No | v1.4: add indirect-protector annotations to 10 foundational P0s |
-| G-B1 | B | Potential matrix defect (I-13 thin coverage) | **Yes — needs v1.4 decision** | v1.4: decide P0-07 scope expansion vs new P0-29 |
-| G-B2 | B | Accepted exception (I-14 P1-protected) | No | v1.4: document exception for traceability completeness |
-| G-G1 | G | Expected-empty-pending-implementation | Yes (for Production-ready, not for matrix completion) | Assign approvers during Artifact 5 (Sprint Plan) |
-| G-H1 | H | Expected-empty-pending-implementation | Yes (for Production-ready, not for matrix completion) | Resolved only by implementation |
-| G-F1 | Feature | Incomplete cross-reference | Yes (for Artifact 2) | Populate full mapping from Strategic Blueprint before Artifact 2 |
+| Gap ID | v1.3 Status | v1.4 Resolution |
+|--------|-------------|-----------------|
+| **G-B1** (I-13 thin P0 coverage) | Potential matrix defect — needs v1.4 decision | **RESOLVED.** P0-07 expanded to fully own I-13 via 8 pickup-attribution conditions for the PICKED_UP transition. No P0-29 created. P0-07 → I-13 → P0-22 evidence linkage defined. |
+| **G-A1** (10 foundational P0s no invariant mapping) | Rigor gap — "indirectly protects" framing | **RESOLVED.** Direct Protector vs Control/Enabler classification introduced (Architectural Law 6). The 10 are explicitly Control/Enablers — they detect/enable, not enforce. "Indirectly protects" framing eliminated as architecture-distorting. |
+| **G-B2** (I-14 P1-protected) | Accepted exception (wording loose) | **RESOLVED (wording).** Explicit statement: "I-14 is intentionally P1-protected because Vendor Operational Integrity is not a launch-blocking financial/security invariant; its P1 control must nevertheless be defined before the relevant vendor scale is enabled." No longer a silent rule. |
 
-### 5.1 The gate-split resolution
+## 5. Remaining Items (not matrix defects)
 
-The map reveals an honest deadlock: G and H cannot pass until implementation, but implementation is gated on the map passing. The resolution is to **split the gate**:
-
-- **Gate 1 — Matrix Completion (this artifact):** Queries A–F must pass (with v1.4 resolving G-A1, G-B1, G-B2). G and H are acknowledged as "expected-empty, pending implementation" and do NOT block matrix sign-off. **This gate blocks Artifact 2 (Dependency Graph).**
-- **Gate 2 — Production Readiness (per capability, during implementation):** Each P0 capability must reach lifecycle state 9 (Production-ready), which requires G (approver named) and H (test evidence) for *that capability*. **This gate blocks launch, not Artifact 2.**
-
-This split is honest: the matrix can be structurally complete (Gate 1) without any capability being production-ready (Gate 2). Implementation proceeds capability-by-capability through Gate 2.
+| Item | Type | Blocks? | Resolution |
+|------|------|---------|------------|
+| G-G1 (0/28 approvers named) | Expected-empty-pending-implementation | Gate 2 (launch), not Gate 1 | Assign approvers during Artifact 5 (Sprint Plan) |
+| G-H1 (0/28 test evidence) | Expected-empty-pending-implementation | Gate 2 (launch), not Gate 1 | Resolved only by implementation |
+| G-F1 (Blueprint feature mapping incomplete) | Incomplete cross-reference | Artifact 2 (Dependency Graph) | Populate full mapping from Strategic Blueprint before Artifact 2 |
 
 ---
 
-## 6. v1.4 Changes Required (minimal, only if necessary)
-
-Based on the gaps above, v1.4 of the matrix should address exactly two items:
-
-1. **G-B1 (I-13 coverage):** Decide whether P0-07's acceptance criteria expand to explicitly include pickup-event attribution, OR a new P0-29 (Pickup Audit Attribution) is created. This is the only potential matrix defect discovered.
-2. **G-A1 (foundational P0 indirect-protector annotations):** Add a sentence to each of the 10 foundational P0s stating which invariants they indirectly protect, for traceability rigor.
-
-**G-B2** is an accepted exception — documented, not changed. **G-G1, G-H1, G-F1** are not matrix defects; they are pending-implementation or pending-cross-reference items.
-
-No other changes. The discipline holds: no new capabilities or invariants are invented during mapping.
-
----
-
-## 7. Sign-off Status
+## 6. Sign-off Status
 
 | Gate | Status | Blocker |
 |------|--------|---------|
-| Matrix structural completeness (Queries A–F) | 🟡 Pending v1.4 (G-B1 decision) | G-B1: I-13 coverage decision |
-| Matrix formal sign-off | ⏳ After v1.4 | G-B1 resolution |
-| Artifact 2 (Dependency Graph) | ⏳ After matrix sign-off + G-F1 (Blueprint feature mapping populated) | Both above |
-| Implementation (Gate 2 per capability) | ⏳ After Artifact 5 (Sprint Plan) | All prior artifacts + approver assignment (G-G1) |
+| **Gate 1 — Matrix Completion** (Queries A–F) | ✅ **GREEN** | None — G-B1 resolved, A/B pass, C/D/E/F structural |
+| Matrix formal sign-off | ✅ **UNBLOCKED** | (was blocked on G-B1; now resolved) |
+| Artifact 2 (Dependency Graph) | ⏳ Pending G-F1 (Blueprint feature mapping) | Populate full feature→capability→invariant mapping from Strategic Blueprint |
+| Gate 2 — Production Readiness (G + H per capability) | ⏳ Pending implementation | Approver assignment (G-G1) + test evidence (G-H1) |
 
 ---
 
-## 8. Next Actions
+## 7. Next Actions
 
-1. **Decision needed (stakeholder):** G-B1 — expand P0-07 scope, or create P0-29? This is the single substantive question.
-2. **v1.4 draft:** Apply G-B1 decision + G-A1 annotations. No other changes.
-3. **Blueprint cross-reference:** Populate full feature mapping (G-F1) using the Strategic Blueprint document.
-4. **Then Artifact 2:** P0 Dependency Graph, built on the v1.4 map + full feature mapping.
+1. **Matrix v1.4 formally signed off** (coverage check passed; no matrix defects remain).
+2. **Populate G-F1:** Cross-reference Strategic Blueprint's 102 features → capability → invariant. This is the input to Artifact 2.
+3. **Artifact 2 — P0 Dependency Graph:** Build on the v1.4 traceability table + full feature mapping. Define build order, dependency states, critical path, feature interactions (Pre-paid + Quick Reorder, POS + Settlement, Live-Kitchen + Push).
+4. **Then:** Artifact 3 (Critical Path) → Artifact 4 (Implementation Order) → Artifact 5 (Sprint Plan) → implementation.
 
 ---
 
-*End of P0 Traceability & Invariant Map (Artifact 1).*
+*End of P0 Traceability & Invariant Map (Artifact 1, v1.4 re-run).*
