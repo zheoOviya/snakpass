@@ -1,0 +1,122 @@
+// SnakZap — Prisma schema (SQLite)
+// Pickup-first food ordering platform: catalog, ordering, fulfillment, governance.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ----------------------------------------
+// Identity context
+// ----------------------------------------
+model User {
+  id              String   @id @default(cuid())
+  phone           String   @unique
+  name            String?
+  role            String   @default("CONSUMER") // CONSUMER | VENDOR_OWNER | ADMIN | SUPER_ADMIN
+  spiceTolerance  Int      @default(3) // 0..5
+  walletBalance   Int      @default(0) // paise
+  createdAt       DateTime @default(now())
+  orders          Order[]
+  auditLogs       AuditLog[]
+}
+
+// ----------------------------------------
+// Catalog context
+// ----------------------------------------
+model Restaurant {
+  id             String     @id @default(cuid())
+  name           String
+  cuisine        String     // e.g. "North Indian", "South Indian", "Chinese"
+  description    String
+  image          String
+  rating         Float      @default(4.5)
+  prepTimeMins   Int        @default(20)
+  priceForTwo    Int        @default(300) // paise
+  commissionRate Float      @default(0.08)
+  isActive       Boolean    @default(true)
+  isSuspended    Boolean    @default(false)
+  gstNumber      String     @default("29ABCDE1234F1Z5")
+  address        String     @default("")
+  createdAt      DateTime   @default(now())
+  menuItems      MenuItem[]
+  orders         Order[]
+}
+
+model MenuItem {
+  id             String       @id @default(cuid())
+  restaurantId   String
+  restaurant     Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  name           String
+  description    String
+  price          Int          // paise
+  image          String
+  spiceLevel     Int          @default(1) // 0..3 (mild/medium/hot/extra)
+  isVeg          Boolean      @default(true)
+  isAvailable    Boolean      @default(true)
+  category       String       @default("Mains") // Starters | Mains | Breads | Rice | Desserts | Beverages
+  createdAt      DateTime     @default(now())
+  orderItems     OrderItem[]
+}
+
+// ----------------------------------------
+// Ordering context
+// ----------------------------------------
+model Order {
+  id             String         @id @default(cuid())
+  userId         String
+  user           User           @relation(fields: [userId], references: [id])
+  restaurantId   String
+  restaurant     Restaurant     @relation(fields: [restaurantId], references: [id])
+  status         String         @default("CONFIRMED") // CONFIRMED | PREPARING | ALMOST_READY | READY_FOR_PICKUP | PICKED_UP | CANCELLED
+  totalAmount    Int            // paise
+  pickupOtp      String         @default("000000")
+  isCatering     Boolean        @default(false)
+  headcount      Int?
+  itemsCount     Int            @default(0)
+  note           String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+  orderItems     OrderItem[]
+  statusHistory  String         @default("[]") // JSON array of {status, at}
+}
+
+model OrderItem {
+  id            String   @id @default(cuid())
+  orderId       String
+  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItemId    String
+  menuItem      MenuItem @relation(fields: [menuItemId], references: [id])
+  name          String
+  price         Int      // paise (snapshot)
+  quantity      Int      @default(1)
+  subtotal      Int      // paise
+  createdAt     DateTime @default(now())
+}
+
+// ----------------------------------------
+// Governance context
+// ----------------------------------------
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id])
+  actorRole String   @default("SYSTEM")
+  action    String
+  metadata  String   @default("{}") // JSON
+  createdAt DateTime @default(now())
+}
+
+model KillSwitch {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  label       String
+  description String
+  enabled     Boolean  @default(false)
+  severity    String   @default("HIGH") // LOW | MEDIUM | HIGH | CRITICAL
+  updatedAt   DateTime @updatedAt
+}
