@@ -46,62 +46,73 @@ For each leaf, trace backward through blocking B-edges to roots. The longest suc
 
 ## 2. Topological Layering (by blocking B-dependencies)
 
-Layer = longest distance from any root. Roots are Layer 0. A node is in Layer N if its longest blocking-B dependency chain from a root is N edges.
+Layer = longest distance (in blocking B-edges) from any root. Roots are Layer 0. A node is in Layer N if its longest blocking-B dependency chain from a root is N edges.
+
+**v1.4 recomputation (stakeholder correction):** The previous version of this table had a computation error — P0-06's depth was miscalculated. P0-06 depends on P0-01, P0-02, P0-04, and P0-05 (all blocking). P0-04 depends on P0-02, which depends on P0-01. So the longest path to P0-06 goes through P0-04 (not directly from P0-01), adding 2 extra layers. This correction, plus the new P0-23 → P0-01 B-edge (promoted from the Kill Switch + Order Intake F-node), changes the layering and the longest path. **The graph topology DID change** (new B-edge added; P0-23 is no longer isolated — it now has a B-dependent).
 
 | Layer | P0s | Rationale |
 |-------|-----|-----------|
-| **L0 (roots)** | P0-09, P0-13, P0-15, P0-16, P0-19, P0-20, P0-21, P0-22 | No blocking B-dependency. P0-27 omitted (isolated control). |
-| **L1** | P0-10 (←P0-09), P0-11 (←P0-09; P0-13 is non-blocking), P0-17 (←P0-15), P0-25 (←P0-15), P0-24 (←P0-15; P0-25 in same layer — see note), P0-26 (←P0-16), P0-28 (←P0-19/20/21/22) | Direct blocking deps from L0. |
-| **L2** | P0-01 (←P0-09, P0-17, P0-24) | Payment capture needs auth + idempotency + transactional integrity. |
-| **L3** | P0-02 (←P0-01), P0-05 (←P0-01), P0-08 (←P0-24, P0-25) | Ledger + webhook depend on capture; order idempotency depends on transactional + concurrency (both L1). |
-| **L4** | P0-04 (←P0-01, P0-02), P0-03 (←P0-01, P0-02), P0-06 (←P0-01, P0-02, P0-04, P0-05) | Refund + reconciliation depend on capture+ledger; state separation spans all four. |
-| **L5** | P0-07 (←P0-06, P0-22) | State machine needs separated states (L4) + audit (L0). |
+| **L0 (roots, depth 0)** | P0-09, P0-12, P0-13, P0-14, P0-15, P0-16, P0-18, P0-19, P0-20, P0-21, P0-22, P0-23 | 12 roots. P0-23 (Kill Switch) is now a pure root — previously isolated, now has B-dependent P0-01 (via promoted F-node). P0-27 omitted (isolated control node). |
+| **L1 (depth 1)** | P0-10 (←P0-09), P0-11 (←P0-09), P0-17 (←P0-15), P0-25 (←P0-15), P0-26 (←P0-16), P0-28 (←P0-19/20/21/22) | Direct blocking deps from L0. P0-11's dep on P0-13 is non-blocking (not counted). |
+| **L2 (depth 2)** | P0-24 (←P0-25) | Transactional integrity depends on P0-25 (concurrency). Also depends on P0-15 (depth 0 → 1), but P0-25 path is longer. |
+| **L3 (depth 3)** | P0-01 (←P0-24), P0-08 (←P0-24) | Capture depends on P0-24 (longest path). P0-01 also depends on P0-09 (L0→1), P0-17 (L1→2), P0-23 (L0→1, new B-edge) — all shorter joins. P0-08 depends on P0-24 (L2→3); P0-25 dep is shorter. |
+| **L4 (depth 4)** | P0-02 (←P0-01), P0-05 (←P0-01) | Ledger + webhook depend on capture. |
+| **L5 (depth 5)** | P0-03 (←P0-02), P0-04 (←P0-02) | Reconciliation + refund depend on ledger. (Also depend on P0-01 at depth 3, but P0-02 path is longer.) |
+| **L6 (depth 6)** | P0-06 (←P0-04) | State separation spans payment + ledger + refund + webhook. **P0-04 is the deepest predecessor** (depth 5), so P0-06 is depth 6 — NOT depth 4 as previously stated. This was the original computation error. |
+| **L7 (depth 7)** | P0-07 (←P0-06) | State machine depends on state separation (L6). Also depends on P0-22 (L0→1, join only). |
 
-**Note on L1 P0-24:** P0-24 depends on P0-25 (same layer). This is a within-layer dependency — both must reach `Implemented` before either can progress; they are a tight parallelizable pair. Treated as L1 for path purposes (P0-25 is the path predecessor; P0-15 → P0-25 → P0-24 is length 2 to P0-24, so P0-24 is effectively L2 from P0-15's perspective). The path computation handles this correctly below.
+**Leaves (no blocking B-dependent):** P0-03 (L5), P0-07 (L7), P0-08 (L3), P0-26 (L1), P0-27 (isolated), P0-28 (L1).
 
-**Leaves (no blocking B-dependent):** P0-03, P0-04, P0-07, P0-26, P0-28. (P0-27 omitted — isolated control.)
+**Note on P0-04 / P0-05 — NOT leaves:** P0-06 depends on both P0-04 and P0-05, so neither is a leaf. This was also misclassified in the previous version (P0-04 was listed as a leaf). P0-04 is an internal node on the longest path.
+
+**New B-edge from F-node promotion:** P0-01 --B--> P0-23 (Kill Switch must gate order intake). P0-23 is L0 root; this edge is a join on P0-01 (depth 1 via this edge, vs depth 3 via P0-24 — so it does NOT extend P0-01's longest path, but it IS a new topological edge). **Topology changed.**
 
 ---
 
-## 3. Longest Blocking Path(s) — Co-Critical Paths
+## 3. Longest Blocking Path — Recomputed
 
-Tracing each leaf back to roots via blocking B-edges, the maximum path length found is **6 edges (7 nodes)**. **Two leaves share this maximum → two co-critical paths.**
+Tracing each leaf back to roots via blocking B-edges, the maximum path length found is **7 edges (8 nodes)**. **One leaf (P0-07) is at this maximum → ONE critical path** (not two co-critical paths as previously stated).
 
-### 3.1 Co-Critical Path α — ends at P0-07 (Order State Machine / Pickup)
+### 3.1 The Critical Path — ends at P0-07 (Order State Machine / Pickup)
 
 ```
 P0-15 (Migrations)
    ──B[blocking]──>  P0-25 (Concurrency + version fields)
    ──B[blocking]──>  P0-24 (Transactional integrity — needs concurrency)
    ──B[blocking]──>  P0-01 (Razorpay capture — needs idempotency + transactional)
-   ──B[blocking]──>  P0-06 (State separation — spans payment+ledger+refund+webhook)
+   ──B[blocking]──>  P0-02 (Ledger — entry created on capture)
+   ──B[blocking]──>  P0-04 (Refund — refund requires prior capture + ledger)
+   ──B[blocking]──>  P0-06 (State separation — spans payment + ledger + refund + webhook)
    ──B[blocking]──>  P0-07 (State machine incl. pickup attribution)
 ```
-**Length: 5 edges, 6 nodes.** Ends at leaf P0-07.
+**Length: 7 edges, 8 nodes.** Ends at leaf P0-07.
 
-**Extended via P0-22 join:** P0-07 also blocks on P0-22 (audit, L0) for I-13 attribution. P0-22 is a parallel L0 root, so it does not extend the linear length, but it is a **join dependency** — P0-07 cannot reach `Production-ready` until BOTH P0-06-chain AND P0-22 are ready.
+**Why P0-04 is on the path (the original error):** P0-06 (state separation) depends on P0-04 (refund) as a blocking B-edge — "state separation spans refund." P0-04 depends on P0-02 (ledger), which depends on P0-01 (capture). So the longest chain to P0-06 goes P0-01 → P0-02 → P0-04 → P0-06 (3 edges from P0-01), NOT P0-01 → P0-06 (1 edge). The previous version incorrectly treated P0-06 as if its depth came directly from P0-01, missing the P0-04 intermediate. This made the path appear as 5 edges when it is actually 7.
 
-### 3.2 Co-Critical Path β — ends at P0-03 (Reconciliation) or P0-04 (Refund)
+**Join dependencies on P0-07 (do not extend length, but gate readiness):**
+- P0-22 (Audit, L0) — P0-07 needs audit for I-13 pickup attribution.
+- P0-23 (Kill Switch, L0) — via promoted B-edge at P0-01; does not extend P0-07's depth (P0-23 is L0, edge to P0-01 is length 1, shorter than P0-24 path).
 
-```
-P0-15 (Migrations)
-   ──B[blocking]──>  P0-25 (Concurrency)
-   ──B[blocking]──>  P0-24 (Transactional integrity)
-   ──B[blocking]──>  P0-01 (Razorpay capture)
-   ──B[blocking]──>  P0-02 (Ledger)
-   ──B[blocking]──>  P0-03 (Reconciliation)   [leaf]
-                   OR
-   ──B[blocking]──>  P0-04 (Refund)            [leaf]
-```
-**Length: 5 edges, 6 nodes.** Ends at leaf P0-03 or P0-04.
+**F-node synchronization gates on P0-07 (do not extend length, but gate readiness):**
+- QR + OTP (Security/Integrity synchronization — I-13)
+- Live Kitchen + Push (Synchronization)
+- Geo-fence + Pickup (Security/Integrity synchronization — caution G04)
+- Prepaid + Quick Reorder (Synchronization — via P0-01, P0-08, P0-25)
 
-### 3.3 Verdict: Two co-critical paths of equal length (5 edges / 6 nodes)
+### 3.2 Shorter branches (NOT co-critical)
 
-**Both paths share the prefix `P0-15 → P0-25 → P0-24 → P0-01`** (4 edges). They diverge at P0-01:
-- Path α continues `→ P0-06 → P0-07` (state machine / pickup).
-- Path β continues `→ P0-02 → P0-03` (ledger → reconciliation) or `→ P0-02 → P0-04` (ledger → refund).
+| Leaf | Path | Length | Why not co-critical |
+|------|------|--------|---------------------|
+| P0-03 (Reconciliation) | P0-15 → P0-25 → P0-24 → P0-01 → P0-02 → P0-03 | 5 edges | Shorter than 7; not on the longest path. Still launch-mandatory (Risk-Critical Surface, Section 8.B). |
+| P0-08 (Order idempotency) | P0-15 → P0-25 → P0-24 → P0-08 | 3 edges | Shorter; diverges at P0-24. |
+| P0-26 (DR) | P0-16 → P0-26 | 1 edge | Short branch; launch-mandatory (DR drill is launch-gate condition 4). |
+| P0-28 (Unknown-exception) | P0-19/20/21/22 → P0-28 | 1 edge | Short branch; launch-mandatory (system safety net). |
 
-**These are genuinely co-critical.** Forcing them into a single chain would misrepresent the graph — P0-06/P0-07 and P0-02/P0-03/P0-04 are parallel branches off P0-01, not sequential. Both must complete for launch; neither is subordinate.
+### 3.3 Verdict: ONE critical path of length 7
+
+**The previous "two co-critical paths of length 5" was incorrect.** The recompute — triggered by the stakeholder's catch that adding a B-edge changes topology — revealed an original computation error (P0-06's depth). The correct result is a single critical path of 7 edges (8 nodes), ending at P0-07.
+
+**Discipline held:** The old co-critical paths were NOT forced into the new result. The math gave one path; we report one path. If the recompute had given three, we would report three.
 
 ### 3.4 The shared longest-path prefix (dependency-graph bottleneck)
 
@@ -109,7 +120,7 @@ P0-15 (Migrations)
 P0-15 (Migrations) → P0-25 (Concurrency) → P0-24 (Transactional integrity) → P0-01 (Razorpay capture)
 ```
 
-**This 4-edge prefix is the dependency-graph bottleneck.** Every co-critical longest path passes through it. Any delay in P0-15, P0-25, P0-24, or P0-01 delays both co-critical paths simultaneously.
+**This 4-edge prefix is the dependency-graph bottleneck.** The critical path passes through it, as does the shorter P0-03 branch. Any delay in P0-15, P0-25, P0-24, or P0-01 delays the critical path (and the P0-03 branch) simultaneously.
 
 **Wording discipline (v1.4 stakeholder correction):** This is a **dependency-graph bottleneck** — a statement about topology, not schedule. Calling it "the launch bottleneck" would be premature: actual launch bottleneck status depends on real duration/effort, readiness gates, and parallel capacity, which are modeled in Artifact 4. Here we have dependency topology, not a schedule. The bottleneck label applies to the *graph*, not yet to the *launch*.
 
@@ -176,7 +187,7 @@ Clusters of P0s that can be built concurrently (reach `Implemented` around the s
 
 ## 6. Slack / Non-Critical Branches
 
-P0s NOT on any co-critical path. They have slack — they can be delayed (within their own constraints) without delaying launch, as long as they reach `Production-ready` before the launch gate.
+P0s NOT on the critical path. They have slack — they can be delayed (within their own constraints) without delaying the longest dependency chain, as long as they reach `Production-ready` before the launch gate.
 
 | P0 | Why off critical path | Slack note |
 |----|----------------------|------------|
@@ -198,17 +209,16 @@ P0s NOT on any co-critical path. They have slack — they can be delayed (within
 
 | Critical-path node | P-edges touching it | Failure-propagation exposure | Risk weight |
 |--------------------|----------------------|------------------------------|-------------|
-| P0-15 (Migrations) | (none direct — but DB-failure propagates to all data P0s) | Indirect: DB failure affects 16 P0s | **HIGH** — root of critical prefix; schema integrity gates everything |
-| P0-25 (Concurrency) | DB-failure propagates | DB dependency | HIGH — on critical prefix |
-| P0-24 (Transactional integrity) | DB-failure, Outbox-publisher-stall | Both DB + outbox worker | **HIGHEST** — on critical prefix AND has its own failure-propagation edge (outbox stall) |
-| P0-01 (Razorpay capture) | Razorpay-timeout, capture-verify-mismatch | Razorpay cluster (3 P0s) | **HIGHEST** — on critical prefix AND Razorpay failure propagates here directly |
-| P0-06 (State separation) | DB-failure | DB | HIGH — on path α |
-| P0-07 (State machine) | DB-failure; Geo-fence+Pickup caution | DB + I-13 risk | **HIGHEST** — terminus of path α; I-13 + caution flag G04 |
-| P0-02 (Ledger) | DB-failure | DB | HIGH — on path β |
-| P0-03 (Reconciliation) | Razorpay-timeout (gateway ↔ ledger) | Razorpay + DB | HIGH — terminus of path β |
-| P0-04 (Refund) | Razorpay-refund-down | Razorpay | HIGH — terminus of path β |
+| P0-15 (Migrations) | (none direct — but DB-failure propagates to all data P0s) | Indirect: DB failure affects 16 P0s | **HIGH** — root of critical path; schema integrity gates everything |
+| P0-25 (Concurrency) | DB-failure propagates | DB dependency | HIGH — on critical path |
+| P0-24 (Transactional integrity) | DB-failure, Outbox-publisher-stall | Both DB + outbox worker | **HIGHEST** — on critical path AND has its own failure-propagation edge (outbox stall) |
+| P0-01 (Razorpay capture) | Razorpay-timeout, capture-verify-mismatch | Razorpay cluster (3 P0s) | **HIGHEST** — on critical path AND Razorpay failure propagates here directly |
+| P0-02 (Ledger) | DB-failure | DB | HIGH — on critical path |
+| P0-04 (Refund) | Razorpay-refund-down | Razorpay | **HIGHEST** — on critical path AND has direct P-edge (Razorpay refund gateway) |
+| P0-06 (State separation) | DB-failure | DB | HIGH — on critical path |
+| P0-07 (State machine) | DB-failure; Geo-fence+Pickup caution | DB + I-13 risk | **HIGHEST** — terminus of critical path; I-13 + caution flag G04 |
 
-**Risk-weighting insight:** The dependency-graph bottleneck prefix `P0-15 → P0-25 → P0-24 → P0-01` is not just the longest chain — it also carries the highest dependency-graph risk, because P0-24 and P0-01 each have their own direct failure-propagation edges (outbox stall, Razorpay timeout/mismatch). The DB-failure P-edge touches every node on both co-critical paths. This is a *dependency-graph risk* concentration — the full launch-risk surface is broader (see Section 8.B, which includes launch-mandatory P0s off the longest path like P0-26 DR).
+**Risk-weighting insight:** The dependency-graph bottleneck prefix `P0-15 → P0-25 → P0-24 → P0-01` is not just the longest chain — it also carries the highest dependency-graph risk, because P0-24 and P0-01 each have their own direct failure-propagation edges (outbox stall, Razorpay timeout/mismatch). The DB-failure P-edge touches every node on the critical path. This is a *dependency-graph risk* concentration — the full launch-risk surface is broader (see Section 8.B, which includes launch-mandatory P0s off the longest path like P0-26 DR).
 
 ---
 
@@ -220,33 +230,32 @@ P0s NOT on any co-critical path. They have slack — they can be delayed (within
 
 This section separates the two outputs explicitly.
 
-### 8.A Structural Critical Path (from B/F topology → longest dependency chains)
+### 8.A Structural Critical Path (from B/F topology → longest dependency chain)
 
-This is a pure graph-theoretic output: the longest chain(s) of blocking B-edges, with F-node precedence promotions and synchronization joins applied.
+This is a pure graph-theoretic output: the longest chain of blocking B-edges, with F-node precedence promotions and synchronization joins applied. **Recomputed (v1.4): single critical path of 7 edges (8 nodes), not two co-critical paths of 5.**
 
 ```
-Co-Critical Path α (ends at Pickup/State Machine):
-  P0-15 → P0-25 → P0-24 → P0-01 → P0-06 → P0-07
-  [Migrations → Concurrency → Transactional → Capture → State-Sep → State-Machine]
+The Critical Path (ends at Pickup/State Machine):
+  P0-15 → P0-25 → P0-24 → P0-01 → P0-02 → P0-04 → P0-06 → P0-07
+  [Migrations → Concurrency → Transactional → Capture → Ledger → Refund → State-Sep → State-Machine]
+  Length: 7 edges, 8 nodes.
+
   + B-join: P0-22 (Audit, L0) at P0-07 (PICKED_UP needs audit per I-13)
-  + B-join: P0-23 (Kill Switch, L0) at P0-01 (Precedence promotion from F-node)
-  + Sync gates: QR+OTP (Security/Integrity), Live-Kitchen+Push, Geo-fence+Pickup, Prepaid+Reorder
-
-Co-Critical Path β (ends at Reconciliation / Refund):
-  P0-15 → P0-25 → P0-24 → P0-01 → P0-02 → P0-03  (or → P0-04)
-  [Migrations → Concurrency → Transactional → Capture → Ledger → Reconciliation/Refund]
-  + B-join: P0-23 (Kill Switch) at P0-01
-  + Sync gates: Prepaid+Reorder, POS+Settlement (P0 part), Wallet+Loyalty (P2 part — interaction test only)
+  + B-join: P0-23 (Kill Switch, L0) at P0-01 (promoted from F-node precedence)
+  + Sync gates on P0-07: QR+OTP (Security/Integrity), Live-Kitchen+Push, Geo-fence+Pickup (caution G04)
+  + Sync gate on P0-01: Prepaid+Reorder (via P0-08, P0-25)
 ```
+
+**Why this is one path, not two (correction of previous error):** P0-06 (State Separation) depends on P0-04 (Refund) as a blocking B-edge. P0-04 depends on P0-02 (Ledger), which depends on P0-01 (Capture). So the longest chain to P0-06 — and thus to P0-07 — goes through P0-02 → P0-04, not directly from P0-01. The previous version missed this, treating P0-06 as depth-4 (from P0-01 directly) instead of depth-6 (via P0-04). P0-03 (Reconciliation) is a shorter branch (5 edges) that diverges at P0-02 — it is NOT co-critical.
 
 **Structural bottleneck (dependency-graph bottleneck, NOT launch bottleneck):**
 ```
 P0-15 → P0-25 → P0-24 → P0-01
 [Migrations → Concurrency → Transactional → Capture]
 ```
-Both co-critical paths pass through this 4-edge prefix. It is the dependency-graph bottleneck — the single most constraining chain *topologically*. Whether it becomes the *launch* bottleneck depends on real durations and parallel capacity (Artifact 4).
+This 4-edge prefix is shared by the critical path AND the shorter P0-03 branch. It is the dependency-graph bottleneck — the most shared chain *topologically*. Whether it becomes the *launch* bottleneck depends on real durations and parallel capacity (Artifact 4).
 
-**Slack branches (off longest path, but still launch-mandatory):** P0-09, P0-10, P0-11, P0-13, P0-16, P0-19, P0-20, P0-21, P0-22, P0-26, P0-27, P0-28. These have topological slack (shorter dependency chains) but are NOT optional — all must reach `Production-ready` for the launch gate.
+**Slack branches (off longest path, but still launch-mandatory):** P0-03, P0-05, P0-08, P0-09, P0-10, P0-11, P0-13, P0-16, P0-19, P0-20, P0-21, P0-22, P0-23, P0-26, P0-27, P0-28. These have topological slack (shorter dependency chains) but are NOT optional — all must reach `Production-ready` for the launch gate.
 
 ### 8.B Risk-Critical Surface (P-edge weighting + launch-gate mandatory + F-sync → high-risk launch surface)
 
@@ -257,16 +266,16 @@ This output combines three inputs to identify the *high-risk launch surface* —
 2. **Launch-gate mandatory** (all 28 P0s): every P0 must be `Production-ready`; the question is which carry the most risk.
 3. **F-node synchronization gates** (Section 4): which P0s are gated by security/integrity sync or precedence joins.
 
-**Risk-Critical Surface — P0s ranked by combined risk:**
+**Risk-Critical Surface — P0s ranked by combined risk (v1.4 recomputed):**
 
 | Tier | P0s | Why high-risk |
 |------|-----|---------------|
-| **Tier 1 (HIGHEST)** | P0-24 (Transactional), P0-01 (Capture), P0-07 (State Machine/Pickup) | On dependency-graph bottleneck prefix (P0-24, P0-01) OR terminus of path α (P0-07) AND have direct P-edge exposure (outbox stall, Razorpay mismatch, I-13+geo-fence caution). P0-07 additionally gated by QR+OTP security/integrity sync (I-13 core promise). |
-| **Tier 2 (HIGH)** | P0-15 (Migrations), P0-25 (Concurrency), P0-06 (State Sep), P0-02 (Ledger), P0-03 (Reconciliation), P0-04 (Refund) | On co-critical paths; P-edge exposure via DB-failure (touches all). P0-03/P0-04 termini of path β. |
-| **Tier 3 (MEDIUM — launch-mandatory despite slack)** | P0-26 (DR), P0-28 (Unknown-exception), P0-22 (Audit), P0-23 (Kill Switch), P0-09 (Firebase) | Off longest path but launch-critical: P0-26 is the launch-gate DR drill; P0-28 is the system safety net; P0-22 holds audit evidence for I-13; P0-23 gates order intake (precedence F-node); P0-09 roots the auth chain. Short topological path ≠ low launch risk. |
-| **Tier 4 (lower risk, parallel)** | P0-10, P0-11, P0-13, P0-16, P0-17, P0-19, P0-20, P0-21, P0-27 | Auth/session/OTP/rate-limit/backup/idempotency/observability/deployment — important but independent; parallelizable; lower concentration of launch risk. |
+| **Tier 1 (HIGHEST)** | P0-24 (Transactional), P0-01 (Capture), P0-07 (State Machine/Pickup), P0-04 (Refund) | On the critical path AND have direct P-edge exposure. P0-24 (outbox stall), P0-01 (Razorpay mismatch), P0-07 (I-13 + geo-fence caution, QR+OTP security sync), P0-04 (Razorpay-refund-down). P0-04 is now ON the critical path (via P0-06's dependency on it) — previously misclassified as a co-critical terminus. |
+| **Tier 2 (HIGH)** | P0-15 (Migrations), P0-25 (Concurrency), P0-02 (Ledger), P0-06 (State Sep) | On the critical path; P-edge exposure via DB-failure (touches all). P0-02 and P0-06 are internal nodes on the 7-edge critical path. |
+| **Tier 3 (MEDIUM — launch-mandatory despite slack)** | P0-03 (Reconciliation), P0-26 (DR), P0-28 (Unknown-exception), P0-22 (Audit), P0-23 (Kill Switch), P0-09 (Firebase) | Off the longest path but launch-critical: P0-03 is a shorter branch (5 edges) but still launch-mandatory; P0-26 is the launch-gate DR drill; P0-28 is the system safety net; P0-22 holds audit evidence for I-13; P0-23 gates order intake (precedence B-edge join); P0-09 roots the auth chain. Short topological path ≠ low launch risk. |
+| **Tier 4 (lower risk, parallel)** | P0-05, P0-08, P0-10, P0-11, P0-13, P0-16, P0-17, P0-19, P0-20, P0-21, P0-27 | Webhook/auth-session/OTP/rate-limit/backup/idempotency/observability/deployment — important but independent; parallelizable; lower concentration of launch risk. |
 
-**Key insight:** The Risk-Critical Surface (8.B) is LARGER than the Structural Critical Path (8.A). P0-26, P0-28, P0-22, P0-23, P0-09 are NOT on the longest path but ARE high-risk for launch because they are launch-mandatory AND carry specific risk (DR drill, safety net, audit evidence, intake gate, auth root). **A delay in P0-26 (DR drill) can block launch even though it is not on the longest dependency chain.**
+**Key insight:** The Risk-Critical Surface (8.B) is LARGER than the Structural Critical Path (8.A). P0-03, P0-26, P0-28, P0-22, P0-23, P0-09 are NOT on the longest path but ARE high-risk for launch because they are launch-mandatory AND carry specific risk. **A delay in P0-26 (DR drill) can block launch even though it is not on the longest dependency chain.**
 
 ### 8.C Relationship between the two outputs
 
@@ -304,12 +313,14 @@ This artifact produces **two separate outputs** (Structural Critical Path + Risk
 
 | Criterion | Status |
 |-----------|--------|
-| Longest blocking path(s) computed from B-edges | ✅ Two co-critical paths (length 5 each) |
-| Co-critical paths preserved (not compressed) | ✅ |
+| Longest blocking path computed from B-edges | ✅ One critical path (length 7, 8 nodes) — recomputed |
+| Single critical path (not forced into multiple) | ✅ Math gave one; reported one |
 | Shared dependency-graph prefix identified (NOT "launch bottleneck") | ✅ (P0-15→P0-25→P0-24→P0-01) |
 | F-nodes classified (synergy/sync/security-sync/precedence/interaction-test) | ✅ (9 F-nodes incl. new QR+OTP security-integrity sync) |
 | Structural Critical Path (8.A) separated from Risk-Critical Surface (8.B) | ✅ |
 | All P0s remain launch-required (longest path ≠ launch criticality) | ✅ Explicitly stated |
+| Topology change from F→B promotion acknowledged | ✅ (P0-23→P0-01 B-edge added; P0-23 no longer isolated) |
+| Original computation error corrected | ✅ (P0-06 depth was miscalculated; now correctly L6 via P0-04) |
 | Parallelizable clusters identified | ✅ (7 clusters) |
 | Slack / non-critical branches identified (still launch-mandatory) | ✅ |
 | P-edge risk weighting applied (not as path edges) | ✅ |
@@ -323,17 +334,17 @@ This artifact produces **two separate outputs** (Structural Critical Path + Risk
 
 ## 11. Unlock for Artifact 4
 
-With the critical path computed, **Artifact 4 — Implementation Order** is unlocked. It will:
+With the critical path computed (single path, 7 edges, 8 nodes), **Artifact 4 — Implementation Order** is unlocked. It will:
 
-1. Take the two co-critical paths + shared prefix as the sequencing skeleton.
-2. Sequence the critical-prefix P0s first (they constrain everything).
-3. Sequence the two divergent branches (α: P0-06→P0-07; β: P0-02→P0-03/04) — these can be parallel.
-4. Interleave the slack-branch P0s (auth, observability, DR, etc.) into the available parallel slots.
-5. Respect the feature-interaction joins as synchronization points.
+1. Take the critical path (`P0-15 → P0-25 → P0-24 → P0-01 → P0-02 → P0-04 → P0-06 → P0-07`) as the sequencing skeleton.
+2. Sequence the critical-path P0s in dependency order (they constrain the longest chain).
+3. Interleave the slack-branch P0s (auth, observability, DR, P0-03 reconciliation, P0-08 order idempotency, etc.) into available parallel slots — they don't extend the critical path but must be ready for the launch gate.
+4. Respect the feature-interaction joins (QR+OTP security sync, Live-Kitchen+Push, Prepaid+Reorder, etc.) as synchronization points.
+5. Use the Risk-Critical Surface (8.B) to prioritize hardening within the sequence — Tier 1 P0s get the most scrutiny.
 6. Output an implementation order — NOT sprints (Artifact 5 does that).
 
 **Artifact 4 sequences; Artifact 5 sprint-plans the sequence.**
 
 ---
 
-*End of Critical Path to Launch (Artifact 3).*
+*End of Critical Path to Launch (Artifact 3, v1.4 recomputed).*

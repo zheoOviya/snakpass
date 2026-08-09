@@ -465,3 +465,33 @@ Stage Summary:
 - F-nodes now classified into 5 types; QR+OTP is Security/Integrity synchronization (new); KillSwitch+OrderIntake promoted to Precedence (B-edge).
 - "launch bottleneck" → "dependency-graph bottleneck" everywhere.
 - No implementation. No code. Document only.
+
+---
+Task ID: 24
+Agent: main
+Task: Artifact 3 recompute — add P0-23→P0-01 B-edge to DAG, recompute longest path, fix original computation error (P0-06 depth).
+
+Work Log:
+- Stakeholder caught that promoting Kill Switch + Order Intake F-node to B-edge (P0-01 --B--> P0-23) changes graph topology. Previous "topology unchanged" claim was false. Acknowledged and corrected.
+- Added P0-23 → P0-01 as new B-edge in the DAG. P0-23 is no longer isolated — it is now a pure L0 root with B-dependent P0-01.
+- Recomputed topological layering from scratch. Discovered an ORIGINAL computation error: P0-06 (State Separation) depends on P0-04 (Refund) as a blocking B-edge, and P0-04 depends on P0-02 (Ledger) which depends on P0-01 (Capture). So P0-06's depth is 6 (via P0-04), NOT 4 (via P0-01 directly) as previously stated. This error propagated to the longest-path calculation.
+- Correct layering: L0 (12 roots), L1 (6 P0s), L2 (P0-24), L3 (P0-01, P0-08), L4 (P0-02, P0-05), L5 (P0-03, P0-04), L6 (P0-06), L7 (P0-07). 8 layers (was 6).
+- Correct longest path: SINGLE path of 7 edges (8 nodes), NOT two co-critical paths of 5.
+  P0-15 → P0-25 → P0-24 → P0-01 → P0-02 → P0-04 → P0-06 → P0-07
+- P0-03 (Reconciliation) is a shorter branch (5 edges) diverging at P0-02 — NOT co-critical.
+- P0-04 and P0-05 are NOT leaves (P0-06 depends on them) — corrected misclassification.
+- P0-04 (Refund) is now ON the critical path (internal node, not just a terminus) — promoted to Tier 1 risk.
+- Updated Section 7 (risk-weighting table): all "path α/path β" labels replaced with "critical path"; P0-04 elevated to HIGHEST risk.
+- Updated Section 8.A: single critical path (7 edges); removed "two co-critical paths"; updated bottleneck to note it's shared by critical path + P0-03 branch.
+- Updated Section 8.B: P0-04 moved from Tier 2 to Tier 1; P0-03 moved to Tier 3 (shorter branch, launch-mandatory); P0-05, P0-08 moved to Tier 4.
+- Updated sign-off table with 2 new criteria: "Topology change from F→B promotion acknowledged" and "Original computation error corrected".
+- Updated unlock section (11) to reference single critical path as sequencing skeleton.
+- Discipline held: old co-critical paths NOT forced into new result. Math gave one path; reported one path.
+- No new P0/invariant. No implementation. Document only.
+
+Stage Summary:
+- Artifact 3 — Critical Path to Launch: recompute complete. Single critical path of 7 edges (8 nodes).
+  P0-15 → P0-25 → P0-24 → P0-01 → P0-02 → P0-04 → P0-06 → P0-07
+- Topology changed (P0-23→P0-01 B-edge added); original P0-06 depth error corrected.
+- Ready for re-review → ACCEPTED.
+- No implementation. No code. Document only.
