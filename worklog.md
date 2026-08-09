@@ -584,3 +584,36 @@ Stage Summary:
   - Artifact 5 Sprint Plan: DRAFT (pending sign-off)
 - Implementation UNLOCKED after Artifact 5 sign-off. Sprint 1 begins foundation wave.
 - No code written yet. Planning artifacts only.
+
+---
+Task ID: 28
+Agent: main
+Task: Apply 3 v1.4 corrections to Artifact 5 per stakeholder conditional-review (20-week claim → provisional; assignment vs completion vs Production-ready distinguished; Wave-0 capacity constrained).
+
+Work Log:
+- Correction 1 — 20-week claim downgraded to provisional:
+  - Added top-level warning: "Critical path gives 7 dependency edges / 8 stages — NOT a schedule. 20-week figure is provisional, must be validated by effort/capacity model."
+  - Rewrote Section 3 timeline: "Minimum timeline: 20 weeks" → "Provisional timeline: ~20 weeks... This is provisional, NOT a proven minimum."
+  - Added Section 1.3 Effort/capacity model with per-tier placeholder estimates (Tier 1: 2-3 wks to Implemented, 4-6 to Production-ready; etc.) explicitly labeled "placeholders, NOT measured."
+  - Added 4 validation requirements before 20-week figure can be committed: validate effort with engineers, confirm 3.5-slot sustainability, account for non-P0 work, buffer for failure-test rework.
+  - Updated sign-off table: "Critical path timeline derived" → "provisional — pending effort validation."
+  - Updated unlock section: "minimum 20-week" → "provisional ~20-week... must be validated."
+- Correction 2 — Assignment vs completion vs Production-ready distinguished:
+  - Added explicit definitions in Section 1.2: "Assigned to sprint" (begins work) vs "Completed (Implemented/Tested)" (reaches state by sprint end) vs "Production-ready" (lifecycle state 9, typically 2-4 sprints after assignment for Tier 1).
+  - Clarified: sprint table "target state by sprint end" ≠ "assigned and completed in same sprint."
+- Correction 3 — Wave-0 capacity constrained:
+  - Rewrote Section 1.2 capacity model: explicit concurrent slots (3 engineer + 0.5 DevOps = 3.5 P0-equivalents/sprint).
+  - Added Wave-0 capacity check: "13 P0s at 3.5/sprint CANNOT complete in one sprint. Sprint 1 = start-assignment, not completion commitment. Wave 0 spans Sprints 1-2."
+  - Updated sign-off table: "Wave-0 capacity constrained (13 P0s ≠ 1 sprint) ✅".
+- Correction (Sprint 10 semantics): Rewrote Sprint 10 header + exit: "verification sprint, NOT an assumption that prior sprints left everything green. If any gate fails → NO-GO + remediation plan, not automatic Production Go."
+- Updated P0 count metadata: "28 unique P0s; 66 references (appearances, not additional P0s)."
+- Fixed section numbering (duplicate 1.4 → 1.4 Ownership, 1.5 Lifecycle).
+- Discipline held: no implementation started; no launch-gate reduction; no P0/invariant change.
+
+Stage Summary:
+- Artifact 5 — Sprint Plan: 3 corrections applied. Ready for re-review → FINAL ACCEPTED.
+- 20-week timeline now explicitly provisional (pending effort validation).
+- Wave-0 capacity constrained (3.5 slots/sprint; 13 P0s span 2 sprints).
+- Assignment vs completion vs Production-ready explicitly distinguished.
+- Sprint 10 = verification with NO-GO remediation path (not automatic GO).
+- No implementation. No code. Planning artifact only.
