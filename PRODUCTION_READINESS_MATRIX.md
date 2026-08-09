@@ -1,7 +1,7 @@
-# SnakZap Production Readiness Matrix v1.2
+# SnakZap Production Readiness Matrix v1.3
 
 > **Document Type:** Specification & Decision Document
-> **Status:** Draft v1.2 — pending sign-off
+> **Status:** Draft v1.3 — conceptually approved; formal sign-off pending traceability coverage check
 > **NOT an implementation plan.** This document defines *what* must be true before SnakZap can serve a real paying customer, *how* each capability must behave under failure, and *how* we will know it is ready. Implementation order, code, and sprints are derived from this — not the other way around.
 
 ---
@@ -10,14 +10,14 @@
 
 | Field | Value |
 |-------|-------|
-| Version | 1.2 |
+| Version | 1.3 |
 | Date | 2026-08-09 |
-| Status | Draft — awaiting traceability review |
-| Baseline | Uploaded audit (`zheo-main.zip` rebuild) + self-audit + stakeholder feedback |
+| Status | Conceptually approved; formal sign-off pending traceability coverage check |
+| Baseline | Uploaded audit (`zheo-main.zip` rebuild) + self-audit + stakeholder feedback + Strategic Blueprint cross-reference |
 | Authors | Engineering + Product |
-| Reviewers | (pending) |
-| Supersedes | v1.1 |
-| Next review | After P0 traceability + invariant map sign-off; before P0 Dependency Graph |
+| Reviewers | (pending formal sign-off) |
+| Supersedes | v1.2 |
+| Next review | After P0 Traceability & Invariant Map passes all 8 coverage queries (A–H) |
 
 ---
 
@@ -27,7 +27,8 @@
 |---------|------|---------|---------|
 | v1.0 | 2026-08-09 | Initial matrix: 5-question framework, actor's worst day, P0/P1/P2/P3 inventory, 23 P0 capabilities. | Self-audit + stakeholder feedback. |
 | v1.1 | 2026-08-09 | Added 5 new P0 capabilities (P0-24..P0-28): Transactional Data Integrity, Concurrency, DR, Deployment & Rollback, Unknown-Exception. Added 3 sections: Business Invariants, External Dependency Failure Matrix, Capability Lifecycle (8 states). Added G51–G57. | Stakeholder preliminary review — 7 corrections. |
-| v1.2 | 2026-08-09 | Refined P0-24 (idempotent business effect, not technical exactly-once), P0-25 (3 concurrency cases + duplicate-execution control), P0-26 (business recovery, not just DB restore), P0-27 (3 deployment classes: backward-compatible / expand-migrate-contract / breaking), P0-28 (3 blast-radius levels: transaction freeze / entity quarantine / system kill switch). Added invariant IDs I-01..I-12 with `Protects` column on P0 capabilities. Added `Affected P0` column to External Dependency Matrix. Added lifecycle state `Approved` (now 9 states). Strengthened P0 launch gate to 6 AND conditions. Added Section 18: P0 Traceability & Invariant Map. Updated Next-Step chain: Traceability Map → Dependency Graph → Critical Path → Implementation Order → Sprint Plan. Added 4 new open questions (Q17–Q20). | Stakeholder architectural review — 10 corrections. |
+| v1.2 | 2026-08-09 | Refined P0-24 (idempotent business effect), P0-25 (3 concurrency cases), P0-26 (business recovery), P0-27 (3 deploy classes), P0-28 (3 blast-radius levels). Added invariant IDs I-01..I-12 with `Protects` column. Added `Affected P0` column to dependency matrix. Added lifecycle state `Approved` (9 states). Strengthened launch gate to 6 AND conditions. Added Section 18: Traceability foundation. | Stakeholder architectural review — 10 corrections. |
+| v1.3 | 2026-08-09 | Added 2 invariants: **I-13 Pickup/Handoff Integrity** (right order → right customer via QR+OTP — was a genuine gap; I-08 covers vendor-side authorization, not customer-side handoff) and **I-14 Vendor Operational Integrity** (vendor workload ≤ capacity; protected by P1 busy-mode, linked to I-02 order integrity). Added **Architectural Law** (business recovery coherence). Added **separation of duties** for `Approved` (developer cannot self-approve P0). Added launch-gate condition 7 (**no expired exception waiver**; P0 exceptions require owner + expiry + mitigation + approval). Cross-linked Section 10 dependency matrix to Strategic Blueprint risk register. Added observability cross-cutting note. Expanded Section 18: 8 coverage queries (A–H) as pass/fail spec for the Traceability Map; Strategic Blueprint feature→capability→invariant mapping requirement. Added 4 open questions (Q21–Q24). | Stakeholder v1.2 review — conceptually approved, final gate = traceability coverage check. |
 
 ---
 
@@ -203,7 +204,7 @@ The `Protects` column lists which Business Invariants (Section 9) the capability
 | P0-04 | Payment | Refund flow (full + partial) | Refund requested but gateway down / partial refund mismatch | Payment + Razorpay refund API | Refund has its own status lifecycle; partial refunds tracked; ledger updated atomically | Refund lifecycle test; partial-refund test; refund-during-outage test | I-03, I-06, I-11 | Backend |
 | P0-05 | Payment | Webhook integrity (HMAC + idempotent) | Duplicate webhook / tampered signature / out-of-order | Payment + webhook endpoint | Duplicate webhooks deduped; tampered rejected; out-of-order handled | Duplicate injection test; signature tamper test; reorder test | I-01, I-04 | Backend |
 | P0-06 | Order | State separation (Order / Payment / Fulfilment / Refund) | Order cancelled but payment captured | Order + Payment + Fulfilment + Refund models | Each dimension evolves independently; inconsistent combos surfaced in exception queue | State-transition matrix test; inconsistent-state detection test | I-01, I-02, I-08 | Backend |
-| P0-07 | Order | Order state machine hardening | Invalid transition attempted / concurrent updates | Order model + optimistic locking | Invalid transitions rejected; concurrent updates serialised | Concurrency test; invalid-transition test | I-02, I-08 | Backend |
+| P0-07 | Order | Order state machine hardening | Invalid transition attempted / concurrent updates | Order model + optimistic locking | Invalid transitions rejected; concurrent updates serialised; PICKED_UP transition requires pickup verification (QR+OTP) per I-13 | Concurrency test; invalid-transition test; pickup-verification test | I-02, I-08, I-13 | Backend |
 | P0-08 | Order | Idempotency on order creation | Double submit / retry storm | Order model + idempotency key | Same idempotency key returns same order; no duplicate orders created | Idempotency-key test; retry-storm test | I-02, I-10 | Backend |
 | P0-09 | Auth | Server-side Firebase ID token verification | Forged client identity / expired token | Firebase Admin SDK + session | Server rejects unverified identity; sessions bound to verified phone | Token-forgery test; expired-token test | I-12 | Backend |
 | P0-10 | Auth | Session integrity (refresh, revoke, active sessions) | Stolen session token / user logs out elsewhere | Session model | Sessions expireable, revocable; active-sessions list available | Session-revoke test; concurrent-session test | I-12 | Backend |
@@ -224,7 +225,7 @@ The `Protects` column lists which Business Invariants (Section 9) the capability
 | P0-25 | Reliability | Concurrency + duplicate-execution control — see detailed breakdown | (A) last-item inventory race; (B) state-transition race (vendor ACCEPT→CANCEL while admin CANCEL→OVERRIDE); (C) payment double-click / frontend retry | Optimistic locking + row-level locks + atomic decrements + idempotency keys | Concurrent writes serialised; no oversell; conflicts surface as retry/conflict not silent corruption; duplicate executions are deduped, not double-applied | Concurrency case A (last-item); case B (state-transition); case C (payment duplicate); optimistic-lock conflict test | I-02, I-04, I-05, I-10 | Backend |
 | P0-26 | Data | Disaster recovery (business recovery, not just DB restore) — see detailed breakdown | DB corruption / regional failure / restore leaves payments-in-gateway inconsistent with restored DB | Backup + restore drill + post-restore reconciliation + documented runbook | RPO ≤ 24h, RTO ≤ 4h; restore drill passes monthly; **post-restore business-state reconciliation**: gateway payments re-synced to restored DB (captured-but-DB-pending → reconciled or refunded); audit log re-verified; **NO-GO if any money state unresolved post-restore** | Restore-drill test; corruption-detection test; post-restore reconciliation test; runbook walkthrough | I-01, I-02, I-06, I-07, I-10 | Backend |
 | P0-27 | Reliability | Deployment & rollback (3 classes) — see detailed breakdown | Bad release / migration incompatibility / failed deploy / DB rollback unsafe | CI/CD + health-checked deploy + feature flags + 3 deployment classes | Application rollback ≤ 10 min for backward-compatible deploys; **expand-migrate-contract** for schema changes (no breaking migration without contract phase); breaking deploys gated + flagged; failed deploy auto-aborts; **DB rollback never assumed safe — contract migrations preserve old-version compatibility** | Rollback drill test (per class); expand-migrate-contract test; migration-compatibility test; failed-deploy-abort test | (all, foundational) | Backend |
-| P0-28 | Admin | Unknown-exception handling (3 blast-radius levels) — see detailed breakdown | System reaches a state not in known state machine | Invariant checker + 3-level blast-radius freeze + exception queue + alert | Unknown state triggers the **smallest sufficient** freeze level (transaction / entity / system kill switch), preserves evidence, creates exception queue entry, alerts; never silently ignored; never over-freezes (one malformed order does not stop the platform) | Unknown-state injection at each blast-radius level; freeze-precision test; over-freeze-prevention test | I-01..I-12 (all) | Backend |
+| P0-28 | Admin | Unknown-exception handling (3 blast-radius levels) — see detailed breakdown | System reaches a state not in known state machine | Invariant checker + 3-level blast-radius freeze + exception queue + alert | Unknown state triggers the **smallest sufficient** freeze level (transaction / entity / system kill switch), preserves evidence, creates exception queue entry, alerts; never silently ignored; never over-freezes (one malformed order does not stop the platform) | Unknown-state injection at each blast-radius level; freeze-precision test; over-freeze-prevention test | I-01..I-14 (all) | Backend |
 
 ### 7.2 P1 — Must Work Reliably After Launch
 
@@ -592,6 +593,10 @@ Each invariant has a stable ID (`I-01`..`I-12`) so capabilities and dependencies
 | I-10 | Transactional Completeness | No business transaction may leave orphan entities (items without order, ledger without payment). | DB transaction + outbox | Freeze + reconciliation |
 | I-11 | Refund Precondition | Refund cannot be requested on an un-captured payment. | Refund service checks Payment.status | Reject + alert |
 | I-12 | Session Revocation | Session token cannot be valid after revocation. | Session revocation checked on every request | Reject + alert on anomaly |
+| I-13 | Pickup / Handoff Integrity | A completed pickup must be attributable to the correct order and an authorized collector (QR + OTP both verified; pickup event auditable to order + customer). | Pickup service requires both QR-scan and OTP match before marking PICKED_UP; pickup event links order_id + collector identity + timestamp | Reject pickup + alert; freeze order if mismatch |
+| I-14 | Vendor Operational Integrity | A vendor must not receive uncontrolled workload beyond their declared operational capacity (busy-mode / pause / kitchen-load limits enforced). | Vendor capacity flag + order-intake gate; new orders blocked when vendor in paused/over-capacity state | Reject new order (clear "vendor busy" message); existing orders unaffected |
+
+**Coverage note (v1.3):** I-13 was a genuine gap in v1.2 — I-08 (Fulfilment Authorization) covers *vendor-side* authorization ("vendor can't fulfil an order they didn't accept"), but did not cover *customer-side* handoff correctness ("the right order goes to the right customer"). SnakZap's core promise (Strategic Blueprint: pickup experience = correct order to correct customer via QR + OTP) required this as a first-class invariant. I-14 captures the vendor-overload failure mode (Strategic Blueprint simulated scenario: active restaurants overwhelmed → vendor NPS drop); it is protected primarily by P1 busy-mode but is linked to I-02 (order integrity) because an overloaded vendor cannot reliably fulfil orders.
 
 **Rule:** Any code change that could weaken an invariant requires matrix-governance sign-off (see Section 15).
 
@@ -599,26 +604,26 @@ Each invariant has a stable ID (`I-01`..`I-12`) so capabilities and dependencies
 
 ## 10. External Dependency Failure Matrix
 
-Every external dependency has an explicit failure strategy. **Fail-open** = degrade but continue serving requests. **Fail-closed** = reject the request (safer for money/auth). **Retry** = transient backoff. **Queue** = persist and process later. **User message** = what the user sees. The `Affected P0` column links each dependency failure to the capabilities it can compromise.
+Every external dependency has an explicit failure strategy. **Fail-open** = degrade but continue serving requests. **Fail-closed** = reject the request (safer for money/auth). **Retry** = transient backoff. **Queue** = persist and process later. **User message** = what the user sees. The `Affected P0` column links each dependency failure to the capabilities it can compromise. The `Blueprint Risk` column cross-links to the Strategic Blueprint's risk register (named risks: R-msg91, R-razorpay-wh, R-db-pool, R-session-loss, and others) so strategic risk and technical readiness live in one graph.
 
-| Dependency | Failure Mode | Strategy | User Message | Alert? | Affected P0 |
-|------------|--------------|----------|--------------|--------|-------------|
-| **Razorpay (order create)** | Timeout / 5xx | Retry ×3 with backoff; then fail-closed | "Payment service busy. Please retry." | Yes, on sustained failure | P0-01, P0-03 |
-| **Razorpay (capture/verify)** | Signature mismatch | Fail-closed; do not capture | "Payment could not be verified. No charge made." | Yes | P0-01, P0-05, I-01, I-04 |
-| **Razorpay (refund)** | Gateway down | Queue refund; retry with backoff; REFUND_REQUESTED persists | "Refund is processing. You'll be notified." | Yes, if stuck > 1h | P0-04, P0-03 |
-| **Razorpay (webhook)** | Duplicate | Idempotent dedup; 200 OK | N/A (no user) | No (expected) | P0-05, I-04 |
-| **Razorpay (webhook)** | Tampered signature | 400 reject | N/A | Yes | P0-05, P0-28, I-01 |
-| **Firebase (phone OTP)** | Unavailable / config error | Fail-open to demo OTP (preview only); **production: fail-closed** | "Authentication unavailable. Please retry." | Yes | P0-09, P0-11 |
-| **Firebase (Admin token verify)** | Unreachable | Fail-closed; reject session mint | "Could not verify identity. Please re-login." | Yes | P0-09, P0-10, I-12 |
-| **FCM (push)** | Token stale / delivery fail | Token refresh; retry; email fallback | (Consumer sees email if push fails) | No, on single fail; Yes on rate spike | (P1 notification — degraded, not P0) |
-| **Email provider** | Bounce / throttle | Retry ×3; quarantine bad addresses | (User sees nothing; alt channel used) | Yes on bounce-rate spike | (P1 notification — degraded, not P0) |
-| **Maps / location** | Unavailable | Fail-open; ranking without distance | "Showing nearby restaurants" (degraded ranking) | No | (P1 discovery — degraded, not P0) |
-| **Database** | Degraded / unavailable 30s | Fail-closed on writes; read-replica for reads if available | "Service temporarily unavailable. Please retry." | Yes immediately | P0-24, P0-25, P0-26, I-01..I-10 (all data P0s) |
-| **Redis** | Unavailable | Auth/payment/admin-write: fail-closed (503); general API: fail-open (in-memory limiter) | "Service busy. Please retry." for fail-closed paths | Yes | P0-13, P0-10 (sessions) |
-| **WebSocket (socket.io)** | Disconnected | Client auto-reconnect + missed-event backfill from event log | "Reconnecting…" indicator; no silent gap | Yes if > N clients disconnected | (P1 realtime — degraded, not P0) |
-| **SMS gateway (if separate from Firebase)** | Down | Queue pickup-OTP; consumer sees in-app OTP as fallback | In-app OTP visible | Yes | (P1 notification — degraded, not P0) |
-| **Outbox publisher (internal worker)** | Crashes / stalled | Event row already committed; publisher restarts and re-publishes; consumers idempotent | N/A | Yes, on lag > threshold | P0-24 |
-| **CI/CD pipeline** | Deploy fails mid-way | Auto-abort; traffic stays on previous version | N/A | Yes | P0-27 |
+| Dependency | Failure Mode | Strategy | User Message | Alert? | Affected P0 | Blueprint Risk |
+|------------|--------------|----------|--------------|--------|-------------|----------------|
+| **Razorpay (order create)** | Timeout / 5xx | Retry ×3 with backoff; then fail-closed | "Payment service busy. Please retry." | Yes, on sustained failure | P0-01, P0-03 | R-razorpay-wh |
+| **Razorpay (capture/verify)** | Signature mismatch | Fail-closed; do not capture | "Payment could not be verified. No charge made." | Yes | P0-01, P0-05, I-01, I-04 | R-razorpay-wh |
+| **Razorpay (refund)** | Gateway down | Queue refund; retry with backoff; REFUND_REQUESTED persists | "Refund is processing. You'll be notified." | Yes, if stuck > 1h | P0-04, P0-03 | R-razorpay-wh |
+| **Razorpay (webhook)** | Duplicate | Idempotent dedup; 200 OK | N/A (no user) | No (expected) | P0-05, I-04 | R-razorpay-wh |
+| **Razorpay (webhook)** | Tampered signature | 400 reject | N/A | Yes | P0-05, P0-28, I-01 | R-razorpay-wh |
+| **Firebase (phone OTP)** | Unavailable / config error | Fail-open to demo OTP (preview only); **production: fail-closed** | "Authentication unavailable. Please retry." | Yes | P0-09, P0-11 | R-session-loss |
+| **Firebase (Admin token verify)** | Unreachable | Fail-closed; reject session mint | "Could not verify identity. Please re-login." | Yes | P0-09, P0-10, I-12 | R-session-loss |
+| **FCM (push)** | Token stale / delivery fail | Token refresh; retry; email fallback | (Consumer sees email if push fails) | No, on single fail; Yes on rate spike | (P1 notification — degraded, not P0) | (P1 risk) |
+| **Email provider** | Bounce / throttle | Retry ×3; quarantine bad addresses | (User sees nothing; alt channel used) | Yes on bounce-rate spike | (P1 notification — degraded, not P0) | (P1 risk) |
+| **Maps / location** | Unavailable | Fail-open; ranking without distance | "Showing nearby restaurants" (degraded ranking) | No | (P1 discovery — degraded, not P0) | (P1 risk) |
+| **Database** | Degraded / unavailable 30s / connection pool exhaustion | Fail-closed on writes; read-replica for reads if available | "Service temporarily unavailable. Please retry." | Yes immediately | P0-24, P0-25, P0-26, I-01..I-10 (all data P0s) | R-db-pool |
+| **Redis** | Unavailable | Auth/payment/admin-write: fail-closed (503); general API: fail-open (in-memory limiter) | "Service busy. Please retry." for fail-closed paths | Yes | P0-13, P0-10 (sessions) | R-session-loss |
+| **WebSocket (socket.io)** | Disconnected | Client auto-reconnect + missed-event backfill from event log | "Reconnecting…" indicator; no silent gap | Yes if > N clients disconnected | (P1 realtime — degraded, not P0) | (P1 risk) |
+| **SMS gateway (MSG91 or similar)** | Down | Queue pickup-OTP; consumer sees in-app OTP as fallback | In-app OTP visible | Yes | P0-11 (OTP delivery), I-13 (pickup handoff) | R-msg91 |
+| **Outbox publisher (internal worker)** | Crashes / stalled | Event row already committed; publisher restarts and re-publishes; consumers idempotent | N/A | Yes, on lag > threshold | P0-24 | (internal) |
+| **CI/CD pipeline** | Deploy fails mid-way | Auto-abort; traffic stays on previous version | N/A | Yes | P0-27 | (internal) |
 
 **Rule:** A dependency not listed here cannot be added to the system without a row in this table. No external call without a failure strategy.
 
@@ -663,11 +668,12 @@ Production-ready
 | **Approved** | Business owner has accepted the risk profile; governance sign-off recorded. | Final production gate. |
 | **Production-ready** | Approved + all launch-gate AND-conditions met. May be relied upon. | — |
 
-**The three rules that make this real:**
+**The four rules that make this real:**
 
 1. **"Code merged" ≠ "Production-ready."** A merged capability at `Implemented` cannot be a dependency for another capability's `Production-ready` claim.
 2. **No capability reaches `Production-ready` without passing `Failure-tested` AND `Reviewed` AND `Approved`.** Happy-path-only capabilities block launch. Automated tests are necessary but not sufficient — a human must accept the risk.
 3. **`Approved` is a business decision, not a technical one.** It records that a business owner understands the failure modes, the residual risk, and the recovery procedure — and accepts launching with them.
+4. **Separation of duties (v1.3):** The developer who wrote a P0 capability **cannot** be its `Reviewed` or `Approved` signatory. `Reviewed` requires a different engineer; `Approved` requires a business/operations owner. No self-approval of P0 — this is a hard governance rule, not a guideline.
 
 **Launch gate (see Section 14 for full conditions):** SnakZap launches only when **every P0 capability is at `Production-ready`** AND all launch-gate AND-conditions hold.
 
@@ -676,6 +682,22 @@ Production-ready
 ## 12. Cross-Cutting Concerns
 
 These apply horizontally across priorities and domains. Each must be defined before its dependent capabilities can be marked ready.
+
+### 12.1 Architectural Laws (v1.3)
+
+These are the highest-level principles of the system — above invariants, above capabilities. They are stated once here and referenced everywhere.
+
+> **Law 1 — Business Recovery Coherence:** A system is not recovered until money state, order state, audit state, and required event state are coherent. A DB restore alone is not recovery. (Enforced by P0-26.)
+
+> **Law 2 — Idempotent Business Effect:** A committed business transaction's consequences eventually apply exactly once in business outcome, even under crashes, retries, and duplicate delivery. Technical "exactly-once delivery" is not pursued. (Enforced by P0-24, P0-17.)
+
+> **Law 3 — Freeze Precision:** When an unknown state is detected, the smallest sufficient blast radius is frozen. One malformed order must not stop the platform. (Enforced by P0-28.)
+
+> **Law 4 — Pickup Correctness:** No order is marked PICKED_UP without verified handoff (QR + OTP) attributable to the correct order and an authorized collector. (Enforced by I-13, P0-07.)
+
+> **Law 5 — Separation of Duties:** No P0 capability is self-approved. The developer is never the `Reviewed` or `Approved` signatory. (Enforced by Section 11, rule 4.)
+
+### 12.2 Cross-cutting capabilities table
 
 | Concern | Definition | Applies To |
 |---------|------------|------------|
@@ -686,6 +708,7 @@ These apply horizontally across priorities and domains. Each must be defined bef
 | **Privacy by design** | Vendor/admin sees aggregated or role-scoped data only; no raw PII export without audit. | Vendor + admin capabilities |
 | **Audit everything financial** | Every money-moving action is in an immutable audit trail linked to the ledger. | All P0 payment + refund capabilities |
 | **Graceful degradation** | Non-critical features degrade visibly, not silently. | All P1+ |
+| **Operational observability (v1.3 — cross-cutting, not per-domain)** | One unified observability substrate (structured logs + metrics + traces + alerts) serves all domains. Per-domain observability requirements (payment, order, notification, DB) are *consumers* of this substrate, not separate capabilities. This avoids matrix duplication: there is one P0-19 (logging), one P0-20 (health/metrics), one P0-21 (alerting) — domain-specific dashboards are built on top, not added as new P0 rows. | All P0 + P1 |
 
 ---
 
@@ -715,6 +738,10 @@ These require stakeholder input before implementation. Listed here so they are n
 | Q18 | Freeze blast-radius escalation — auto-escalate Level 1 → 2 → 3, or human-escalated only? | Human-escalated; auto only on invariant I-01/I-04 (money) violation | P0-28 |
 | Q19 | Deployment class classification — pre-deploy automated check, or manual label? | Automated check via migration-analysis tool; manual override requires sign-off | P0-27 |
 | Q20 | Business owner for `Approved` lifecycle state — per capability, or single product owner? | Single product owner for v1; per-capability owners post-launch | Capability lifecycle |
+| Q21 | Pickup verification — QR + OTP both required, or either? | Both required (defense in depth; QR alone spoofable, OTP alone transferable) | I-13 |
+| Q22 | Vendor capacity threshold — fixed per vendor, or adaptive based on historical prep time? | Adaptive (rolling 7-day median prep time × headroom) | I-14 |
+| Q23 | P0 waiver max expiry — 30 days blanket, or per-capability? | 30 days blanket for v1; per-capability post-launch | Launch gate condition 7 |
+| Q24 | Strategic Blueprint feature mapping — who owns the feature→capability→invariant mapping? | Product owner owns mapping; engineering validates capability/invariant side | Section 18.6 |
 
 ---
 
@@ -745,20 +772,23 @@ The matrix itself is "done" (ready to drive implementation) when:
 - Approved (business owner accepts residual risk). ⏳
 - → **Production-ready**. ⏳
 
-### 14.1 P0 Launch Gate — 6 AND-conditions (PRODUCTION GO / NO-GO)
+### 14.1 P0 Launch Gate — 7 AND-conditions (PRODUCTION GO / NO-GO)
 
-SnakZap launches **only when ALL six conditions hold simultaneously.** Any single failure ⇒ NO-GO.
+SnakZap launches **only when ALL seven conditions hold simultaneously.** Any single failure ⇒ NO-GO.
 
 | # | Condition | Evidence |
 |---|-----------|----------|
 | 1 | **All P0 capabilities at `Production-ready`** (lifecycle state 9) | Capability lifecycle tracker — every P0 row green |
-| 2 | **All P0 invariants verified** (I-01..I-12) | Invariant-checker test suite green; no unresolved violations |
+| 2 | **All P0 invariants verified** (I-01..I-14) | Invariant-checker test suite green; no unresolved violations |
 | 3 | **All critical external-dependency scenarios tested** | Dependency matrix (Section 10) — every row with a P0 `Affected P0` link has been failure-injected |
 | 4 | **DR drill passed** (including post-restore business-state reconciliation) | P0-26 restore-drill report; no unresolved money state |
 | 5 | **Rollback drill passed** (per deployment class) | P0-27 rollback-drill report; Class 1 ≤ 10 min verified |
 | 6 | **No unresolved P0 exception** in the exception queue | Exception queue empty of P0-class entries; any open entries have an accepted-risk record |
+| 7 | **No expired exception waiver** (v1.3) | Every P0 exception waiver has: named owner + explicit expiry date + documented mitigation + business-owner approval. No waiver may be past its expiry. Temporary waivers must not have become permanent — each is reviewed at expiry and either resolved or re-approved with fresh justification. |
 
-**Verdict:** Conditions 1–6 all green ⇒ **PRODUCTION GO.** Any red ⇒ **NO-GO**, no exceptions, no "we'll fix it post-launch" for P0.
+**Verdict:** Conditions 1–7 all green ⇒ **PRODUCTION GO.** Any red ⇒ **NO-GO**, no exceptions, no "we'll fix it post-launch" for P0.
+
+**Waiver discipline (v1.3):** A P0 exception waiver is a structured record, not a verbal hand-wave. Required fields: `owner`, `expiry` (max 30 days for P0), `mitigation` (what reduces risk until resolved), `approver` (business owner, not the developer). A waiver past expiry with no re-approval is treated as an unresolved P0 exception (condition 6 fails).
 
 ---
 
@@ -793,47 +823,51 @@ SnakZap launches **only when ALL six conditions hold simultaneously.** Any singl
 | "DB restore = recovered" | Business recovery — post-restore money/order/audit state reconciled |
 | "10-min rollback" blanket promise | Per deployment class: backward-compatible / expand-migrate-contract / breaking |
 | "Freeze everything weird" | Smallest-sufficient freeze scope (transaction / entity / system) |
-| Parallel lists (caps, invariants, deps, tests) | Traceability map links them first-class (Section 18) |
-| "All tests green = launch" | 6 AND-condition launch gate (caps + invariants + dep tests + DR drill + rollback drill + zero P0 exceptions) |
+| Parallel lists (caps, invariants, deps, tests) | Traceability map links them first-class (Section 18); 8 coverage queries A–H as pass/fail |
+| "All tests green = launch" | 7 AND-condition launch gate (caps + invariants + dep tests + DR drill + rollback drill + zero P0 exceptions + no expired waiver) |
+| Strategy ↔ engineering disconnected | Strategic Blueprint feature → capability → invariant mapping (Section 18.6) |
+| Missing pickup correctness law | I-13 Pickup/Handoff Integrity + Architectural Law 4 (Section 12.1) |
+| Self-approval possible | Separation of duties — developer cannot be `Reviewed` or `Approved` signatory |
+| Per-domain observability duplication | One cross-cutting observability substrate; domain dashboards consume it |
 
-This matrix is the gate. SnakZap launches only when **all 6 launch-gate AND-conditions (Section 14.1) are green** — not before, not with exceptions.
+This matrix is the gate. SnakZap launches only when **all 7 launch-gate AND-conditions (Section 14.1) are green** — not before, not with exceptions.
 
 ---
 
 ## 17. Next Step (after sign-off)
 
-Once v1.2 is signed off, the next artifacts follow a strict chain — **no implementation, no sprints, until each link is reviewed.**
+Once v1.3 is signed off, the next artifacts follow a strict chain — **no implementation, no sprints, until each link is reviewed.**
 
 ```
-v1.2 Matrix (this document)
-        ↓  [sign-off]
-P0 Traceability & Invariant Map (Section 18, foundation laid in this version)
+v1.3 Matrix (this document)
+        ↓  [conceptual approval ✅; formal sign-off pending coverage check]
+Artifact 1 — P0 Traceability & Invariant Map (P0_TRACEABILITY_MAP.md)
+        ↓  [must pass all 8 coverage queries A–H; Strategic Blueprint feature mapping populated]
+Artifact 2 — P0 Dependency Graph (technical + business/feature dependencies)
         ↓  [review]
-P0 Dependency Graph (technical + business/feature dependencies)
+Artifact 3 — Critical Path to Launch
         ↓  [review]
-Critical Path to Launch
+Artifact 4 — Implementation Order
         ↓  [review]
-Implementation Order
-        ↓  [review]
-Sprint Plan
+Artifact 5 — Sprint Plan
         ↓
 Implementation begins
 ```
 
-The **P0 Traceability & Invariant Map** (Section 18) is the immediate next artifact because the matrix currently lists capabilities, invariants, dependencies, and tests as parallel lists — without explicit links between them, a dependency graph would be built on assumptions. The traceability map makes those links first-class.
+**Artifact 1 (immediate next)** is the P0 Traceability & Invariant Map. It is a single table (one row per P0 capability, columns per Section 18.5) plus the Strategic Blueprint feature→capability→invariant mapping (Section 18.6). It is a **coverage test**, not a document — the 8 queries (A–H) run as automated checks; any blank cell fails. Formal sign-off of this matrix is blocked until Artifact 1 passes all 8 queries.
 
-The **P0 Dependency Graph** then builds on the traceability map to define:
+**Artifact 2** (P0 Dependency Graph) builds on Artifact 1 to define:
 - Which P0 capability must be built first (no dependents).
 - What each P0 capability requires its dependencies to be at (which lifecycle state).
 - Which capabilities unlock once a given capability reaches `Production-ready`.
 - The critical path to launch.
-- **Business/feature dependencies preserved** (e.g. prepaid + quick reorder, POS + settlement, live-kitchen + push notifications — interactions called out in the Strategic Blueprint), not just technical dependencies.
+- **Business/feature dependencies preserved** (e.g. Pre-paid + Quick Reorder, POS + Daily Settlement, Live-Kitchen + Push — interactions from the Strategic Blueprint), not just technical dependencies. These interactions are nodes in the graph, not linear edges.
 
-Only after the Dependency Graph + Critical Path are reviewed does sprint breakdown begin.
+Only after Artifact 2 + Artifact 3 are reviewed does sprint breakdown (Artifact 5) begin.
 
 ---
 
-## 18. P0 Traceability & Invariant Map (v1.2 foundation)
+## 18. P0 Traceability & Invariant Map (v1.3 — coverage-test specification)
 
 This section is the **bridge** between the matrix's parallel lists (capabilities / invariants / dependencies / tests / observability) and the upcoming P0 Dependency Graph. It makes the relationships first-class so the dependency graph is built on facts, not assumptions.
 
@@ -877,8 +911,10 @@ Which invariants each P0 capability protects (consolidated from Section 7.1 `Pro
 | I-10 Transactional Completeness | P0-02, P0-08, P0-17, P0-24, P0-25, P0-26 |
 | I-11 Refund Precondition | P0-04 |
 | I-12 Session Revocation | P0-09, P0-10, P0-11 |
+| I-13 Pickup / Handoff Integrity | P0-07 (state machine PICKED_UP gate), P0-28 (unknown-exception on handoff mismatch) |
+| I-14 Vendor Operational Integrity | (P1 busy-mode — primary protector; linked to I-02 because vendor overload → order integrity risk) |
 
-**Coverage rule:** Any invariant with zero protectors is a matrix defect. Any P0 capability protecting no invariant is either foundational (Zod, migrations, observability — which protect *all* invariants indirectly) or a candidate for demotion.
+**Coverage rule:** Any invariant with zero protectors is a matrix defect. Any P0 capability protecting no invariant is either foundational (Zod, migrations, observability — which protect *all* invariants indirectly) or a candidate for demotion. I-14 is intentionally protected by a P1 capability (busy-mode) — this is acceptable because vendor overload degrades but does not immediately corrupt money/order state; it is linked to I-02 as a risk amplifier, not a direct protector.
 
 ### 18.3 Dependency → Capability impact (consolidated)
 
@@ -907,16 +943,52 @@ Every P0 capability has at least one test criterion (Section 7.1). The traceabil
 
 This mapping is the input to the **P0 Dependency Graph** — it tells us which capabilities share test infrastructure, which invariants cross multiple capabilities (and thus need cross-capability test coordination), and which dependencies block the most capabilities (highest-priority hardening targets).
 
-### 18.5 Status of this section in v1.2
+### 18.5 The 8 Coverage Queries (v1.3 — pass/fail spec for the Traceability Map)
 
-v1.2 lays the **foundation** for the traceability map:
-- ✅ Invariant IDs (I-01..I-12) stable.
-- ✅ `Protects` column on every P0 capability (Section 7.1).
-- ✅ `Affected P0` column on every dependency row (Section 10).
-- ✅ Coverage tables (18.2, 18.3) populated.
+The full P0 Traceability & Invariant Map (next artifact) is not just a document — it is a **coverage test**. It must satisfy all 8 queries below. Any blank cell ⇒ matrix incomplete ⇒ formal sign-off blocked.
 
-The **full** traceability map (every test → every invariant → every capability → every dependency, with lifecycle state per capability) is the next artifact after v1.2 sign-off. It will live as a separate document referenced by this matrix, because its size warrants it.
+| Query | Requirement | Blank ⇒ |
+|-------|-------------|---------|
+| **A** | Every P0 capability → ≥1 invariant it protects | Capability with no invariant is either foundational (Zod, migrations, observability) or a demotion candidate |
+| **B** | Every invariant → ≥1 P0 capability that protects it | Invariant with no protector is a matrix defect — must be added or removed |
+| **C** | Every P0 capability → ≥1 failure-injection test | Untested P0 capability blocks launch |
+| **D** | Every external dependency → ≥1 failure scenario | Unguarded dependency violates Section 10 rule |
+| **E** | Every failure scenario → documented recovery procedure | Failure with no recovery is an unknown-exception (P0-28) waiting to happen |
+| **F** | Every P0 capability → ≥1 observable signal (metric/log/alert) | Silent P0 capability violates P0-19/P0-21 |
+| **G** | Every P0 capability → named approver (for `Approved` state) | No approver ⇒ cannot reach `Production-ready` (separation of duties, Section 11 rule 4) |
+| **H** | Every P0 capability → test evidence (CI run / drill report / injection log) | No evidence ⇒ lifecycle state cannot advance past `Failure-tested` |
+
+**The Traceability Map artifact must render as a single table** with one row per P0 capability and columns: `ID | Capability | Protects (invariants) | Failure scenario | Recovery | Test | Dependency | Observable signal | Approver | Test evidence | Lifecycle state`. Then the 8 coverage queries are run as automated checks against that table — any empty cell is a failing test.
+
+### 18.6 Strategic Blueprint ↔ Matrix feature mapping (v1.3 — the strategy↔engineering bridge)
+
+The Strategic Blueprint defines *what* SnakZap builds and *why* (102 feature ideas, ICE prioritization, feature interactions). The Readiness Matrix defines *how* it operates safely. The bridge between them is a **feature → capability → invariant** mapping so that every strategic feature traces to the technical guarantees that make it safe.
+
+The full Traceability Map artifact must include this mapping layer. Seed structure (to be populated against the Strategic Blueprint's feature IDs):
+
+| Blueprint Feature ID | Feature | → Capability | → Invariant(s) |
+|----------------------|---------|--------------|----------------|
+| O04 | Pre-paid Button | P0-01 (Razorpay capture) | I-01, I-04 |
+| O08 | Quick Reorder | P0-08 (order idempotency) + P0-25 (concurrency) | I-02, I-10 |
+| P01 | QR Pickup | P0-07 (state machine, PICKED_UP gate) | I-13 |
+| P05 | Live Kitchen | P0-06 (state separation) + P0-07 | I-02, I-08 |
+| V11 | Daily Settlement | P0-02 (ledger) + P0-03 (reconciliation) | I-06 |
+| (…full list populated from Strategic Blueprint's 102 features) | | | |
+
+**Feature interactions preserved (per Strategic Blueprint):** The mapping must also capture *interactions* — e.g. "Pre-paid + Quick Reorder" requires both P0-01 and P0-08 to be `Production-ready` AND their interaction tested (a reorder that triggers payment must not double-charge). "POS + Daily Settlement" requires P0-02 + P0-03 + the POS-import capability (P3) to be coherent. These interactions are nodes in the upcoming P0 Dependency Graph, not just linear dependencies.
+
+### 18.7 Status of this section in v1.3
+
+v1.3 expands the traceability foundation:
+- ✅ Invariant IDs I-01..I-14 stable (I-13 Pickup, I-14 Vendor Operational added).
+- ✅ `Protects` column on every P0 capability.
+- ✅ `Affected P0` + `Blueprint Risk` columns on every dependency row.
+- ✅ Coverage tables 18.2, 18.3 populated (updated for I-13, I-14).
+- ✅ 8 coverage queries (A–H) defined as pass/fail spec (18.5).
+- ✅ Strategic Blueprint feature→capability→invariant mapping requirement defined (18.6).
+
+The **full** traceability map (single table, one row per P0 capability, all columns, 8 queries green, feature mapping populated) is the next artifact. It will live as a separate document (`P0_TRACEABILITY_MAP.md`) referenced by this matrix.
 
 ---
 
-*End of SnakZap Production Readiness Matrix v1.2.*
+*End of SnakZap Production Readiness Matrix v1.3.*

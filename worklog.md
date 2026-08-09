@@ -226,3 +226,29 @@ Stage Summary:
 - Matrix v1.2 ready for stakeholder traceability review: 18 sections, 28 P0 capabilities (each with Protects column), 12 business invariants (I-01..I-12), 16 external-dependency scenarios (each with Affected P0), 9-state capability lifecycle (including Approved), 6-condition launch gate, Section 18 traceability foundation, 20 open questions.
 - v1.2 addresses all 10 stakeholder corrections: P0-24 idempotent effect (✅), P0-25 3 concurrency cases + duplicate execution (✅), P0-26 business recovery (✅), P0-27 3 deploy classes (✅), P0-28 3 blast-radius levels (✅), invariant IDs + Protects column (✅), dependency Affected-P0 column (✅), traceability matrix (✅ Section 18), Approved lifecycle state (✅), 6-AND launch gate (✅).
 - Next document after sign-off: full P0 Traceability & Invariant Map (separate doc), then P0 Dependency Graph, then Critical Path, then Implementation Order, then Sprint Plan. Implementation only after that chain.
+
+---
+Task ID: 16
+Agent: main
+Task: Revise Production Readiness Matrix v1.2 → v1.3 per stakeholder conceptual-approval review (10 corrections: pickup integrity gap, vendor operational invariant, blueprint risk cross-link, observability cross-cutting, separation of duties, no-expired-waiver, business-recovery law, traceability-as-coverage-test, 8 coverage queries, strategic-blueprint feature mapping).
+
+Work Log:
+- Updated header/metadata/revision-history to v1.3.
+- Added 2 invariants: I-13 Pickup/Handoff Integrity (right order → right customer via QR+OTP; genuine gap — I-08 covered vendor-side authorization, not customer-side handoff) and I-14 Vendor Operational Integrity (vendor workload ≤ capacity; protected by P1 busy-mode, linked to I-02). Coverage note added explaining the gap and the P1-protector exception.
+- Updated P0-07 Protects column to include I-13 (PICKED_UP transition requires pickup verification); updated P0-28 to protect I-01..I-14 (all).
+- Added Section 12.1: 5 Architectural Laws — (1) Business Recovery Coherence, (2) Idempotent Business Effect, (3) Freeze Precision, (4) Pickup Correctness, (5) Separation of Duties. Each references enforcing capability/invariant.
+- Added Section 11 rule 4: Separation of duties — developer who wrote a P0 capability cannot be its Reviewed or Approved signatory.
+- Added Section 14.1 launch-gate condition 7: No expired exception waiver (P0 waivers require owner + expiry ≤30d + mitigation + business-owner approval; expired waiver = unresolved exception). Added waiver-discipline note.
+- Cross-linked Section 10 dependency matrix to Strategic Blueprint risk register: added `Blueprint Risk` column (R-msg91, R-razorpay-wh, R-db-pool, R-session-loss). Database failure mode expanded to include connection-pool exhaustion. SMS gateway row linked to I-13 (pickup handoff).
+- Added Section 12.2 cross-cutting note: Operational Observability is ONE substrate (P0-19/P0-20/P0-21), not duplicated per-domain. Domain dashboards consume it.
+- Expanded Section 18: added 18.5 (8 coverage queries A–H as pass/fail spec — every P0 → invariant, every invariant → P0, every P0 → failure test, every dependency → scenario, every failure → recovery, every P0 → observable signal, every P0 → approver, every P0 → evidence), 18.6 (Strategic Blueprint feature→capability→invariant mapping requirement with seed table + feature-interaction preservation), 18.7 (v1.3 status). Section heading updated to "coverage-test specification".
+- Updated Section 17 (Next Step) with explicit 5-artifact chain: v1.3 → Artifact 1 Traceability Map (P0_TRACEABILITY_MAP.md, must pass 8 queries) → Artifact 2 Dependency Graph → Artifact 3 Critical Path → Artifact 4 Implementation Order → Artifact 5 Sprint Plan.
+- Updated Section 16 (Summary) with 5 new "From → To" rows; corrected launch-gate reference from 6 to 7 AND-conditions.
+- Added 4 open questions (Q21–Q24): pickup verification (QR+OTP both), vendor capacity adaptive, waiver max expiry, feature-mapping ownership.
+- No code changed. No implementation. Document only.
+
+Stage Summary:
+- Matrix v1.3 ready: 18 sections, 28 P0 capabilities, 14 invariants (I-01..I-14), 5 architectural laws, 16 dependency scenarios (with Blueprint Risk cross-link), 9-state lifecycle (with separation of duties), 7-condition launch gate (with no-expired-waiver), 8 coverage queries (A–H), Strategic Blueprint feature-mapping spec, 24 open questions.
+- v1.3 addresses all 10 stakeholder corrections: I-13 pickup integrity (✅), I-14 vendor operational (✅), blueprint risk cross-link (✅ Section 10), observability cross-cutting (✅ Section 12.2), separation of duties (✅ Section 11 rule 4), no-expired-waiver (✅ launch gate cond 7), business-recovery law (✅ Law 1), traceability-as-coverage-test (✅ Section 18.5), 8 coverage queries (✅ A–H), feature mapping (✅ Section 18.6).
+- Conceptual approval received; formal sign-off blocked until Artifact 1 (P0 Traceability & Invariant Map) passes all 8 coverage queries.
+- Next: Artifact 1 (P0_TRACEABILITY_MAP.md) — single table, one row per P0 capability, all columns, 8 queries green, feature mapping populated.
