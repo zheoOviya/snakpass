@@ -252,3 +252,37 @@ Stage Summary:
 - v1.3 addresses all 10 stakeholder corrections: I-13 pickup integrity (✅), I-14 vendor operational (✅), blueprint risk cross-link (✅ Section 10), observability cross-cutting (✅ Section 12.2), separation of duties (✅ Section 11 rule 4), no-expired-waiver (✅ launch gate cond 7), business-recovery law (✅ Law 1), traceability-as-coverage-test (✅ Section 18.5), 8 coverage queries (✅ A–H), feature mapping (✅ Section 18.6).
 - Conceptual approval received; formal sign-off blocked until Artifact 1 (P0 Traceability & Invariant Map) passes all 8 coverage queries.
 - Next: Artifact 1 (P0_TRACEABILITY_MAP.md) — single table, one row per P0 capability, all columns, 8 queries green, feature mapping populated.
+
+---
+Task ID: 17
+Agent: main
+Task: Build Artifact 1 — P0 Traceability & Invariant Map (P0_TRACEABILITY_MAP.md); run 8 coverage queries honestly; classify gaps.
+
+Work Log:
+- Created P0_TRACEABILITY_MAP.md (219 lines) as Artifact 1 of the 5-artifact chain.
+- Built single traceability table: 28 P0 rows × 11 columns (ID, Capability, Protects, Failure, Recovery, Test, Dependency, Observable signal, Approver, Test evidence, Lifecycle state, Blueprint feature).
+- Mechanically extracted all data from v1.3 matrix — no new capabilities or invariants invented (per discipline rule).
+- Built invariant coverage table (Section 2): all 14 invariants (I-01..I-14) with their protecting P0s.
+- Ran all 8 coverage queries (A–H) honestly:
+  - A (P0→invariant): PARTIAL PASS — 18/28 have specific I-xx; 10 are foundational (cross-cutting, no specific mapping).
+  - B (invariant→P0): PARTIAL PASS — 13/14 have P0 protectors; I-14 has only P1 busy-mode + P0-28 backstop (accepted exception).
+  - C (P0→failure test): STRUCTURAL PASS — all 28 have test criteria defined (not yet written).
+  - D (dependency→scenario): PASS — 16 scenarios.
+  - E (failure→recovery): STRUCTURAL PASS — all defined.
+  - F (P0→observable signal): STRUCTURAL PASS — all defined.
+  - G (P0→approver): FAIL — 0/28 approvers named.
+  - H (P0→test evidence): FAIL — 0/28 evidence (nothing implemented).
+- Identified 6 gaps (G-A1, G-B1, G-B2, G-G1, G-H1, G-F1) with honest classification:
+  - G-B1: I-13 (Pickup Integrity) has thin P0 coverage (only P0-07 + P0-28); potential matrix defect — needs v1.4 decision (expand P0-07 scope vs new P0-29).
+  - G-A1: 10 foundational P0s lack specific invariant mapping (accepted exception; rigor gap).
+  - G-B2: I-14 P1-protected (accepted exception).
+  - G-G1, G-H1: expected-empty-pending-implementation (not matrix defects).
+  - G-F1: Blueprint feature mapping incomplete (only seed rows; needs Strategic Blueprint cross-reference).
+- Proposed gate-split resolution: Gate 1 (matrix structural completeness, A–F) vs Gate 2 (per-capability Production-ready, G+H). This resolves the honest deadlock (map can't pass until implementation; implementation gated on map).
+- v1.4 changes required: exactly 2 items (G-B1 decision + G-A1 annotations). No other changes — discipline holds.
+
+Stage Summary:
+- Artifact 1 complete. Formal sign-off BLOCKED on G-B1 (I-13 coverage decision).
+- Single substantive question for stakeholder: expand P0-07 scope to include pickup-event attribution, OR create new P0-29 (Pickup Audit Attribution)?
+- After G-B1 decision → v1.4 → Blueprint feature mapping (G-F1) → Artifact 2 (Dependency Graph).
+- No implementation. No code. Document only.
