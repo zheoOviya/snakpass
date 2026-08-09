@@ -25,9 +25,12 @@
      - Clean state restored: chain intact ✅
   4. Known limitation documented: "restore-to-original" after UPDATE is undetectable by hash-chain alone (hash recomputes to same value). This is inherent to hash-chain without external anchor. DELETE detection works (chain linkage breaks).
 - **Remaining gap:** Hash-chain provides tamper-EVIDENCE (detection), NOT tamper-PREVENTION (blocking). Matrix acceptance demands "Storage-level WORM + reject on update/delete" — true prevention requires production storage (PostgreSQL REVOKE, QLDB, or separate audit DB). SQLite cannot enforce this.
-- **Status:** PARTIALLY CLOSED — tamper-evidence layer (hash-chain) implemented and tested. Tamper-prevention (storage-level WORM) still requires production deployment. The hash-chain makes tampering DETECTABLE; production WORM makes it IMPOSSIBLE.
-- **Blocks:** P0-22 reaching `Production-ready` (S9) until production storage-level WORM is deployed. Does NOT block `Implemented` (S4) — code is written and tests pass.
-- **Discovered:** Sprint 1, Wave 0. Partially closed: Sprint 1, Wave 0 closure.
+- **Status:** OPEN — mitigation implemented (hash-chain tamper-evidence); acceptance criterion outstanding (storage-level WORM prevention).
+  - Mitigation progress: hash-chain makes mutations DETECTABLE (UPDATE hash mismatch + DELETE chain-breakage both tested).
+  - Outstanding acceptance: matrix demands "Storage-level WORM + reject on update/delete" — true PREVENTION (blocking mutations, not just detecting them) requires production-grade immutable storage (PostgreSQL REVOKE UPDATE/DELETE, AWS QLDB, or separate audit DB). SQLite cannot enforce this.
+  - "Partially closed" is a PROGRESS label, NOT acceptance closure. Deviation remains OPEN until storage-level WORM is deployed and attempted-mutation-rejected evidence is produced.
+- **Blocks:** P0-22 reaching `Production-ready` (S9). Does NOT block `Implemented` (S4).
+- **Discovered:** Sprint 1, Wave 0. Mitigation added: Sprint 1, Wave 0 closure. Acceptance outstanding.
 
 ### DEV-002 — P0-09 Firebase verify: demo-trust mode (no service-account credentials)
 
@@ -47,6 +50,9 @@
   4. Production verification path (`verifyIdToken(idToken, true)` with `checkRevoked=true`) is code-ready — verifies signature, expiry, issuer, audience, revocation.
   5. Production-mode tests (valid/expired/malformed/wrong-project/revoked tokens) are documented as manual tests requiring real Firebase service-account credentials.
 - **Remaining gap:** Production verification path is CODE-READY but NOT EXERCISED with real credentials. Firebase service-account key not configured in this environment.
-- **Status:** PARTIALLY CLOSED — demo-trust can no longer accidentally activate in production (hard-disabled). The code path for production verification is complete and tested for correct behavior. The remaining gap is credential configuration + manual production-token tests, which require deployment environment access.
-- **Blocks:** P0-09 reaching `Production-ready` (S9) until real credentials are configured and production-token tests pass. Does NOT block `Implemented` (S4) — code is written and dev tests pass.
-- **Discovered:** Sprint 1, Wave 0 implementation. Partially closed: Sprint 1, Wave 0 closure.
+- **Status:** OPEN — production fallback disabled; production verification evidence outstanding.
+  - Mitigation progress: demo-trust HARD-DISABLED in production (NODE_ENV=production → throws, no fallback). Route now calls verifyFirebaseToken() — phone from VERIFIED token, not client claim. Dev-mode test harness passes 5 tests.
+  - Outstanding acceptance: real Firebase service-account credentials not configured. Production verification path (verifyIdToken with checkRevoked=true) is code-ready but NOT EXERCISED with real tokens. Manual production-token tests (valid/expired/malformed/wrong-project/revoked) not yet run.
+  - "Partially closed" is a PROGRESS label, NOT acceptance closure. Deviation remains OPEN until real credentials are configured and all production-token verification tests pass with evidence.
+- **Blocks:** P0-09 reaching `Production-ready` (S9). Does NOT block `Implemented` (S4).
+- **Discovered:** Sprint 1, Wave 0. Mitigation added: Sprint 1, Wave 0 closure. Acceptance outstanding.
