@@ -156,4 +156,36 @@ Which P0 capabilities protect each invariant. Consolidated from the table above.
 
 ---
 
-*End of P0 Traceability & Invariant Map (Artifact 1, v1.4 re-run).*
+## 8. G-F1 Strategic Feature Mapping — Finalization (Artifact 1 FINAL)
+
+G-F1 is the finalization step of Artifact 1. It proves that the Strategic Blueprint's chosen features trace into the production-control architecture. Full mapping lives in `STRATEGIC_FEATURE_MAPPING.md`. Summary:
+
+| Criterion | Status |
+|-----------|--------|
+| Features mapped (Mapped + Partially mapped) | 41 / ~45 named features + 8 interaction nodes |
+| Features unmapped | 4 (all UX/polish — Dark mode, WCAG, i18n, Sidebar nav) |
+| Unmapped with documented disposition | 4 / 4 (100%) — **0 undisposed** |
+| Unmapped = architectural gap | 0 — no v1.5 escalation needed |
+| Caution flags for P2/P3 | 3 (G04 geo-fence+pickup, C01 catering state machine, L02 loyalty ledger) |
+| Feature interactions preserved | 8 (Prepaid+Reorder, POS+Settlement, LiveKitchen+Push, Wallet+Loyalty, GroupOrder+Concurrency, Geo-fence+Pickup, Catering+StateMachine, KillSwitch+OrderIntake) |
+| New P0/invariant added during mapping | 0 (discipline held) |
+
+**New coverage query (I):** *Every strategic feature → P0/invariant (or documented disposition).*
+**Result:** ✅ PASS — 0 undisposed features.
+
+### Artifact 1 — FINAL ✅
+
+| Criterion | Status |
+|-----------|--------|
+| P0 system internally traceable (A–F) | ✅ Green |
+| Strategic features traceable (G-F1 / Query I) | ✅ Green |
+| No undisposed unmapped features | ✅ Confirmed |
+| No new P0/invariant added during mapping | ✅ Discipline held |
+| Caution flags for P2/P3 recorded | ✅ 3 flags |
+| Feature interactions preserved | ✅ 8 interaction nodes |
+
+**Artifact 2 — P0 Dependency Graph: UNLOCKED.**
+
+---
+
+*End of P0 Traceability & Invariant Map (Artifact 1 — FINAL).*

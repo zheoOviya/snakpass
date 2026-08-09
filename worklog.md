@@ -320,3 +320,37 @@ Stage Summary:
 - Traceability Map v1.4 re-run: 3 PASS (A, B, D) + 3 STRUCTURAL PASS (C, E, F) + 2 FAIL (G, H — expected, pending implementation).
 - Next: populate G-F1 (Strategic Blueprint feature mapping) → Artifact 2 (P0 Dependency Graph).
 - No implementation. No code. Documents only.
+
+---
+Task ID: 19
+Agent: main
+Task: G-F1 Strategic Feature Mapping — finalize Artifact 1 by proving Strategic Blueprint features trace into the production-control architecture.
+
+Work Log:
+- Created STRATEGIC_FEATURE_MAPPING.md (242 lines) as G-F1, the finalization step of Artifact 1.
+- Built feature inventory from SnakZap original README (Phase 1-4 + UX Sprints + Admin Governance) with stable IDs (O##, P##, V##, A##, L##, U##, G##, C##).
+- Mapped ~45 named features + 8 feature-interaction nodes using the stakeholder-specified structure: Feature → Primary P0 → Supporting P0s → Invariant(s) → Business interaction → State → Disposition.
+- Applied three mapping states: Mapped (13), Partially mapped (28), Unmapped (4).
+- All 4 unmapped features have documented dispositions — 0 undisposed:
+  - U08 Dark mode: future scope, pure UX, no P0 required.
+  - U09 WCAG: separate compliance track, not a production-control invariant.
+  - U10 i18n: P1 product surface, no P0 required.
+  - A04 Sidebar nav: pure admin UX, no P0 required.
+- None of the 4 unmapped is an architectural gap — no v1.5 escalation needed.
+- Preserved 8 feature interactions from Strategic Blueprint as interaction nodes (Prepaid+Reorder, POS+Settlement, LiveKitchen+Push, Wallet+Loyalty, GroupOrder+Concurrency, Geo-fence+Pickup, Catering+StateMachine, KillSwitch+OrderIntake).
+- Recorded 3 caution flags for P2/P3 (not current defects — forward-looking):
+  - G04 geo-fence: if auto-triggers PICKED_UP, I-13 attribution must still hold.
+  - C01 catering: needs own state machine extension; P0-07 PICKED_UP gate may not directly apply.
+  - L02 stamp card: if points are ledger-backed, P0-02 applies; decision at P2.
+- Discipline held: 0 new P0 capabilities, 0 new invariants added during mapping.
+- Added new Coverage Query I (strategic feature → P0/invariant/disposition): PASS.
+- Appended G-F1 finalization summary to P0_TRACEABILITY_MAP.md; marked Artifact 1 FINAL.
+
+Stage Summary:
+- Artifact 1 — P0 Traceability & Invariant Map: FINAL ✅
+  - A–F: Green (matrix completion)
+  - G, H: FAIL (pending implementation — expected, blocks launch not Artifact 2)
+  - I (strategic feature coverage): PASS (0 undisposed features)
+- No matrix defects remain. No v1.5 changes required by G-F1.
+- Artifact 2 — P0 Dependency Graph: UNLOCKED. Will use v1.4 traceability table (technical deps) + G-F1 mapping (business deps + feature interactions).
+- No implementation. No code. Documents only.
