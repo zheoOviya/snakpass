@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { emitOrderCreated } from '@/lib/realtime'
+import { validateBody, createOrderBodySchema } from '@/lib/validation'
+import { apiError, withErrorHandler } from '@/lib/errors'
+import { info as logInfo, newTraceId } from '@/lib/logger'
 
 // GET /api/orders?role=consumer|vendor|admin&restaurantId=&status=&limit=
 export async function GET(req: NextRequest) {
@@ -57,16 +60,14 @@ export async function GET(req: NextRequest) {
 }
 
 // POST /api/orders  body: { restaurantId, items:[{menuItemId,name,price,quantity}], isCatering?, headcount?, note? }
-export async function POST(req: NextRequest) {
-  const body = await req.json().catch(() => null)
-  if (!body || !body.restaurantId || !Array.isArray(body.items) || body.items.length === 0) {
-    return NextResponse.json({ error: 'Invalid order payload' }, { status: 400 })
-  }
+export const POST = (req: NextRequest) => withErrorHandler(async () => {
+  // P0-12: Zod validation
+  const body = await validateBody(req, createOrderBodySchema)
 
   // Kill switch guard: ordering
   const orderingKs = await db.killSwitch.findUnique({ where: { key: 'ordering' } })
   if (orderingKs?.enabled) {
-    return NextResponse.json({ error: 'Ordering is currently disabled (kill switch active).' }, { status: 503 })
+    return apiError('KILL_SWITCH_ACTIVE', 'Ordering is currently disabled (kill switch active).', 503)
   }
   if (body.isCatering) {
     const catKs = await db.killSwitch.findUnique({ where: { key: 'catering' } })
@@ -156,4 +157,4 @@ export async function POST(req: NextRequest) {
       })),
     },
   })
-}
+})
