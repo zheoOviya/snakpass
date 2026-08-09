@@ -219,17 +219,23 @@ async function main() {
     ],
   })
 
-  // Audit logs
-  await db.auditLog.createMany({
-    data: [
-      { actorId: adminUser.id, actorRole: 'SUPER_ADMIN', action: 'ADMIN_LOGIN', metadata: JSON.stringify({ ip: '127.0.0.1' }), createdAt: new Date(now - 120 * 60000) },
-      { actorId: adminUser.id, actorRole: 'SUPER_ADMIN', action: 'VENDOR_SUSPEND', metadata: JSON.stringify({ restaurantId: r3.id, reason: 'Delayed pickups' }), createdAt: new Date(now - 90 * 60000) },
-      { actorId: adminUser.id, actorRole: 'SUPER_ADMIN', action: 'KILL_SWITCH_TOGGLE', metadata: JSON.stringify({ key: 'payments', enabled: false }), createdAt: new Date(now - 60 * 60000) },
-      { actorId: adminUser.id, actorRole: 'SUPER_ADMIN', action: 'KILL_SWITCH_TOGGLE', metadata: JSON.stringify({ key: 'payments', enabled: true }), createdAt: new Date(now - 58 * 60000) },
-      { actorId: vendorOwner.id, actorRole: 'VENDOR_OWNER', action: 'MENU_AVAILABILITY', metadata: JSON.stringify({ item: 'Butter Chicken', available: true }), createdAt: new Date(now - 30 * 60000) },
-      { actorId: adminUser.id, actorRole: 'SUPER_ADMIN', action: 'ORDER_OVERRIDE', metadata: JSON.stringify({ orderId: 'demo', to: 'PICKED_UP' }), createdAt: new Date(now - 15 * 60000) },
-    ],
-  })
+  // Audit logs (with hash-chain tamper-evidence per DEV-001)
+  const { createHash } = await import('crypto')
+  const auditEntries = [
+    { actorId: adminUser.id, actorRole: 'SUPER_ADMIN', action: 'ADMIN_LOGIN', metadata: JSON.stringify({ ip: '127.0.0.1' }), createdAt: new Date(now - 120 * 60000) },
+    { actorId: adminUser.id, actorRole: 'SUPER_ADMIN', action: 'VENDOR_SUSPEND', metadata: JSON.stringify({ restaurantId: r3.id, reason: 'Delayed pickups' }), createdAt: new Date(now - 90 * 60000) },
+    { actorId: adminUser.id, actorRole: 'SUPER_ADMIN', action: 'KILL_SWITCH_TOGGLE', metadata: JSON.stringify({ key: 'payments', enabled: false }), createdAt: new Date(now - 60 * 60000) },
+    { actorId: adminUser.id, actorRole: 'SUPER_ADMIN', action: 'KILL_SWITCH_TOGGLE', metadata: JSON.stringify({ key: 'payments', enabled: true }), createdAt: new Date(now - 58 * 60000) },
+    { actorId: vendorOwner.id, actorRole: 'VENDOR_OWNER', action: 'MENU_AVAILABILITY', metadata: JSON.stringify({ item: 'Butter Chicken', available: true }), createdAt: new Date(now - 30 * 60000) },
+    { actorId: adminUser.id, actorRole: 'SUPER_ADMIN', action: 'ORDER_OVERRIDE', metadata: JSON.stringify({ orderId: 'demo', to: 'PICKED_UP' }), createdAt: new Date(now - 15 * 60000) },
+  ]
+  let prevHash = 'GENESIS'
+  for (const entry of auditEntries) {
+    const id = `seed-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const hash = createHash('sha256').update(`${prevHash}|${id}|${entry.actorId}|${entry.actorRole}|${entry.action}|${entry.metadata}|${entry.createdAt.toISOString()}`).digest('hex')
+    await db.auditLog.create({ data: { id, ...entry, prevHash, hash } })
+    prevHash = hash
+  }
 
   console.log('Seeded:')
   console.log('  - 4 restaurants, ~25 menu items')

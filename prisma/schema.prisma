@@ -138,6 +138,11 @@ model AuditLog {
   action    String
   metadata  String   @default("{}") // JSON
   createdAt DateTime @default(now())
+  // DEV-001: Hash-chain tamper-evidence. Each entry's hash = SHA-256(prevHash + entry data).
+  // If any entry is modified or deleted, the chain breaks and integrity check detects it.
+  // This makes tampering DETECTABLE; true PREVENTION requires storage-level WORM (production).
+  prevHash  String   @default("GENESIS") // hash of previous entry; "GENESIS" for first
+  hash      String   @default("") // SHA-256(prevHash + id + actorId + actorRole + action + metadata + createdAt)
 }
 
 model KillSwitch {
