@@ -135,3 +135,22 @@ Stage Summary:
 - Firebase integration is LIVE: code correctly calls Firebase signInWithPhoneNumber with the user's project config.
 - Real SMS will work as soon as the user enables Phone Authentication in the Firebase console (Authentication → Sign-in method → Phone → Enable) AND upgrades the project to the Blaze plan (required for phone auth billing). Until then, graceful demo fallback keeps the app fully usable.
 - Console error observed: "Firebase: Error (auth/configuration-not-found)" — this is the exact Firebase signal that Phone Auth is not enabled; documented for the user.
+
+---
+Task ID: 12
+Agent: main
+Task: Add Firebase Analytics (matching the Firebase console snippet the user pasted) + verify full integration.
+
+Work Log:
+- Updated src/lib/firebase.ts: added lazy `getFirebaseAnalytics()` using firebase/analytics (getAnalytics + isSupported), guarded for SSR/unsupported browsers.
+- Updated src/components/providers.tsx: calls getFirebaseAnalytics() once on client mount when isFirebaseConfigured.
+- Lint clean. Agent Browser verified:
+  - Consumer login page shows "Firebase Authentication · Real SMS" badge.
+  - Firebase Analytics network calls confirmed: gtag/js?id=G-J8M7DEC12G loaded + page_view event sent to tid=G-J8M7DEC12G with ep.origin=firebase.
+  - Phone OTP: Firebase signInWithPhoneNumber attempted, reCAPTCHA Enterprise → reCAPTCHA v2 fallback, returns auth/configuration-not-found (Phone Auth sign-in method still NOT enabled in the user's Firebase console), graceful demo OTP fallback completes login.
+- No runtime/page errors.
+
+Stage Summary:
+- Firebase config (snakzap-5a326) fully wired: Auth + Analytics both initialized with the user's official console snippet values.
+- Analytics: LIVE (page_view events flowing to G-J8M7DEC12G).
+- Auth SMS: code path correct, blocked only by Firebase console setting (Phone Auth sign-in method must be enabled + Blaze plan). Demo fallback keeps app usable until then.
