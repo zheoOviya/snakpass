@@ -1,6 +1,7 @@
 'use client'
 
 import { initializeApp, getApps, type FirebaseApp } from 'firebase/app'
+import { getAnalytics, isSupported, type Analytics } from 'firebase/analytics'
 import { getAuth, type Auth, RecaptchaVerifier, signInWithPhoneNumber, type ConfirmationResult, type User as FbUser } from 'firebase/auth'
 
 // Firebase Authentication — phone OTP.
@@ -13,6 +14,9 @@ import { getAuth, type Auth, RecaptchaVerifier, signInWithPhoneNumber, type Conf
 // When Firebase is unavailable or the phone-auth call is rejected, the login UI
 // falls back to the demo OTP service (see src/lib/otp-service.ts + /api/auth/otp/*)
 // so the app stays usable.
+//
+// Analytics is initialized lazily (only in the browser, only if supported) —
+// matches the Firebase console snippet the user pasted.
 
 const firebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
@@ -30,12 +34,21 @@ export const isFirebaseConfigured = Boolean(
 
 let app: FirebaseApp | null = null
 let authInstance: Auth | null = null
+let analyticsInstance: Analytics | null = null
 
-export function getFirebaseAuth(): Auth | null {
+function ensureApp(): FirebaseApp | null {
   if (!isFirebaseConfigured) return null
   if (!app) {
     app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig as Record<string, string>)
-    authInstance = getAuth(app)
+  }
+  return app
+}
+
+export function getFirebaseAuth(): Auth | null {
+  const a = ensureApp()
+  if (!a) return null
+  if (!authInstance) {
+    authInstance = getAuth(a)
     // Use Hindi locale for the SMS OTP if the browser supports it.
     try {
       authInstance.languageCode = 'hi'
@@ -44,6 +57,21 @@ export function getFirebaseAuth(): Auth | null {
     }
   }
   return authInstance
+}
+
+// Lazy analytics — only initialized in a browser that supports it.
+export async function getFirebaseAnalytics(): Promise<Analytics | null> {
+  const a = ensureApp()
+  if (!a) return null
+  if (analyticsInstance) return analyticsInstance
+  try {
+    const ok = await isSupported()
+    if (!ok) return null
+    analyticsInstance = getAnalytics(a)
+    return analyticsInstance
+  } catch {
+    return null
+  }
 }
 
 // Build an invisible reCAPTCHA verifier (required by Firebase phone auth).
