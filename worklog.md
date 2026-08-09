@@ -112,3 +112,26 @@ Stage Summary:
 - Firebase Auth integration code present; demo mode surfaces OTP for preview. Same OTP technique used for login + 2FA + pickup.
 - 25 distinct food .svg illustrations on every menu item.
 - Full order workflow verified working end-to-end across all three portals.
+
+---
+Task ID: 8-11
+Agent: main
+Task: Activate real Firebase SMS OTP with user-provided Firebase project config.
+
+Work Log:
+- Added NEXT_PUBLIC_FIREBASE_* env vars to .env (apiKey, authDomain, projectId, storageBucket, messagingSenderId, appId, measurementId) for project snakzap-5a326.
+- Updated src/lib/firebase.ts to read all config fields + set languageCode 'hi' for SMS OTP.
+- Created /api/auth/firebase/session route — mints a SnakZap session cookie from a Firebase-verified phone (client calls this after confirmationResult.confirm succeeds). Logs AUTH_FIREBASE_OTP_LOGIN to audit trail. NOTE: production should verify the Firebase ID token server-side via Admin SDK (needs service-account key, not provided).
+- Refactored PhoneOtpLogin component:
+  - Detects isFirebaseConfigured at build time; shows "Firebase Authentication · Real SMS" badge when active.
+  - Send OTP: attempts Firebase signInWithPhoneNumber (with invisible reCAPTCHA). On success, real SMS is sent and verify uses confirmationResult.confirm → /api/auth/firebase/session.
+  - On Firebase failure (e.g. auth/configuration-not-found when Phone Auth not enabled, or billing not on Blaze), transparently falls back to demo OTP service and shows a banner explaining the fallback.
+  - Verify step routes to Firebase confirm (real) or /api/auth/otp/verify (demo) based on active mode.
+- Clean-restart dev server (env vars + .next clear). All routes return 200.
+- Agent Browser verified: consumer login now shows "Firebase Authentication · Real SMS" badge; Send OTP triggers Firebase (reCAPTCHA Enterprise attempted, fell back to reCAPTCHA v2), Firebase returns auth/configuration-not-found (expected — Phone Auth sign-in method not yet enabled in the user's Firebase console), app transparently falls back to demo OTP, login completes, audit log records AUTH_OTP_LOGIN.
+- Lint clean. No runtime errors.
+
+Stage Summary:
+- Firebase integration is LIVE: code correctly calls Firebase signInWithPhoneNumber with the user's project config.
+- Real SMS will work as soon as the user enables Phone Authentication in the Firebase console (Authentication → Sign-in method → Phone → Enable) AND upgrades the project to the Blaze plan (required for phone auth billing). Until then, graceful demo fallback keeps the app fully usable.
+- Console error observed: "Firebase: Error (auth/configuration-not-found)" — this is the exact Firebase signal that Phone Auth is not enabled; documented for the user.
