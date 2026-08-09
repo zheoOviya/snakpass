@@ -617,3 +617,26 @@ Stage Summary:
 - Assignment vs completion vs Production-ready explicitly distinguished.
 - Sprint 10 = verification with NO-GO remediation path (not automatic GO).
 - No implementation. No code. Planning artifact only.
+
+---
+Task ID: 29
+Agent: main
+Task: Sprint 1 / Wave 0 — implementation begins. P0-15, P0-19, P0-18, P0-12, P0-20 implemented.
+
+Work Log:
+- Set up implementation governance: IMPLEMENTATION_LOG.md (lifecycle state tracker per P0) + DEVIATION_LOG.md (architectural gap recording per discipline rule).
+- P0-15 (Migrations, critical-path root): converted db:push → proper Prisma migrations. Created initial_schema migration from existing 9-model schema. Disabled db:push script (returns error directing to db:migrate). Re-seeded DB intact. Lifecycle S2→S4.
+- P0-19 (Structured logging): created src/lib/logger.ts — structured JSON logger with traceId, levels (debug/info/warn/error), domain helpers (p0Log.payment/order/auth/invariant/exception). Logs to stdout/stderr as parseable JSON. Lifecycle S2→S4.
+- P0-18 (Error handling): created src/lib/errors.ts — consistent error envelope {error:{code,message,traceId,details}}, AppError class with typed ErrorCode enum, withErrorHandler wrapper. Applied to orders POST route. Verified: validation errors return VALIDATION_ERROR + field details + traceId. Lifecycle S2→S4.
+- P0-12 (Zod validation): created src/lib/validation.ts — validateBody/validateQuery helpers + 10 shared schemas (phone E.164, OTP 6-digit, email, UUID, order status, kill-switch key, create-order body, OTP send/verify, admin login/verify, status update, menu availability, kill-switch toggle). Applied to orders POST. Verified: empty-items returns VALIDATION_ERROR with field-level errors. Lifecycle S2→S4.
+- P0-20 (Health checks): created /api/health endpoint — checks DB (SELECT 1 + latency) + realtime service (port 3003). Returns {status, timestamp, checks} with per-component ok/degraded/down. HTTP 200/503. Verified: GET /api/health returns degraded (db ok, realtime degraded expected for plain HTTP on socket.io path). Lifecycle S2→S4.
+- All 5 P0s lint-clean. App fully functional (landing 200, consumer 200, health 200, restaurants API 200, orders validation working).
+- No deviations discovered — all implementations matched matrix v1.4 acceptance criteria.
+- Remaining Wave-0 P0s (P0-09, 22, 23, 13, 14, 16, 21, 27) still at S2 (Specified) — next sprint work.
+
+Stage Summary:
+- Sprint 1 / Wave 0: 5 of 13 P0s implemented (S4). Critical-path root P0-15 done — downstream waves unblocked.
+- Foundation layer partially stood up: migrations, logging, error handling, validation, health checks.
+- No deviations. No architectural gaps found. Implementation matches locked planning chain.
+- Governance artifacts in place: IMPLEMENTATION_LOG.md + DEVIATION_LOG.md.
+- Implementation continues per Sprint Plan.

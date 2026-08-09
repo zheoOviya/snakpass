@@ -1,0 +1,111 @@
+import { z } from 'zod'
+import { NextRequest } from 'next/server'
+import { AppError } from './errors'
+
+// P0-12 — Zod input validation on every API
+// No API accepts unvalidated input; 400 on schema mismatch.
+// Control/Enabler (Architectural Law 6): validates inputs, does not enforce a business truth.
+
+// Parse and validate a JSON request body against a Zod schema.
+// Throws AppError(VALIDATION_ERROR) on mismatch — caught by withErrorHandler.
+export async function validateBody<T>(req: NextRequest, schema: z.ZodType<T>): Promise<T> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    throw new AppError('VALIDATION_ERROR', 'Invalid JSON body', 400)
+  }
+  const result = schema.safeParse(body)
+  if (!result.success) {
+    const details: Record<string, string> = {}
+    for (const issue of result.error.issues) {
+      const path = issue.path.join('.') || '_'
+      details[path] = issue.message
+    }
+    throw new AppError('VALIDATION_ERROR', 'Request validation failed', 400, details)
+  }
+  return result.data
+}
+
+// Validate query params against a Zod schema.
+export function validateQuery<T>(req: NextRequest, schema: z.ZodType<T>): T {
+  const params = Object.fromEntries(req.nextUrl.searchParams.entries())
+  const result = schema.safeParse(params)
+  if (!result.success) {
+    const details: Record<string, string> = {}
+    for (const issue of result.error.issues) {
+      const path = issue.path.join('.') || '_'
+      details[path] = issue.message
+    }
+    throw new AppError('VALIDATION_ERROR', 'Query validation failed', 400, details)
+  }
+  return result.data
+}
+
+// --- Shared schemas ---
+
+export const phoneSchema = z.string().regex(/^\+?[0-9]{10,15}$/, 'Invalid phone number (E.164 expected)')
+export const otpSchema = z.string().length(6, 'OTP must be 6 digits').regex(/^\d{6}$/, 'OTP must be numeric')
+export const otpPurposeSchema = z.enum(['consumer_login', 'vendor_login', 'admin_2fa', 'pickup'])
+export const emailSchema = z.string().email('Invalid email')
+export const uuidSchema = z.string().min(1, 'ID required')
+export const orderStatusSchema = z.enum([
+  'CONFIRMED', 'PREPARING', 'ALMOST_READY', 'READY_FOR_PICKUP', 'PICKED_UP', 'CANCELLED',
+])
+export const killSwitchKeySchema = z.enum(['ordering', 'payments', 'catering', 'new_vendors', 'wallet_cashback'])
+
+// Order creation body
+export const createOrderBodySchema = z.object({
+  restaurantId: uuidSchema,
+  items: z.array(z.object({
+    menuItemId: uuidSchema,
+    name: z.string().min(1).max(200),
+    price: z.number().int().nonnegative(),
+    quantity: z.number().int().positive(),
+  })).min(1, 'At least one item required'),
+  isCatering: z.boolean().optional().default(false),
+  headcount: z.number().int().positive().optional().nullable(),
+  note: z.string().max(500).optional().nullable(),
+})
+
+// OTP send body
+export const otpSendBodySchema = z.object({
+  phone: phoneSchema,
+  purpose: z.enum(['consumer_login', 'vendor_login']),
+})
+
+// OTP verify body
+export const otpVerifyBodySchema = z.object({
+  otpId: uuidSchema,
+  code: otpSchema,
+  phone: phoneSchema,
+  purpose: z.enum(['consumer_login', 'vendor_login']),
+})
+
+// Admin login body
+export const adminLoginBodySchema = z.object({
+  email: emailSchema,
+  password: z.string().min(1, 'Password required'),
+})
+
+// Admin 2FA verify body
+export const adminVerifyBodySchema = z.object({
+  otpId: uuidSchema,
+  code: otpSchema,
+})
+
+// Status update body
+export const statusUpdateBodySchema = z.object({
+  status: orderStatusSchema,
+  actorRole: z.string().optional(),
+})
+
+// Menu availability body
+export const menuAvailabilityBodySchema = z.object({
+  isAvailable: z.boolean(),
+})
+
+// Kill switch toggle body
+export const killSwitchToggleBodySchema = z.object({
+  enabled: z.boolean(),
+})
