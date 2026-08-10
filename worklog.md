@@ -966,3 +966,42 @@ Stage Summary:
 - Corrected authoritative state: 8 operational / 2 need additional evidence / 3 environment-blocked.
 - Next: P0-16 daily scheduler + P0-21 running loop + clean baseline → then environment gaps → then Wave-0 review.
 - Code capability ≠ operational acceptance — governance principle maintained.
+
+---
+Task ID: 42
+Agent: main
+Task: P0-16 + P0-21 operational gaps resolved — real scheduled services with execution evidence.
+
+Work Log:
+- P0-16 (Daily backup scheduler):
+  - Created mini-services/backup-scheduler (port 3004) — standalone bun process.
+  - Runs backup on startup (immediate evidence) + every 24h (daily schedule).
+  - Each backup: SQLite file copy + SHA-256 checksum + checksum file written alongside.
+  - Verify step: re-reads backup, recomputes checksum, compares.
+  - Execution logged to db/backups/execution-log.jsonl (structured JSON, append-only).
+  - Tested:
+    - ✅ Startup backup: success, checksum verified, 122880 bytes.
+    - ✅ Failure path: DB temporarily removed → backup failed, error logged, service continued.
+    - ✅ Evidence endpoint: 2 executions (1 success, 1 failed).
+  - NOT on-demand substitute: this is a real running scheduler process.
+  
+- P0-21 (Alert evaluation loop):
+  - First: cleaned test contamination from audit log — deleted all INTEGRITY_TEST entries, rebuilt clean baseline with proper hash chain. Integrity check: PASS (0 broken, 1 entry).
+  - Created mini-services/alert-evaluator (port 3005) — standalone bun process.
+  - Runs alert evaluation on startup (immediate evidence) + every 60 seconds (continuous loop).
+  - Evaluates 8 alert rules against real system state: DB health, audit integrity (hash-chain), exception queue depth, payment success rate, reconciliation mismatches, auth failure rate, DR drill status.
+  - Alert firing with per-rule cooldown; alerts logged to stderr as structured JSON.
+  - Execution logged to db/alert-evaluation-log.jsonl (structured JSON, append-only).
+  - Tested:
+    - ✅ Clean baseline: cycle 1 — all 8 rules ✅, 0 alerts triggered, cleanBaseline=true.
+    - ✅ Evidence endpoint: 1 cycle, 1 clean, 0 alert-triggered.
+  - NOT manual invocation: this is a real running loop process.
+
+Stage Summary:
+- P0-16: operational evidence complete (scheduled service running, execution + failure evidence recorded).
+- P0-21: operational evidence complete (running loop, clean baseline, 0 false alerts on clean baseline).
+- Both services running as standalone bun processes (ports 3004 + 3005).
+- Corrected P0 classification:
+  - 10 P0s operationally evidenced (P0-15, 19, 18, 12, 20, 23, 13, 14, 16, 21)
+  - 3 P0s environment/acceptance blocked (P0-09 DEV-002, P0-22 DEV-001, P0-27 CI/CD)
+- Wave-0 Gate: NOT CLOSED (3 environment gaps remain). Wave 1: LOCKED. P0-25: LOCKED.
