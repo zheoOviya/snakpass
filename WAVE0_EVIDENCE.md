@@ -455,21 +455,51 @@ These are P1 integration tasks, NOT P0 acceptance gaps. The P0 capabilities (lib
 
 ---
 
-## Governance status (unchanged)
+## Governance status (stakeholder ruling applied)
 
 ```
 DEV-001 → OPEN  🔴  (SQLite cannot faithfully enforce WORM)
 DEV-002 → OPEN  🔴  (no real Firebase service-account credentials)
 
-11 P0s → Evidence prepared — Wave-0 acceptance pending 🟡
-P0-09, P0-22 → Acceptance blocked 🔴
+P0-15, P0-19, P0-18, P0-12, P0-20, P0-23
+→ evidence prepared, acceptance pending
+
+P0-13, P0-14, P0-16, P0-21, P0-27
+→ implementation evidence present
+→ integration/operational evidence gap identified (NOT silently downgraded to P1)
+→ acceptance pending
+
+P0-09, P0-22
+→ acceptance blocked by OPEN deviations
 
 Wave-0 Gate → NOT CLOSED 🔴
 Wave-1 → LOCKED 🔒
 P0-25 → LOCKED 🔒
 ```
 
-**Next valid step:** DEV-001 closure (production WORM) + DEV-002 closure (real Firebase credentials) → then consolidated Wave-0 G/H review for all 13 P0s → then Wave-0 acceptance decision.
+### Three evidence tiers (stakeholder ruling)
+
+| Tier | Definition | Current state |
+|------|------------|---------------|
+| **Implemented evidence** | code/library exists | 11 P0s ✅ |
+| **Operational evidence** | control works in real application/deployment path | 6 P0s ✅; 5 P0s ❌ (integration gaps); 2 P0s ❌ (deviation-blocked) |
+| **Acceptance evidence** | independent review + named approval + all required criteria met | 0 P0s (all pending Wave-0 gate) |
+
+### Reclassification of integration gaps (stakeholder correction)
+
+The following were previously labeled "P1 concerns." Per stakeholder ruling, if their matrix acceptance criteria demand operational behavior, these are **open acceptance gaps**, NOT P1 concerns:
+
+| P0 | Gap | Matrix acceptance criterion | Classification |
+|----|-----|-----------------------------|----------------|
+| P0-13 | Rate limiter not wired into API middleware | "Auth/payment/admin-write return 503 when limiter unavailable" — requires limiter to be IN the request path | **Open acceptance gap** — not P1 |
+| P0-14 | CSRF verification not wired into API middleware | "State-changing POSTs require valid CSRF token" — requires verification to be IN the request path | **Open acceptance gap** — not P1 |
+| P0-16 | Backup not scheduled (no cron) | "Daily backups" — requires scheduled execution | **Open acceptance gap** — not P1 |
+| P0-21 | Alert rules not wired to metrics evaluation loop | "Alerts fire on defined thresholds" — requires evaluation loop running | **Open acceptance gap** — not P1 |
+| P0-27 | CI/CD pipeline not set up; rollback drill not run | "Rollback to previous known-good within 10 min" — requires actual pipeline + drill evidence | **Open acceptance gap** — not P1 |
+
+**These 5 P0s have implementation evidence but NOT operational evidence.** Their acceptance is blocked until the operational wiring is complete — they are NOT silently downgraded to P1.
+
+**Next valid step:** DEV-001 closure + DEV-002 closure + 5 operational wiring gaps resolved → then consolidated Wave-0 G/H review for all 13 P0s → then Wave-0 acceptance decision.
 
 ---
 

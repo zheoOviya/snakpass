@@ -887,3 +887,37 @@ Stage Summary:
 - 11 P0s evidence prepared. 2 P0s (P0-09, P0-22) acceptance blocked by OPEN deviations.
 - Wave-0 Gate: NOT CLOSED (requires all 13 P0s + both deviations closed).
 - Next: DEV-001 closure (production WORM) + DEV-002 closure (real Firebase creds) → consolidated Wave-0 G/H review → Wave-0 acceptance.
+
+---
+Task ID: 39
+Agent: main
+Task: Stakeholder governance ruling applied — 5 integration gaps reclassified from "P1 concerns" to "open acceptance gaps."
+
+Work Log:
+- Stakeholder caught that P0-13, P0-14, P0-16, P0-21, P0-27 integration gaps were silently labeled "P1 concerns" — but if their matrix acceptance criteria demand operational behavior, they are open acceptance gaps, NOT P1.
+- Applied reclassification in WAVE0_EVIDENCE.md:
+  - P0-13 (rate limiter not wired to middleware): matrix demands "return 503 when limiter unavailable" — requires limiter IN request path → OPEN ACCEPTANCE GAP
+  - P0-14 (CSRF not wired to middleware): matrix demands "state-changing POSTs require valid CSRF token" — requires verification IN request path → OPEN ACCEPTANCE GAP
+  - P0-16 (backup not scheduled): matrix demands "daily backups" — requires scheduled execution → OPEN ACCEPTANCE GAP
+  - P0-21 (alert rules not wired to metrics loop): matrix demands "alerts fire on defined thresholds" — requires evaluation loop running → OPEN ACCEPTANCE GAP
+  - P0-27 (CI/CD not set up, rollback drill not run): matrix demands "rollback within 10 min" — requires actual pipeline + drill evidence → OPEN ACCEPTANCE GAP
+- Added 3-tier evidence framework to WAVE0_EVIDENCE.md:
+  - Implemented evidence (code exists): 11 P0s ✅
+  - Operational evidence (control works in real path): 6 P0s ✅, 5 P0s ❌, 2 P0s ❌ (deviation-blocked)
+  - Acceptance evidence (review + approval + all criteria): 0 P0s (all pending gate)
+- Updated governance status block with corrected classification.
+- No P0 silently downgraded. No acceptance gap hidden.
+
+Stage Summary:
+- Wave-0 evidence preparation complete for review; Wave-0 acceptance NOT yet eligible.
+- 3 categories of P0s:
+  - 6 P0s (P0-15, 19, 18, 12, 20, 23): implemented + operational evidence → acceptance pending gate
+  - 5 P0s (P0-13, 14, 16, 21, 27): implemented evidence but operational gap → acceptance blocked
+  - 2 P0s (P0-09, 22): deviation-blocked → acceptance blocked
+- Wave-0 Gate: NOT CLOSED. Wave 1: LOCKED. P0-25: LOCKED.
+- Next valid steps (all required before Wave-0 gate review):
+  1. 5 operational wiring gaps resolved (P0-13, 14, 16, 21, 27)
+  2. DEV-001 closure (production WORM)
+  3. DEV-002 closure (real Firebase credentials)
+  4. Consolidated Wave-0 G/H review for all 13 P0s
+  5. Wave-0 acceptance decision
