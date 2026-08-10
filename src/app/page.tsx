@@ -8,31 +8,34 @@ import { Card, CardContent } from '@/components/ui/card'
 
 const PORTALS = [
   {
-    href: '/consumer',
+    href: '/?XTransformPort=3006',
     title: 'Consumer',
     desc: 'Order ahead, pay digitally & pick up without waiting. Live kitchen tracking.',
     icon: <Utensils className="h-7 w-7" />,
     gradient: 'from-teal-500 to-emerald-600',
     cta: 'Order food',
     features: ['OTP phone login', 'Real-time order tracking', 'QR + OTP pickup'],
+    port: '3006',
   },
   {
-    href: '/vendor',
+    href: '/?XTransformPort=3007',
     title: 'Vendor',
     desc: 'Run your live kitchen — accept orders, manage menu & advance prep status.',
     icon: <Store className="h-7 w-7" />,
     gradient: 'from-orange-500 to-amber-600',
     cta: 'Open kitchen',
     features: ['OTP phone login', 'Live order queue', 'Menu availability'],
+    port: '3007',
   },
   {
-    href: '/admin',
+    href: '/?XTransformPort=3008',
     title: 'Ops Admin',
     desc: 'Governance console — metrics, kill switches, audit trail & order oversight.',
     icon: <ShieldCheck className="h-7 w-7" />,
     gradient: 'from-slate-700 to-slate-900',
     cta: 'Open console',
     features: ['Email + 2FA login', 'Kill switches', 'Audit trail'],
+    port: '3008',
   },
 ]
 
@@ -96,9 +99,12 @@ export default function Home() {
                     <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-white/20 backdrop-blur">
                       {p.icon}
                     </div>
-                    <div>
+                    <div className="flex-1">
                       <h3 className="text-lg font-bold">{p.title}</h3>
                     </div>
+                    <span className="rounded-full bg-white/20 px-2.5 py-1 text-xs font-mono font-semibold">
+                      :{p.port}
+                    </span>
                   </div>
                   <CardContent className="p-5">
                     <p className="text-sm text-muted-foreground">{p.desc}</p>
@@ -121,20 +127,29 @@ export default function Home() {
 
         {/* Demo credentials */}
         <div className="mt-8 rounded-2xl border border-dashed bg-muted/30 p-5">
-          <h3 className="mb-2 text-sm font-semibold">Demo credentials</h3>
+          <h3 className="mb-2 text-sm font-semibold">Demo credentials — each portal on its own port</h3>
           <div className="grid gap-3 text-xs sm:grid-cols-3">
             <div className="rounded-lg bg-background p-3">
-              <p className="font-medium text-teal-700 dark:text-teal-300">Consumer</p>
+              <div className="flex items-center justify-between">
+                <p className="font-medium text-teal-700 dark:text-teal-300">Consumer</p>
+                <span className="font-mono text-[10px] text-muted-foreground">port 3006</span>
+              </div>
               <p className="mt-1 text-muted-foreground">Phone OTP login</p>
               <p className="font-mono text-foreground">+919876500001</p>
             </div>
             <div className="rounded-lg bg-background p-3">
-              <p className="font-medium text-orange-700 dark:text-orange-300">Vendor</p>
+              <div className="flex items-center justify-between">
+                <p className="font-medium text-orange-700 dark:text-orange-300">Vendor</p>
+                <span className="font-mono text-[10px] text-muted-foreground">port 3007</span>
+              </div>
               <p className="mt-1 text-muted-foreground">Phone OTP login</p>
               <p className="font-mono text-foreground">+919876500002</p>
             </div>
             <div className="rounded-lg bg-background p-3">
-              <p className="font-medium text-slate-700 dark:text-slate-300">Ops Admin</p>
+              <div className="flex items-center justify-between">
+                <p className="font-medium text-slate-700 dark:text-slate-300">Ops Admin</p>
+                <span className="font-mono text-[10px] text-muted-foreground">port 3008</span>
+              </div>
               <p className="mt-1 text-muted-foreground">Email + 2FA</p>
               <p className="font-mono text-foreground">admin@snakzap.com</p>
               <p className="font-mono text-foreground">admin123</p>
