@@ -1,19 +1,18 @@
--- RedefineTables
-PRAGMA defer_foreign_keys=ON;
-PRAGMA foreign_keys=OFF;
-CREATE TABLE "new_AuditLog" (
-    "id" TEXT NOT NULL PRIMARY KEY,
-    "actorId" TEXT,
-    "actorRole" TEXT NOT NULL DEFAULT 'SYSTEM',
-    "action" TEXT NOT NULL,
-    "metadata" TEXT NOT NULL DEFAULT '{}',
-    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    "prevHash" TEXT NOT NULL DEFAULT 'GENESIS',
-    "hash" TEXT NOT NULL DEFAULT '',
-    CONSTRAINT "AuditLog_actorId_fkey" FOREIGN KEY ("actorId") REFERENCES "User" ("id") ON DELETE SET NULL ON UPDATE CASCADE
-);
-INSERT INTO "new_AuditLog" ("action", "actorId", "actorRole", "createdAt", "id", "metadata") SELECT "action", "actorId", "actorRole", "createdAt", "id", "metadata" FROM "AuditLog";
-DROP TABLE "AuditLog";
-ALTER TABLE "new_AuditLog" RENAME TO "AuditLog";
-PRAGMA foreign_keys=ON;
-PRAGMA defer_foreign_keys=OFF;
+-- AlterTable
+ALTER TABLE "AuditLog" ADD COLUMN "prevHash" TEXT NOT NULL DEFAULT 'GENESIS';
+ALTER TABLE "AuditLog" ADD COLUMN "hash" TEXT NOT NULL DEFAULT '';
+
+-- DEV-001 mitigation: SQLite DB triggers to reject UPDATE/DELETE on audit log.
+-- NOTE: These are NOT storage-level WORM (bypassable via DROP TRIGGER).
+-- Production must use PostgreSQL REVOKE or WORM storage service.
+CREATE TRIGGER IF NOT EXISTS prevent_audit_update
+BEFORE UPDATE ON AuditLog
+BEGIN
+  SELECT RAISE(ABORT, 'AUDIT_WORM: UPDATE rejected — audit log is append-only');
+END;
+
+CREATE TRIGGER IF NOT EXISTS prevent_audit_delete
+BEFORE DELETE ON AuditLog
+BEGIN
+  SELECT RAISE(ABORT, 'AUDIT_WORM: DELETE rejected — audit log is append-only');
+END;

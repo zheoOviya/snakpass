@@ -12,25 +12,35 @@
 - **P0:** P0-22 (Audit trail integrity)
 - **Invariant:** I-07 (Audit Integrity)
 - **Matrix acceptance criteria:** "Audit entries immutable; every admin/financial action audited" + enforcement: "Storage-level WORM + reject on update/delete"
-- **Closure actions taken:**
-  1. Hash-chain tamper-evidence implemented: each audit entry includes `prevHash` (SHA-256 of previous entry) + `hash` (SHA-256 of own data). Schema migrated; seed updated.
-  2. `auditIntegrityCheck()` walks the full chain chronologically, recomputes each hash, verifies chain linkage (prevHash matches) and hash integrity (stored hash matches recomputed).
-  3. Test harness at `/api/audit-integrity-test` — 7 steps, all pass:
-     - Write audit event ✅
-     - Verify chain (pre-mutation): intact ✅
-     - Attempt UPDATE mutation: applied ✅
-     - Verify chain (post-mutation): tamper DETECTED (hash mismatch) ✅
-     - Restore original value ✅
-     - Delete detection: DELETE DETECTED (prevHash mismatch) ✅
-     - Clean state restored: chain intact ✅
-  4. Known limitation documented: "restore-to-original" after UPDATE is undetectable by hash-chain alone (hash recomputes to same value). This is inherent to hash-chain without external anchor. DELETE detection works (chain linkage breaks).
-- **Remaining gap:** Hash-chain provides tamper-EVIDENCE (detection), NOT tamper-PREVENTION (blocking). Matrix acceptance demands "Storage-level WORM + reject on update/delete" — true prevention requires production storage (PostgreSQL REVOKE, QLDB, or separate audit DB). SQLite cannot enforce this.
-- **Status:** OPEN — mitigation implemented (hash-chain tamper-evidence); acceptance criterion outstanding (storage-level WORM prevention).
-  - Mitigation progress: hash-chain makes mutations DETECTABLE (UPDATE hash mismatch + DELETE chain-breakage both tested).
-  - Outstanding acceptance: matrix demands "Storage-level WORM + reject on update/delete" — true PREVENTION (blocking mutations, not just detecting them) requires production-grade immutable storage (PostgreSQL REVOKE UPDATE/DELETE, AWS QLDB, or separate audit DB). SQLite cannot enforce this.
-  - "Partially closed" is a PROGRESS label, NOT acceptance closure. Deviation remains OPEN until storage-level WORM is deployed and attempted-mutation-rejected evidence is produced.
+
+- **Mitigation layers implemented (progress, NOT acceptance closure):**
+  1. **Application-level append-only** (`src/lib/audit.ts`): single sanctioned write path; all other access read-only.
+  2. **Hash-chain tamper-evidence**: each entry includes `prevHash` + `hash` (SHA-256). `auditIntegrityCheck()` verifies full chain. 7-step test harness passes — UPDATE and DELETE mutations are DETECTED.
+  3. **SQLite DB triggers** (`prevent_audit_update`, `prevent_audit_delete`): `BEFORE UPDATE` and `BEFORE DELETE` triggers with `RAISE(ABORT)` reject mutations at the DB engine level. Tested:
+     - ✅ Authorized INSERT works (audit write succeeds)
+     - ✅ Unauthorized UPDATE: REJECTED by DB trigger
+     - ✅ Unauthorized DELETE: REJECTED by DB trigger
+
+- **Critical finding — SQLite CANNOT faithfully enforce storage-level WORM:**
+  - **BYPASS TEST PASSED**: `DROP TRIGGER prevent_audit_update; UPDATE AuditLog SET action='BYPASSED';` — SUCCEEDED.
+  - Anyone with DB write access can DROP the triggers, mutate audit entries, and re-create triggers.
+  - SQLite has no permission system (no GRANT/REVOKE like PostgreSQL) to prevent trigger dropping.
+  - **This is NOT storage-level WORM.** Storage-level WORM must be UN-BYPASSABLE even by someone with DB access.
+  - Per stakeholder governance constraint: "If SQLite cannot faithfully enforce storage-level WORM, do NOT declare it implemented."
+
+- **Closure criterion (production storage architecture):**
+  DEV-001 can only be CLOSED when ONE of the following is deployed AND tested with attempted-mutation-rejected evidence:
+  1. **PostgreSQL with `REVOKE UPDATE, DELETE ON audit_logs FROM app_user`** — DB permission prevents mutation even from application user; DBA retains access but audit trail is separate from app credentials.
+  2. **AWS QLDB or equivalent WORM storage service** — immutable by design; mutations impossible at storage level.
+  3. **Separate audit database** with no mutation API exposed — application can only INSERT; no UPDATE/DELETE path exists.
+  In all cases: unauthorized UPDATE/DELETE attempt must be REJECTED (not just detected), and the rejection must be at the storage/permission level (not bypassable by DB write access).
+
+- **Status:** **OPEN** — mitigation layers implemented (hash-chain + SQLite triggers); acceptance criterion outstanding (production storage-level WORM).
+  - Mitigation layers: hash-chain (detection) + SQLite triggers (DB-level rejection, but bypassable).
+  - Outstanding: production storage architecture that provides un-bypassable WORM enforcement.
+  - SQLite dev environment CANNOT faithfully enforce storage-level WORM — bypass test proves it.
 - **Blocks:** P0-22 reaching `Production-ready` (S9). Does NOT block `Implemented` (S4).
-- **Discovered:** Sprint 1, Wave 0. Mitigation added: Sprint 1, Wave 0 closure. Acceptance outstanding.
+- **Discovered:** Sprint 1, Wave 0. Bypass test: Sprint 1, Wave 0 closure attempt.
 
 ### DEV-002 — P0-09 Firebase verify: demo-trust mode (no service-account credentials)
 
