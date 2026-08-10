@@ -832,3 +832,29 @@ Stage Summary:
 - Both block Production-ready (S9), not Implemented (S4).
 - Wave-0 Gate: NOT CLOSED. Wave 1: LOCKED. P0-25: LOCKED.
 - Next valid step per governance: Wave-0 G/H review for the P0s that CAN be reviewed (11 P0s without open deviations) + documented evidence gap for the 2 with open deviations.
+
+---
+Task ID: 37
+Agent: main
+Task: Governance ruling accepted — Option B; Wave-0 Gate blocked until ALL 13 P0s have evidence+review+approval.
+
+Work Log:
+- Stakeholder chose Option B: Wave-0 Gate NOT CLOSED until all 13 P0s pass G/H review.
+- Key governance distinction locked: "Evidence preparation may proceed in parallel" ≠ "Wave-0 acceptance may proceed."
+- 11 non-deviation P0s may begin evidence/reviewer/approver preparation — but result is "Evidence prepared — Wave-0 acceptance pending", NOT "11 P0s accepted."
+- P0-09 and P0-22 remain acceptance-blocked (DEV-001/DEV-002 OPEN). Environment limitation ≠ bypass.
+- Execution order locked:
+  1. 11 non-deviation P0s → evidence preparation (parallel, may proceed)
+  2. DEV-001 → production WORM architecture (when available)
+  3. DEV-002 → real Firebase credentials + real-token evidence (when available)
+  4. All 13 P0s → complete G/H evidence
+  5. Wave-0 Gate Review
+  6. ACCEPTED → Wave 1 UNLOCK
+  7. P0-25
+- Updated IMPLEMENTATION_LOG.md governance lock section with full ruling + execution order.
+- P0-25: LOCKED. No implementation.
+
+Stage Summary:
+- Wave-0 Gate: NOT CLOSED. Wave 1: LOCKED. P0-25: LOCKED.
+- Next: begin evidence preparation for 11 non-deviation P0s (test evidence + observable signals + reviewer + approver).
+- DEV-001 and DEV-002 remain OPEN — closure depends on production environment access (PostgreSQL/QLDB for WORM; Firebase Console for service-account credentials).

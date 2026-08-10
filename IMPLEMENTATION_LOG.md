@@ -23,11 +23,26 @@ Governance rules:
 - Mitigation ≠ deviation closure
 - DEV-001 and DEV-002 remain OPEN
 - Test-harness production guards are part of Wave-0 evidence
-- Wave-0 acceptance requires evidence + review + approval for every P0
+- Wave-0 acceptance requires evidence + review + approval for EVERY P0 (all 13)
 - No architectural gap silently closed
+- Environment limitation ≠ bypass of acceptance criteria
+- "Evidence preparation may proceed in parallel" ≠ "Wave-0 acceptance may proceed"
 
-Next valid execution gate:
-DEV-001 closure → DEV-002 closure → Wave-0 G/H review → Wave-0 acceptance → P0-25 / Wave 1 unlock
+Current state:
+- 11 non-deviation P0s → evidence/reviewer/approver preparation (may proceed) 🟡
+- P0-09, P0-22 → acceptance blocked (DEV-001/DEV-002 OPEN) 🔴
+- Wave-0 Gate → NOT CLOSED 🔴
+- Wave 1 → LOCKED 🔒
+- P0-25 → LOCKED 🔒
+
+Execution order:
+1. 11 non-deviation P0s → evidence/reviewer/approver preparation
+2. DEV-001 → production WORM architecture (when available)
+3. DEV-002 → real Firebase credentials + real-token evidence (when available)
+4. All 13 P0s → complete G/H evidence
+5. Wave-0 Gate Review
+6. ACCEPTED → Wave 1 UNLOCK
+7. P0-25
 ```
 
 ### P0 lifecycle state tracker
