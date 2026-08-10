@@ -943,3 +943,26 @@ Stage Summary:
 - P0-27 gap is an environment boundary, NOT a code gap. Same class as DEV-001 (SQLite WORM) and DEV-002 (Firebase creds).
 - Total open acceptance gaps: 3 (DEV-001, DEV-002, P0-27 CI/CD) — all environment-boundary.
 - Wave-0 Gate: NOT CLOSED. Wave 1: LOCKED. P0-25: LOCKED.
+
+---
+Task ID: 41
+Agent: main
+Task: Stakeholder governance correction — "10 P0s operational" claim withdrawn; corrected to 8/2/3.
+
+Work Log:
+- Stakeholder caught that P0-16 (backup) and P0-21 (alerting) were prematurely classified as "operational."
+  - P0-16: on-demand /api/backup endpoint ≠ "daily backups" (matrix criterion demands scheduled execution)
+  - P0-21: manually invoked /api/alerts/evaluate ≠ "running evaluation loop" (matrix criterion demands continuous/scheduled evaluation)
+  - P0-21 also: test contamination from prior audit-integrity-test left tampered entries → alerts triggered on contaminated baseline, not clean baseline
+- Corrected classification in WAVE0_EVIDENCE.md:
+  - 8 P0s operationally evidenced (P0-15, 19, 18, 12, 20, 23, 13, 14)
+  - 2 P0s need additional operational evidence (P0-16 daily scheduler, P0-21 running loop + clean baseline)
+  - 3 P0s environment/acceptance blocked (P0-09 DEV-002, P0-22 DEV-001, P0-27 CI/CD)
+- "10 P0s operational" claim formally withdrawn.
+- Updated governance status block + execution order.
+- P0-25: LOCKED. No implementation.
+
+Stage Summary:
+- Corrected authoritative state: 8 operational / 2 need additional evidence / 3 environment-blocked.
+- Next: P0-16 daily scheduler + P0-21 running loop + clean baseline → then environment gaps → then Wave-0 review.
+- Code capability ≠ operational acceptance — governance principle maintained.
