@@ -455,51 +455,61 @@ These are P1 integration tasks, NOT P0 acceptance gaps. The P0 capabilities (lib
 
 ---
 
-## Governance status (stakeholder ruling applied)
+## Governance status (stakeholder ruling — code capability ≠ operational acceptance)
 
 ```
-DEV-001 → OPEN  🔴  (SQLite cannot faithfully enforce WORM)
-DEV-002 → OPEN  🔴  (no real Firebase service-account credentials)
+P0-13 → operational evidence ✅ (rate limiter in request path, fail-closed 503 tested)
+P0-14 → operational evidence ✅ (CSRF middleware in request path, 403 on missing/mismatched token)
+P0-15 → operational evidence ✅ (migrations applied, db:push disabled)
+P0-19 → operational evidence ✅ (structured logging live in dev.log)
+P0-18 → operational evidence ✅ (error envelope on all routes, traceId verified)
+P0-12 → operational evidence ✅ (Zod validation on all routes, 5 negative tests)
+P0-20 → operational evidence ✅ (health endpoint live, component status)
+P0-23 → operational evidence ✅ (kill-switch fail-safe with safe defaults)
 
-P0-15, P0-19, P0-18, P0-12, P0-20, P0-23
-→ evidence prepared, acceptance pending
+P0-16 → OPEN OPERATIONAL GAP 🔴
+  /api/backup endpoint exists + checksum + audit-logged
+  BUT: daily scheduled execution NOT evidenced (no cron/scheduler running)
+  Matrix criterion: "Daily backups" — on-demand endpoint ≠ daily schedule
 
-P0-13, P0-14, P0-16, P0-21, P0-27
-→ implementation evidence present
-→ integration/operational evidence gap identified (NOT silently downgraded to P1)
-→ acceptance pending
+P0-21 → OPEN OPERATIONAL GAP 🟡
+  /api/alerts/evaluate endpoint exists + 8 rules + real metrics wired
+  BUT: running evaluation loop NOT evidenced (manually invoked ≠ scheduled/continuous)
+  AND: test contamination from prior audit-integrity-test requires clean-baseline re-run
+  Matrix criterion: "Alerts fire on defined thresholds" — requires running loop, not manual invocation
 
-P0-09, P0-22
-→ acceptance blocked by OPEN deviations
+P0-27 → OPEN ENVIRONMENT GAP 🔴
+  Feature flags + deployment classification + rollback procedures implemented
+  BUT: no CI/CD pipeline, no deployed environment, no ≤10-min rollback drill evidence
+  Matrix criterion: "Rollback within 10 min" — requires actual pipeline + drill
+
+P0-09 → OPEN (DEV-002) 🔴 (no real Firebase service-account credentials)
+P0-22 → OPEN (DEV-001) 🔴 (SQLite cannot faithfully enforce storage-level WORM)
 
 Wave-0 Gate → NOT CLOSED 🔴
 Wave-1 → LOCKED 🔒
 P0-25 → LOCKED 🔒
 ```
 
-### Three evidence tiers (stakeholder ruling)
+### Corrected P0 classification (8/2/3)
 
-| Tier | Definition | Current state |
-|------|------------|---------------|
-| **Implemented evidence** | code/library exists | 11 P0s ✅ |
-| **Operational evidence** | control works in real application/deployment path | 6 P0s ✅; 5 P0s ❌ (integration gaps); 2 P0s ❌ (deviation-blocked) |
-| **Acceptance evidence** | independent review + named approval + all required criteria met | 0 P0s (all pending Wave-0 gate) |
+| Category | Count | P0s |
+|----------|-------|-----|
+| Operationally evidenced | 8 | P0-15, 19, 18, 12, 20, 23, 13, 14 |
+| Additional operational evidence needed | 2 | P0-16 (daily scheduler), P0-21 (running loop + clean baseline) |
+| Environment/acceptance blocked | 3 | P0-09 (DEV-002), P0-22 (DEV-001), P0-27 (CI/CD) |
 
-### Reclassification of integration gaps (stakeholder correction)
+### Next valid execution order
 
-The following were previously labeled "P1 concerns." Per stakeholder ruling, if their matrix acceptance criteria demand operational behavior, these are **open acceptance gaps**, NOT P1 concerns:
-
-| P0 | Gap | Matrix acceptance criterion | Classification |
-|----|-----|-----------------------------|----------------|
-| P0-13 | Rate limiter not wired into API middleware | "Auth/payment/admin-write return 503 when limiter unavailable" — requires limiter to be IN the request path | **Open acceptance gap** — not P1 |
-| P0-14 | CSRF verification not wired into API middleware | "State-changing POSTs require valid CSRF token" — requires verification to be IN the request path | **Open acceptance gap** — not P1 |
-| P0-16 | Backup not scheduled (no cron) | "Daily backups" — requires scheduled execution | **Open acceptance gap** — not P1 |
-| P0-21 | Alert rules not wired to metrics evaluation loop | "Alerts fire on defined thresholds" — requires evaluation loop running | **Open acceptance gap** — not P1 |
-| P0-27 | CI/CD pipeline not set up; rollback drill not run | "Rollback to previous known-good within 10 min" — requires actual pipeline + drill evidence | **Open acceptance gap** — not P1 |
-
-**These 5 P0s have implementation evidence but NOT operational evidence.** Their acceptance is blocked until the operational wiring is complete — they are NOT silently downgraded to P1.
-
-**Next valid step:** DEV-001 closure + DEV-002 closure + 5 operational wiring gaps resolved → then consolidated Wave-0 G/H review for all 13 P0s → then Wave-0 acceptance decision.
+```
+1. P0-16 → real daily scheduler + execution evidence
+2. P0-21 → real evaluation loop + clean-baseline evidence
+3. P0-27 → CI/CD + rollback drill (when deployment env available)
+4. DEV-001 + DEV-002 closure (when production env available)
+5. 13-P0 consolidated G/H review
+6. Wave-0 acceptance decision
+7. ONLY THEN → P0-25
+```
 
 ---
 
