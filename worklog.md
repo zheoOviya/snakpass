@@ -776,3 +776,33 @@ Stage Summary:
 - Wave 0: 13/13 P0s Implemented (S4). 2 deviations OPEN. G/H evidence PENDING.
 - Wave-0 Gate: NOT CLOSED. Wave 1: LOCKED.
 - S4 Implemented claims stand; S9 Production-ready claims do NOT (correct governance).
+
+---
+Task ID: 35
+Agent: main
+Task: DEV-001 closure attempt — honest assessment: SQLite CANNOT faithfully enforce storage-level WORM; deviation remains OPEN.
+
+Work Log:
+- Implemented SQLite DB triggers (prevent_audit_update, prevent_audit_delete) with RAISE(ABORT) — DB engine level rejection.
+- Tested:
+  - ✅ Authorized INSERT: works (audit write succeeds)
+  - ✅ Unauthorized UPDATE: REJECTED by DB trigger
+  - ✅ Unauthorized DELETE: REJECTED by DB trigger
+- CRITICAL BYPASS TEST:
+  - 🔴 DROP TRIGGER + UPDATE: SUCCEEDED — SQLite WORM is NOT faithful
+  - Anyone with DB write access can DROP triggers, mutate audit entries, re-create triggers
+  - SQLite has no GRANT/REVOKE permission system to prevent trigger dropping
+  - This is NOT storage-level WORM (which must be un-bypassable)
+- Per stakeholder governance constraint: "If SQLite cannot faithfully enforce storage-level WORM, do NOT declare it implemented."
+- DEV-001 remains OPEN. Mitigation layers (hash-chain + SQLite triggers) are progress, NOT acceptance closure.
+- Closure criterion: production storage architecture (PostgreSQL REVOKE, QLDB, or separate audit DB) with attempted-mutation-rejected evidence.
+- Added triggers to migration SQL for persistence.
+- Updated DEVIATION_LOG.md with bypass finding + closure criterion.
+
+Stage Summary:
+- DEV-001: OPEN — SQLite cannot faithfully enforce storage-level WORM (bypass test proves it).
+  - Mitigation: hash-chain (detection) + SQLite triggers (DB-level rejection, bypassable).
+  - Required: production storage architecture (PostgreSQL/QLDB/separate audit DB).
+- DEV-002: OPEN — next to attempt (real Firebase credentials + production-token tests).
+- Wave-0 Gate: NOT CLOSED. Wave 1: LOCKED.
+- P0-25: LOCKED.
