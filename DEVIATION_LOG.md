@@ -47,22 +47,47 @@
 - **P0:** P0-09 (Server-side Firebase ID token verification)
 - **Invariant:** I-12 (Session Revocation)
 - **Matrix acceptance criteria:** "Server rejects unverified identity; sessions bound to verified phone" + dependency: "Firebase Admin SDK + session"
-- **Implementation state:** `src/lib/firebase-admin.ts` with `verifyFirebaseToken()` via Firebase Admin SDK.
-- **Closure actions taken:**
-  1. Demo-trust mode is now HARD-DISABLED in production (`NODE_ENV=production` → throws `FIREBASE_ADMIN_NOT_CONFIGURED` error; no fallback to trusting client claims).
-  2. `firebase/session` route now calls `verifyFirebaseToken(idToken)` — phone number comes from the VERIFIED token, NOT from client claim.
-  3. Verification test harness at `/api/auth/firebase/verify-test` — 5 dev-mode tests all pass:
-     - missing-token → reject ✅
-     - malformed-token → reject ✅
-     - malformed-demo-format → reject ✅
-     - valid-demo-token → accept ✅
-     - demo-token-no-phone → reject ✅
-  4. Production verification path (`verifyIdToken(idToken, true)` with `checkRevoked=true`) is code-ready — verifies signature, expiry, issuer, audience, revocation.
-  5. Production-mode tests (valid/expired/malformed/wrong-project/revoked tokens) are documented as manual tests requiring real Firebase service-account credentials.
-- **Remaining gap:** Production verification path is CODE-READY but NOT EXERCISED with real credentials. Firebase service-account key not configured in this environment.
-- **Status:** OPEN — production fallback disabled; production verification evidence outstanding.
-  - Mitigation progress: demo-trust HARD-DISABLED in production (NODE_ENV=production → throws, no fallback). Route now calls verifyFirebaseToken() — phone from VERIFIED token, not client claim. Dev-mode test harness passes 5 tests.
-  - Outstanding acceptance: real Firebase service-account credentials not configured. Production verification path (verifyIdToken with checkRevoked=true) is code-ready but NOT EXERCISED with real tokens. Manual production-token tests (valid/expired/malformed/wrong-project/revoked) not yet run.
-  - "Partially closed" is a PROGRESS label, NOT acceptance closure. Deviation remains OPEN until real credentials are configured and all production-token verification tests pass with evidence.
+
+- **Closure attempt — assessment against 5 criteria:**
+
+  **1. Production configuration:**
+  - Firebase service-account credentials (`FIREBASE_SERVICE_ACCOUNT_PATH` or `FIREBASE_SERVICE_ACCOUNT_JSON`): **NOT SET** in this environment.
+  - Only client-side config (`NEXT_PUBLIC_FIREBASE_*`) is available — these are public-by-design Firebase web config, NOT server-side credentials.
+  - Service-account JSON (which contains `private_key`) requires generation from Firebase Console → Project Settings → Service Accounts → Generate new private key. This file is NOT available in this sandbox.
+  - **Production hard-disable verified:** `NODE_ENV=production` + no credentials → `verifyFirebaseToken()` throws `FIREBASE_ADMIN_NOT_CONFIGURED`. Demo-trust fallback is IMPOSSIBLE in production. ✅
+
+  **2. Real-token verification:**
+  - Cannot run. No service-account credentials configured.
+  - The 5 required token tests (valid/expired/malformed/wrong-project/revoked) CANNOT be executed with real Firebase tokens.
+  - Dev-mode tests (demo-trust) pass — but these are **simulation evidence**, NOT production evidence.
+  - `verifyIdToken(idToken, true)` with `checkRevoked=true` is code-ready but NOT exercised. ❌
+
+  **3. Server-side trust boundary:**
+  - `firebase/session` route calls `verifyFirebaseToken(idToken)` — phone comes from VERIFIED token. ✅
+  - Client-provided phone field is IGNORED (verified: `phone: '+919999999999'` in body → session created with token's phone `+919876500001`). ✅
+  - Forged token (non-demo, non-real): REJECTED (401). ✅
+  - Role boundary: non-vendor phone with `vendor_login` purpose: REJECTED (403). ✅
+  - **Trust boundary holds in dev mode.** But: in production without credentials, ALL tokens are rejected (hard-fail) — which means NO authentication works at all. This is correct fail-closed behavior, but means the system is non-functional for real auth until credentials are provided.
+
+  **4. Negative/security evidence:**
+  - Forged client claims cannot bypass authentication (phone from token, not client body). ✅
+  - Verification failures return consistent error envelope (`AUTHENTICATION_REQUIRED` 401 with traceId). ✅
+  - Credentials not exposed: service-account env vars not set; `.env*` in `.gitignore`; client-side vars are public-by-design. ✅
+  - Test endpoint production-guarded (403 in prod). ✅
+
+  **5. Production test evidence:**
+  - **NOT AVAILABLE.** No real Firebase service-account credentials in this environment.
+  - All tests above are **dev/simulation evidence** only.
+  - Real production-token tests require: (a) Firebase service-account JSON file, (b) Phone Auth enabled in Firebase Console, (c) Blaze plan for SMS, (d) real phone number with OTP for token generation.
+
+- **Decision rule applied:**
+  ```
+  Real credentials + all required token tests pass → DEV-002 CLOSED
+  NO real credentials → DEV-002 OPEN (evidence gap documented)
+  ```
+
+- **Status:** **OPEN** — production hard-disable works; trust boundary holds; dev tests pass. BUT: no real Firebase service-account credentials → real-token verification tests CANNOT run → production evidence NOT available.
+  - What works: demo-trust disabled in production ✅, trust boundary ✅, dev-mode tests ✅, security/credential isolation ✅
+  - What's outstanding: real Firebase service-account credentials + 5 real-token verification tests (valid/expired/malformed/wrong-project/revoked) with recorded evidence
 - **Blocks:** P0-09 reaching `Production-ready` (S9). Does NOT block `Implemented` (S4).
-- **Discovered:** Sprint 1, Wave 0. Mitigation added: Sprint 1, Wave 0 closure. Acceptance outstanding.
+- **Discovered:** Sprint 1, Wave 0. Closure attempt: Sprint 1, Wave 0. Evidence gap: no service-account credentials in this environment.

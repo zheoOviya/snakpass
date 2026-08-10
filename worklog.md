@@ -806,3 +806,29 @@ Stage Summary:
 - DEV-002: OPEN — next to attempt (real Firebase credentials + production-token tests).
 - Wave-0 Gate: NOT CLOSED. Wave 1: LOCKED.
 - P0-25: LOCKED.
+
+---
+Task ID: 36
+Agent: main
+Task: DEV-002 closure attempt — honest assessment: no real Firebase service-account credentials; deviation remains OPEN.
+
+Work Log:
+- Assessed DEV-002 against 5 closure criteria:
+  1. Production configuration: service-account credentials NOT SET (only client-side NEXT_PUBLIC vars available — public by design, not server-side). Production hard-disable verified: NODE_ENV=production + no creds → throws, demo-trust impossible. ✅
+  2. Real-token verification: CANNOT RUN. No service-account credentials. 5 required tests (valid/expired/malformed/wrong-project/revoked) unexecutable. verifyIdToken(idToken, true) code-ready but NOT exercised. ❌
+  3. Server-side trust boundary: verified — phone from token not client body (client phone IGNORED ✅); forged token REJECTED 401 ✅; role boundary holds 403 ✅; trust boundary holds in dev mode ✅
+  4. Negative/security: forged claims cannot bypass ✅; consistent error envelope ✅; credentials not exposed (.gitignore + env vars not set) ✅; test endpoint production-guarded ✅
+  5. Production test evidence: NOT AVAILABLE. All tests are dev/simulation evidence only. ❌
+- Decision rule applied: NO real credentials → DEV-002 OPEN (evidence gap documented)
+- What works: demo-trust disabled in prod ✅, trust boundary ✅, dev tests ✅, security ✅
+- What's outstanding: real Firebase service-account JSON + 5 real-token tests with recorded evidence
+- DEV-002 remains OPEN. Same as DEV-001 — environment limitation, not code gap.
+
+Stage Summary:
+- Both deviations OPEN (environment limitations, not code gaps):
+  - DEV-001: SQLite cannot faithfully enforce storage-level WORM (bypass proven)
+  - DEV-002: No real Firebase service-account credentials (real-token tests cannot run)
+- Both have solid mitigation layers implemented and tested in dev.
+- Both block Production-ready (S9), not Implemented (S4).
+- Wave-0 Gate: NOT CLOSED. Wave 1: LOCKED. P0-25: LOCKED.
+- Next valid step per governance: Wave-0 G/H review for the P0s that CAN be reviewed (11 P0s without open deviations) + documented evidence gap for the 2 with open deviations.
