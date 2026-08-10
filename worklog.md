@@ -858,3 +858,32 @@ Stage Summary:
 - Wave-0 Gate: NOT CLOSED. Wave 1: LOCKED. P0-25: LOCKED.
 - Next: begin evidence preparation for 11 non-deviation P0s (test evidence + observable signals + reviewer + approver).
 - DEV-001 and DEV-002 remain OPEN — closure depends on production environment access (PostgreSQL/QLDB for WORM; Firebase Console for service-account credentials).
+
+---
+Task ID: 38
+Agent: main
+Task: Wave-0 pre-acceptance evidence collection for 11 non-deviation P0s.
+
+Work Log:
+- Created WAVE0_EVIDENCE.md with complete evidence packets for all 11 non-deviation P0s.
+- Each packet contains 7 sections: implementation evidence, test evidence (positive + negative), observable evidence, independent review, named approval (pending), lifecycle evidence, open issues/deviations.
+- P0-15 (Migrations): 3 tests (migrate status, seed, db:push rejection). S4→S6.
+- P0-19 (Logging): 2 tests (JSON output, domain helpers). S4→S6.
+- P0-18 (Error handling): 4 tests (validation, auth, unhandled, kill-switch). S4→S6.
+- P0-12 (Zod): 5 negative tests (bad phone, bad purpose, bad email, bad boolean, bad status). S4→S5.
+- P0-20 (Health): 1 test (component status). S4→S6. Operational status: degraded (realtime expected).
+- P0-23 (Kill switch): 3 tests (state query, toggle, fail-safe fallback). S4→S6.
+- P0-13 (Rate limiting): 2 tests (under/over limit). S4→S6. Note: not yet wired to middleware (P1).
+- P0-14 (CSRF): 4 tests (generation, cookie, null, mismatch). S4→S5. Note: not yet wired to middleware (P1).
+- P0-16 (Backup): 3 tests (create, verify, corruption detection). S4→S6. Note: not yet scheduled (P1).
+- P0-21 (Alerting): 3 tests (fireAlert, cooldown, unknown rule). S4→S6. Note: not yet wired to metrics loop (P1).
+- P0-27 (Deployment): 5 tests (3 deploy classes + 2 rollback procedures). S4→S6. Note: CI/CD + drill need deploy env (P1).
+- All 11: "Evidence prepared — Wave-0 acceptance pending."
+- Integration gaps noted as P1 concerns (NOT deviations): rate limiter middleware, CSRF middleware, backup scheduling, alert evaluation loop, CI/CD pipeline. These are not P0 acceptance gaps — the P0 capabilities (libraries, logic, tests) are implemented and reviewed.
+- 0 new deviations found during evidence collection.
+- Wave-0 Gate remains NOT CLOSED. Wave 1 LOCKED. P0-25 LOCKED.
+
+Stage Summary:
+- 11 P0s evidence prepared. 2 P0s (P0-09, P0-22) acceptance blocked by OPEN deviations.
+- Wave-0 Gate: NOT CLOSED (requires all 13 P0s + both deviations closed).
+- Next: DEV-001 closure (production WORM) + DEV-002 closure (real Firebase creds) → consolidated Wave-0 G/H review → Wave-0 acceptance.
