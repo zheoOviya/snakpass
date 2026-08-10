@@ -1,20 +1,15 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Phone, ShieldCheck, ArrowLeft, Loader2, MessageSquare, Flame } from 'lucide-react'
+import { Phone, ShieldCheck, ArrowLeft, Loader2, MessageSquare } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { InputOTP, InputOTPGroup, InputOTPSlot } from '@/components/ui/input-otp'
 import { useToast } from '@/hooks/use-toast'
 import { useAuth } from '@/hooks/use-auth'
-import {
-  isFirebaseConfigured,
-  makeRecaptcha,
-  sendFirebaseOtp,
-  type ConfirmationResult,
-} from '@/lib/firebase'
+import { sendSupabaseOtp, verifySupabaseOtp, isSupabaseConfigured } from '@/lib/supabase'
 
 interface PhoneOtpLoginProps {
   title: string
@@ -26,18 +21,15 @@ interface PhoneOtpLoginProps {
   onDone: () => void
 }
 
-type Mode = 'firebase' | 'demo'
+type Mode = 'supabase' | 'demo'
 
 export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, icon, onDone }: PhoneOtpLoginProps) {
   const [step, setStep] = useState<'phone' | 'otp'>('phone')
   const [phone, setPhone] = useState(demoPhone ?? '+9198765')
-  const [otpId, setOtpId] = useState('') // demo-mode OTP record id
-  const [demoCode, setDemoCode] = useState('')
+  const [otpId, setOtpId] = useState('')
   const [code, setCode] = useState('')
   const [busy, setBusy] = useState(false)
-  const [mode, setMode] = useState<Mode>(isFirebaseConfigured ? 'firebase' : 'demo')
-  const [modeSwitched, setModeSwitched] = useState(false)
-  const confirmationRef = useRef<ConfirmationResult | null>(null)
+  const [mode, setMode] = useState<Mode>(isSupabaseConfigured ? 'supabase' : 'demo')
   const { toast } = useToast()
   const { refresh } = useAuth()
 
@@ -48,25 +40,15 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
     }
     setBusy(true)
 
-    if (mode === 'firebase' && isFirebaseConfigured) {
-      // Real Firebase phone OTP. signInWithPhoneNumber triggers an SMS via
-      // Firebase. If the project lacks phone-auth/billing, Firebase rejects
-      // here and we transparently fall back to demo mode.
-      try {
-        const recaptcha = makeRecaptcha('recaptcha-container')
-        const confirmation = await sendFirebaseOtp(phone, recaptcha)
-        confirmationRef.current = confirmation
+    if (mode === 'supabase' && isSupabaseConfigured) {
+      // Real Supabase OTP — sends actual SMS
+      const result = await sendSupabaseOtp(phone)
+      if (result.success) {
         setStep('otp')
-        toast({
-          title: 'OTP sent via Firebase',
-          description: `Real SMS sent to ${phone}`,
-        })
-      } catch (e) {
-        const msg = (e as Error)?.message ?? String(e)
-        console.warn('[firebase] phone OTP failed, falling back to demo:', msg)
+        toast({ title: 'OTP sent via Supabase', description: `SMS sent to ${phone}` })
+      } else {
+        // Supabase failed (e.g. phone auth not enabled, rate limit) — fall back to demo
         setMode('demo')
-        setModeSwitched(true)
-        // Fall through to demo send below.
         await sendDemoOtp()
       }
     } else {
@@ -85,8 +67,11 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
       const data = await res.json()
       if (!res.ok) throw new Error(data.error)
       setOtpId(data.otpId)
-      setDemoCode(data.code ?? '')
       setStep('otp')
+      toast({
+        title: 'OTP sent (demo mode)',
+        description: data.demo ? `Demo code: ${data.code}` : `Sent to ${phone}`,
+      })
     } catch (e) {
       toast({ title: 'Failed to send OTP', description: (e as Error).message, variant: 'destructive' })
     }
@@ -99,53 +84,51 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
     }
     setBusy(true)
 
-    if (mode === 'firebase' && confirmationRef.current) {
+    if (mode === 'supabase' && isSupabaseConfigured) {
+      // Real Supabase verification — get access token, send to server for JWT verification
+      const result = await verifySupabaseOtp(phone, code)
+      if (result.success && result.accessToken) {
+        // Send access token to server for session creation
+        try {
+          const res = await fetch('/api/auth/supabase/session', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ accessToken: result.accessToken, purpose }),
+          })
+          const data = await res.json()
+          if (!res.ok) throw new Error(data.error?.message || data.error)
+          await refresh()
+          toast({ title: 'Welcome!', description: data.user?.name ?? 'Logged in' })
+          onDone()
+        } catch (e) {
+          toast({ title: 'Session creation failed', description: (e as Error).message, variant: 'destructive' })
+        }
+      } else {
+        toast({ title: 'Verification failed', description: result.error || 'Invalid code', variant: 'destructive' })
+      }
+    } else {
+      // Demo verify
       try {
-        const result = await confirmationRef.current.confirm(code)
-        const fbUid = result.user.uid
-        // Mint our own session cookie from the verified phone.
-        const res = await fetch('/api/auth/firebase/session', {
+        const res = await fetch('/api/auth/otp/verify', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ phone, purpose, firebaseUid: fbUid }),
+          body: JSON.stringify({ otpId, code, phone, purpose }),
         })
         const data = await res.json()
-        if (!res.ok) throw new Error(data.error)
+        if (!res.ok) throw new Error(data.error?.message || data.error)
         await refresh()
         toast({ title: 'Welcome!', description: data.user?.name ?? 'Logged in' })
         onDone()
       } catch (e) {
         toast({ title: 'Verification failed', description: (e as Error).message, variant: 'destructive' })
-      } finally {
-        setBusy(false)
       }
-      return
     }
-
-    // Demo verify
-    try {
-      const res = await fetch('/api/auth/otp/verify', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ otpId, code, phone, purpose }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
-      await refresh()
-      toast({ title: 'Welcome!', description: data.user?.name ?? 'Logged in' })
-      onDone()
-    } catch (e) {
-      toast({ title: 'Verification failed', description: (e as Error).message, variant: 'destructive' })
-    } finally {
-      setBusy(false)
-    }
+    setBusy(false)
   }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-muted/50 to-background p-4">
-      {/* reCAPTCHA mount point for Firebase phone auth (invisible). */}
       <div id="recaptcha-container" />
-
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md">
         <Card className="overflow-hidden border-border/60 shadow-xl">
           <div className={`flex items-center gap-3 bg-gradient-to-br ${accent} p-5 text-white`}>
@@ -162,23 +145,16 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
             <div className="mb-4 flex items-center justify-between rounded-lg border bg-muted/40 px-3 py-2 text-xs">
               <span className="flex items-center gap-1.5 font-medium">
                 <MessageSquare className="h-3.5 w-3.5" />
-                {mode === 'firebase' ? 'Firebase Authentication' : 'Demo OTP'}
+                {mode === 'supabase' ? 'Supabase Auth' : 'Demo OTP'}
               </span>
-              {mode === 'firebase' ? (
+              {mode === 'supabase' ? (
                 <span className="flex items-center gap-1 text-teal-600 dark:text-teal-400">
-                  <Flame className="h-3.5 w-3.5" /> Real SMS
+                  Real SMS
                 </span>
               ) : (
                 <span className="text-amber-600 dark:text-amber-400">On-screen code</span>
               )}
             </div>
-
-            {modeSwitched && step === 'phone' && (
-              <p className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-                Firebase phone OTP unavailable (check Firebase console: Phone Auth enabled + Blaze plan).
-                Fell back to demo mode.
-              </p>
-            )}
 
             {step === 'phone' ? (
               <div className="space-y-4">
@@ -196,8 +172,8 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
                   </div>
                   <p className="mt-2 flex items-center gap-1 text-xs text-muted-foreground">
                     <MessageSquare className="h-3 w-3" />
-                    {mode === 'firebase'
-                      ? 'OTP delivered via Firebase Authentication (real SMS)'
+                    {mode === 'supabase'
+                      ? 'OTP delivered via Supabase Auth (real SMS)'
                       : 'Demo mode — OTP shown on screen'}
                   </p>
                 </div>
@@ -225,14 +201,7 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
                       <InputOTPSlot index={5} />
                     </InputOTPGroup>
                   </InputOTP>
-                  {demoCode && (
-                    <p className="mt-2 rounded-lg border border-dashed border-amber-400 bg-amber-50 px-3 py-2 text-center text-xs text-amber-700 dark:bg-amber-950/40 dark:text-amber-300">
-                      Demo mode — your code: <span className="font-mono font-bold tracking-widest">{demoCode}</span>
-                    </p>
-                  )}
-                  <p className="mt-2 text-xs text-muted-foreground">
-                    {mode === 'firebase' ? `SMS sent to ${phone}` : `Sent to ${phone}`}
-                  </p>
+                  <p className="mt-2 text-xs text-muted-foreground">Sent to {phone}</p>
                 </div>
                 <Button onClick={verify} disabled={busy} className="w-full">
                   {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-1 h-4 w-4" />}
