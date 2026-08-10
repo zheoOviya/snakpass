@@ -12,6 +12,24 @@
 
 **Capacity note:** Single-agent simulation of the 3-engineer + DevOps team. Real team velocity would differ; lifecycle state progression per P0 is tracked honestly.
 
+### Governance lock (stakeholder ruling)
+
+```
+Wave-0 Gate → NOT CLOSED                     🔴
+Wave 1 → LOCKED                             🔒
+
+Governance rules:
+- S4 Implemented ≠ S9 Production-ready
+- Mitigation ≠ deviation closure
+- DEV-001 and DEV-002 remain OPEN
+- Test-harness production guards are part of Wave-0 evidence
+- Wave-0 acceptance requires evidence + review + approval for every P0
+- No architectural gap silently closed
+
+Next valid execution gate:
+DEV-001 closure → DEV-002 closure → Wave-0 G/H review → Wave-0 acceptance → P0-25 / Wave 1 unlock
+```
+
 ### P0 lifecycle state tracker
 
 | P0 | Capability | Wave | Risk Tier | Owner (simulated) | Lifecycle state | Notes |
