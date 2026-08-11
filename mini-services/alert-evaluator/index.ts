@@ -69,12 +69,16 @@ async function logEvaluation(cycle: EvaluationCycle): Promise<void> {
   console.log(JSON.stringify(cycle))
 }
 
-function fireAlert(ruleId: string, context: Record<string, unknown>): void {
+function fireAlert(ruleId: string, context: Record<string, unknown>): boolean {
   const rule = ALERT_RULES.find((r) => r.id === ruleId)
-  if (!rule) return
+  if (!rule) return false
   const now = Date.now()
   const last = lastFired.get(ruleId) ?? 0
-  if (rule.cooldownMs > 0 && now - last < rule.cooldownMs) return
+  if (rule.cooldownMs > 0 && now - last < rule.cooldownMs) {
+    // Cooldown suppressed this fire — return false so the results array
+    // accurately reflects that NO alert was emitted this cycle.
+    return false
+  }
   lastFired.set(ruleId, now)
   console.error(JSON.stringify({
     timestamp: new Date().toISOString(),
@@ -85,6 +89,7 @@ function fireAlert(ruleId: string, context: Record<string, unknown>): void {
     name: rule.name,
     context,
   }))
+  return true
 }
 
 async function evaluateAlertRules(): Promise<EvaluationCycle> {
@@ -177,9 +182,12 @@ function evaluateAndFire(
     case 'lt': triggered = value < threshold; break
     case 'eq': triggered = value === threshold; break
   }
-  const alertFired = triggered
-  if (alertFired) {
-    fireAlert(ruleId, { metric, value, threshold })
+  // `alertFired` is true ONLY if the alert was actually emitted this cycle.
+  // If the rule is in cooldown, fireAlert() returns false — the results
+  // array reflects the suppressed state, not just the triggered state.
+  let alertFired = false
+  if (triggered) {
+    alertFired = fireAlert(ruleId, { metric, value, threshold })
   }
   results.push({ ruleId, metric, value, threshold, triggered, alertFired })
 }

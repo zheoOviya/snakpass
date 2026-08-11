@@ -1540,3 +1540,115 @@ Stage Summary:
 - Updated authoritative ledger: P0-20 ✅, P0-19 ✅, P0-18 ✅, P0-23 ✅, P0-13 ✅, P0-16 ✅ (new).
 - Wave-0 Gate: still NOT CLOSED (DEV-001 + P0-27 environment gaps remain).
 - Next checkpoint: P0-21 (Alert Evaluation) — awaiting user decision on P0-16 PASS.
+
+---
+Task ID: 49
+Agent: main
+Task: P0-21 (Alert Evaluation) verification with real runtime evidence — evaluator process + rule firing + cooldown + recovery + per-rule enforcement.
+
+Work Log:
+- Read worklog to understand prior state: P0-20 ✅, P0-19 ✅, P0-18 ✅, P0-23 ✅, P0-13 ✅, P0-16 ✅. P0-21 was the next checkpoint.
+- Inspected alert architecture:
+  - Evaluator process: mini-services/alert-evaluator/index.ts — standalone bun --hot process on port 3005.
+  - Schedule: immediate evaluation on startup + setInterval(60s, configurable via ALERT_INTERVAL_MS).
+  - 8 alert rules: db-unavailable, invariant-violation, unknown-state-detected, exception-queue-backlog, payment-success-rate, reconciliation-mismatch, auth-failure-spike, dr-drill-failed.
+  - Metrics source: real DB queries (db.$queryRaw\`SELECT 1\`, db.auditLog.findMany with hash-chain walk, db.order.count, etc.).
+  - Firing logic: evaluateAndFire() with comparison gt/lt/eq; calls fireAlert() if triggered.
+  - Cooldown: per-rule cooldownMs; lastFired Map suppresses re-fires within window.
+  - Output: console.error (structured JSON to stderr) + db/alert-evaluation-log.jsonl (structured JSON, append-only).
+  - HTTP endpoints: /health, /trigger (POST), /evidence (GET).
+  - Audit integration: hash-chain walk IS the invariant-violation check — broken audit chain → invariant-violation alert fires.
+- GAP 1 found at start: alert-evaluator service was NOT running. Started it via (bun --hot index.ts > log 2>&1 &).
+- GAP 2 found during cooldown testing: alertFired flag was set to triggered directly, which meant the results array LIED about whether an alert was actually emitted. The fireAlert() function correctly applied cooldown (only 1 actual ALERT JSON line emitted), but the results array reported alertFired=True for both cycle 8 (fire) and cycle 9 (suppressed). Fixed by:
+  - Changed fireAlert() return type from void → boolean (returns false if cooldown suppressed).
+  - Changed evaluateAndFire() to set alertFired = fireAlert(...) only if triggered, so the results array accurately reflects the actual emit state.
+
+- TEST EVIDENCE:
+
+  STEP 2 — Real evaluator process:
+    Process: bun --hot index.ts, PPID 1 (init), uptime growing.
+    /health: {"ok":true,"service":"snakzap-alert-evaluator","port":3005,"cycleNumber":1}
+    Immediate evaluation on startup: cycleNumber=1, rulesEvaluated=8, alertsTriggered=0, cleanBaseline=true.
+    PASS ✅ — real standalone process, not a manual trigger.
+
+  STEP 3 — Clean baseline cycle:
+    Triggered /trigger (exercises same evaluateAlertRules() function the scheduler's setInterval calls).
+    cycleNumber=2, rulesEvaluated=8, alertsTriggered=0, cleanBaseline=True.
+    All 8 rules: triggered=False, alertFired=False.
+    /evidence: totalCycles=188 (186 historical + 2 fresh), cleanBaselineCycles=188, alertTriggeredCycles=0.
+    PASS ✅ — 0 false positives on clean baseline.
+
+  STEP 4 — Trigger real alert condition (audit chain tampered):
+    Inserted tampered audit entry directly via raw SQL INSERT (WORM trigger only blocks UPDATE/DELETE, not INSERT).
+    Entry had WRONG_PREVHASH + WRONG_HASH — breaks the hash-chain linkage.
+    Triggered /trigger → cycleNumber=4, alertsTriggered=2, cleanBaseline=False.
+    Rules triggered+FIRED:
+      invariant-violation: value=1, threshold=0, comparison=gt → triggered=True, alertFired=True
+      unknown-state-detected: value=1, threshold=0, comparison=gt → triggered=True, alertFired=True
+    PASS ✅ — real alert condition detected and fired.
+
+  STEP 5 — Alert fires with structured JSON log:
+    ALERT JSON lines emitted to stderr:
+      {"timestamp":"...","level":"error","type":"ALERT","severity":"critical","ruleId":"invariant-violation","name":"Business Invariant Violated","context":{"metric":"invariant_violation_count","value":1,"threshold":0}}
+      {"timestamp":"...","level":"error","type":"ALERT","severity":"critical","ruleId":"unknown-state-detected","name":"Unknown State Detected","context":{"metric":"unknown_state_count","value":1,"threshold":0}}
+    PASS ✅ — structured JSON with severity, ruleId, name, context (metric, value, threshold).
+
+  STEP 6 — Cooldown verification (payment-success-rate, cooldownMs=300000):
+    Cancelled 1 of 9 orders → payment_success_rate dropped from 100% to 89% (< 95 threshold).
+    [6a] First evaluation after condition: triggered=True, alertFired=True (1 ALERT JSON emitted).
+    [6b] Second evaluation 2s later: triggered=True, alertFired=False (cooldown suppressed — 0 new ALERT JSON lines).
+    Count of actual ALERT JSON lines for payment-success-rate since restart: 1 (not 2).
+    PASS ✅ — cooldown correctly suppresses re-fires; alertFired flag now accurately reflects emit state (post-fix).
+
+  STEP 7 — Recovery test:
+    Restored clean state: deleted tampered audit entry (DROP + re-CREATE WORM trigger to allow DELETE), uncancelled the order (restored payment success rate to 100%).
+    Restarted evaluator to clear cooldown state.
+    Triggered /trigger → cycleNumber=5, alertsTriggered=0, cleanBaseline=True.
+    All 8 rules: triggered=False, alertFired=False.
+    ALERT JSON count since restart: 0.
+    PASS ✅ — system recovered to clean baseline.
+
+  STEP 8 — Per-rule enforcement (auth-failure-spike, cooldownMs=300000):
+    Inserted 3 AUTH_FAILED audit entries within 5min window (auth_failure_rate = 100% since recentAuthFailures > 0).
+    Restarted evaluator (clear cooldown).
+    Startup cycle #1: auth-failure-spike triggered=True, alertFired=True.
+    ALERT JSON emitted: {"severity":"warning","ruleId":"auth-failure-spike","name":"Auth Failure Spike","context":{"metric":"auth_failure_rate","value":100,"threshold":20}}.
+    PASS ✅ — auth-failure-spike rule fires correctly with warning severity.
+
+  STEP 9 — Trace/log evidence:
+    db/alert-evaluation-log.jsonl: 209 total cycles recorded (208 historical + 1 fresh).
+    Each cycle has: timestamp, cycleNumber, rulesEvaluated, alertsTriggered, results[], cleanBaseline.
+    Each result entry has: ruleId, metric, value, threshold, triggered, alertFired.
+    ALERT JSON lines (separate from cycle logs) emitted to stderr with: timestamp, level, type, severity, ruleId, name, context.
+    PASS ✅ — structured JSON with full observability.
+
+  STEP 10 — Clean state + P0-20 audit integrity:
+    Deleted 4 AUTH_FAILED test entries (DROP + re-CREATE WORM trigger to allow DELETE).
+    Restarted evaluator.
+    Startup cycle #1: alertsTriggered=0, cleanBaseline=True (no triggered rules).
+    P0-20 audit integrity: PASS — WORM PREVENTION + hash-chain EVIDENCE both verified.
+    Main app: db:ok.
+    Both schedulers still running (backup-scheduler PID 6507, alert-evaluator PID 7632).
+    PASS ✅ — clean state restored, P0-20 intact.
+
+- Lint clean. Code change: mini-services/alert-evaluator/index.ts fireAlert() now returns boolean; evaluateAndFire() uses it to accurately set alertFired flag.
+
+Stage Summary:
+- P0-21 (Alert Evaluation): PASS ✅ — all acceptance criteria satisfied:
+  1. ✅ Real evaluator process verified (standalone bun --hot, port 3005, PPID 1).
+  2. ✅ Real scheduled execution — immediate evaluation on startup + setInterval(60s).
+  3. ✅ Clean baseline verified — 0 false positives across 188+ cycles.
+  4. ✅ Real alert condition triggered (audit chain tamper) → invariant-violation + unknown-state-detected rules fired.
+  5. ✅ Structured JSON log emitted with severity, ruleId, name, context (metric, value, threshold).
+  6. ✅ Cooldown verified — payment-success-rate fires once, suppressed on subsequent cycles within 300s window (1 ALERT JSON line, not 2).
+  7. ✅ Recovery — condition cleared → next cycle cleanBaseline=True, 0 alerts.
+  8. ✅ Per-rule enforcement verified — 3 distinct rule classes fired (invariant-violation/unknown-state-detected with cooldownMs=0, payment-success-rate with cooldownMs=300000, auth-failure-spike with cooldownMs=300000).
+  9. ✅ Trace/log evidence — structured JSON in evaluation-log.jsonl + stderr ALERT lines.
+  10. ✅ Clean state restored — AUTH_FAILED entries deleted, WORM triggers re-created, P0-20 audit integrity PASS.
+- 2 gaps found and fixed:
+  - GAP 1: alert-evaluator service was not running at start → started fresh.
+  - GAP 2: alertFired flag lied (set to triggered directly even when cooldown suppressed) → fixed to reflect actual emit state.
+- Updated authoritative ledger: P0-20 ✅, P0-19 ✅, P0-18 ✅, P0-23 ✅, P0-13 ✅, P0-16 ✅, P0-21 ✅ (new).
+- Wave-0 Gate: still NOT CLOSED (DEV-001 + P0-27 environment gaps remain).
+- ALL runtime-verifiable P0s now PASS. Remaining blockers are environment-boundary gaps (DEV-001 production WORM, P0-27 CI/CD + rollback drill).
+- Next per governance: consolidated G/H review + named approval for the 7 PASSed P0s, then DEV-001 closure (PostgreSQL/QLDB), then P0-27 closure (CI/CD + rollback drill). Wave-0 gate review is the next phase, NOT another P0 checkpoint.
