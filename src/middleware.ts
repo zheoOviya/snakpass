@@ -29,11 +29,59 @@ const RATE_LIMITS = {
   general: { limit: 100, windowMs: WINDOW_MS, mode: 'fail-open' as LimiterMode },
 } as const
 
+// P0-13 testability hook: simulate limiter-unavailable state at runtime.
+// globalThis survives Next.js dev hot-reloads (same pattern as globalForPrisma).
+// When this flag is true, checkRateLimit() throws — exercises the fail-closed
+// try/catch path so we can prove the system does NOT fail-open on limiter error.
+const globalForRateLimit = globalThis as unknown as {
+  __p0_13_simulate_limiter_failure?: boolean
+}
+
+/** @internal Toggle the simulated limiter-failure flag (P0-13 test fixture only). */
+export function _setSimulateLimiterFailure(value: boolean): void {
+  globalForRateLimit.__p0_13_simulate_limiter_failure = value
+}
+
+/** @internal Read the simulated limiter-failure flag. */
+export function _getSimulateLimiterFailure(): boolean {
+  return !!globalForRateLimit.__p0_13_simulate_limiter_failure
+}
+
+/** @internal Reset a specific rate-limit key (used by tests to isolate scenarios). */
+export function _resetRateLimitKey(key: string): void {
+  store.delete(key)
+}
+
+/** @internal Reset ALL rate-limit state (used by tests to start from a clean baseline). */
+export function _resetAllRateLimits(): void {
+  store.clear()
+}
+
 function checkRateLimit(
   key: string,
   limit: number,
   mode: LimiterMode,
+  req: NextRequest,
 ): { allowed: boolean; remaining: number; resetAt: number } {
+  // P0-13 test hook: simulate limiter failure.
+  // Two trigger paths so the flag survives Next.js dev hot-reloads AND
+  // the Edge/Node.js runtime boundary (middleware runs in Edge Runtime;
+  // the test fixture endpoint runs in Node.js — they have separate
+  // globalThis objects):
+  //   1. globalThis flag (set via the /api/p0-13-test endpoint — works when
+  //      middleware + handler share a runtime, e.g. in production with a
+  //      single worker).
+  //   2. Request header `X-P0-13-Simulate-Failure: 1` (set by the test
+  //      runner; works across runtimes because headers cross the boundary).
+  //   3. env var `RATE_LIMIT_SIMULATE_FAILURE=1` (set at server start).
+  const headerFlag = req.headers.get('x-p0-13-simulate-failure')
+  if (
+    _getSimulateLimiterFailure() ||
+    headerFlag === '1' ||
+    process.env.RATE_LIMIT_SIMULATE_FAILURE === '1'
+  ) {
+    throw new Error('simulated: rate-limiter store unavailable (P0-13 fail-closed test)')
+  }
   const now = Date.now()
   const entry = store.get(key)
 
@@ -118,8 +166,8 @@ export function middleware(req: NextRequest) {
     return NextResponse.next()
   }
 
-  // Skip test endpoints (P0-18 test fixture + audit integrity test + P0-23 kill-switch fail-safe test)
-  if (pathname.includes('/verify-test') || pathname.includes('/audit-integrity-test') || pathname.includes('/p0-18-test') || pathname.includes('/p0-23-test')) {
+  // Skip test endpoints (P0-18 test fixture + audit integrity test + P0-23 kill-switch fail-safe test + P0-13 rate-limit test)
+  if (pathname.includes('/verify-test') || pathname.includes('/audit-integrity-test') || pathname.includes('/p0-18-test') || pathname.includes('/p0-23-test') || pathname.includes('/p0-13-test')) {
     return NextResponse.next()
   }
 
@@ -193,7 +241,41 @@ export function middleware(req: NextRequest) {
   const key = `rl:${pathType}:${ip}`
   const traceId = newTraceId()
 
-  const result = checkRateLimit(key, config.limit, config.mode)
+  let result: { allowed: boolean; remaining: number; resetAt: number }
+  try {
+    result = checkRateLimit(key, config.limit, config.mode, req)
+  } catch (err) {
+    // Limiter unavailable (e.g. Redis down in production, or simulated failure).
+    // P0-13 PASS criterion: protected requests must NOT fail-open.
+    // fail-closed → return 503 (block the request, do NOT call the handler).
+    // fail-open → allow the request through (general API class only).
+    const errorMessage = (err as Error)?.message ?? 'unknown-limiter-error'
+    if (config.mode === 'fail-closed') {
+      emitStructuredLog('error', 'rate-limit.limiter-unavailable-fail-closed', traceId, {
+        code: 'RATE_LIMITED',
+        statusCode: 503,
+        ip,
+        pathType,
+        errorMessage,
+      })
+      const failClosedResponse = NextResponse.json(
+        { error: { code: 'RATE_LIMITED', message: 'Service busy. Please retry.', traceId, details: { pathType, reason: 'limiter-unavailable' } } },
+        { status: 503 },
+      )
+      failClosedResponse.headers.set('X-Trace-Id', traceId)
+      return failClosedResponse
+    }
+    // fail-open mode: log + allow through (general API).
+    emitStructuredLog('warn', 'rate-limit.limiter-unavailable-fail-open', traceId, {
+      code: 'RATE_LIMITED',
+      statusCode: 200,
+      ip,
+      pathType,
+      errorMessage,
+    })
+    // Allow the request through with a synthetic "unlimited" result.
+    result = { allowed: true, remaining: 0, resetAt: Date.now() + WINDOW_MS }
+  }
 
   if (!result.allowed) {
     // Rate limit exceeded — emit structured log (Edge-safe pattern, matches src/lib/logger shape)
@@ -210,10 +292,14 @@ export function middleware(req: NextRequest) {
       ? 'Service busy. Please retry.'
       : 'Too many requests. Please slow down.'
 
-    return NextResponse.json(
+    const blockedResponse = NextResponse.json(
       { error: { code: 'RATE_LIMITED', message, traceId, details: { pathType, retryAfter: Math.ceil((result.resetAt - Date.now()) / 1000) } } },
       { status: statusCode },
     )
+    // P0-18 / P0-19 consistency: X-Trace-Id header on EVERY response so client
+    // tooling can correlate without parsing the JSON body.
+    blockedResponse.headers.set('X-Trace-Id', traceId)
+    return blockedResponse
   }
 
   // P0-18 / P0-19: forward X-Trace-Id on the REQUEST so downstream route handlers
