@@ -4,6 +4,7 @@ import { verifyOtp } from '@/lib/otp-service'
 import { createSession, setSessionCookie } from '@/lib/session'
 import { validateBody, adminVerifyBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
+import { audit } from '@/lib/audit'
 
 // POST /api/auth/admin/verify  { otpId, code }
 export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
@@ -22,14 +23,7 @@ export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) 
   const token = await createSession(user.id, user.role)
   await setSessionCookie(token)
 
-  await db.auditLog.create({
-    data: {
-      actorId: user.id,
-      actorRole: user.role,
-      action: 'ADMIN_LOGIN_SUCCESS',
-      metadata: JSON.stringify({ email: user.email }),
-    },
-  })
+  await audit('ADMIN_LOGIN_SUCCESS', { email: user.email }, user.id, user.role)
 
   return NextResponse.json({
     user: { id: user.id, phone: user.phone, name: user.name, role: user.role, email: user.email },

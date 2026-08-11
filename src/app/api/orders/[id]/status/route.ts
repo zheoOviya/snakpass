@@ -5,6 +5,7 @@ import { emitOrderUpdated } from '@/lib/realtime'
 import { createOtp } from '@/lib/otp-service'
 import { validateBody, statusUpdateBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
+import { audit } from '@/lib/audit'
 import { info as logInfo } from '@/lib/logger'
 
 // PATCH /api/orders/[id]/status  body: { status, actorRole? }
@@ -44,13 +45,7 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
       include: { restaurant: { select: { id: true, name: true } } },
     })
 
-    await db.auditLog.create({
-      data: {
-        actorRole: actorRole ?? 'VENDOR_OWNER',
-        action: 'ORDER_STATUS_CHANGED',
-        metadata: JSON.stringify({ orderId: id, from: order.status, to: desired }),
-      },
-    })
+    await audit('ORDER_STATUS_CHANGED', { orderId: id, from: order.status, to: desired }, undefined, actorRole ?? 'VENDOR_OWNER')
 
     logInfo('order-status-changed', { orderId: id, from: order.status, to: desired }, traceId)
 

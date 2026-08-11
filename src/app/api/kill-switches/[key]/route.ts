@@ -4,6 +4,7 @@ import { getSessionUser } from '@/lib/session'
 import { emitKillSwitchToggled } from '@/lib/realtime'
 import { validateBody, killSwitchToggleBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
+import { audit } from '@/lib/audit'
 
 // PATCH /api/kill-switches/[key]  body: { enabled }
 export const PATCH = (req: NextRequest, { params }: { params: Promise<{ key: string }> }) =>
@@ -20,14 +21,7 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ key: str
       data: { enabled },
     })
 
-    await db.auditLog.create({
-      data: {
-        actorId: session.userId,
-        actorRole: session.role,
-        action: 'KILL_SWITCH_TOGGLE',
-        metadata: JSON.stringify({ key, enabled, label: ks.label }),
-      },
-    })
+    await audit('KILL_SWITCH_TOGGLE', { key, enabled, label: ks.label }, session.userId, session.role)
 
     emitKillSwitchToggled({ key, enabled })
 

@@ -4,6 +4,7 @@ import { verifyPassword } from '@/lib/password'
 import { createOtp } from '@/lib/otp-service'
 import { validateBody, adminLoginBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
+import { audit } from '@/lib/audit'
 
 // POST /api/auth/admin/login  { email, password }
 export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
@@ -22,14 +23,7 @@ export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) 
 
   const { otpId, code } = await createOtp('email', normalizedEmail, 'admin_2fa')
 
-  await db.auditLog.create({
-    data: {
-      actorId: user.id,
-      actorRole: user.role,
-      action: 'ADMIN_LOGIN_STEP1',
-      metadata: JSON.stringify({ email: normalizedEmail }),
-    },
-  })
+  await audit('ADMIN_LOGIN_STEP1', { email: normalizedEmail }, user.id, user.role)
 
   return NextResponse.json({
     otpId,

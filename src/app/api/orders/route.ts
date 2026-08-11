@@ -4,6 +4,8 @@ import { getSessionUser } from '@/lib/session'
 import { emitOrderCreated } from '@/lib/realtime'
 import { validateBody, createOrderBodySchema } from '@/lib/validation'
 import { apiError, withErrorHandler } from '@/lib/errors'
+import { getKillSwitchState } from '@/lib/killswitch'
+import { audit } from '@/lib/audit'
 import { info as logInfo, warn as logWarn } from '@/lib/logger'
 
 // GET /api/orders?role=consumer|vendor|admin&restaurantId=&status=&limit=
@@ -66,17 +68,46 @@ export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) 
 
   logInfo('order.create.request', { restaurantId: body.restaurantId, itemCount: body.items.length, traceId }, traceId)
 
-  // Kill switch guard: ordering
-  const orderingKs = await db.killSwitch.findUnique({ where: { key: 'ordering' } })
-  if (orderingKs?.enabled) {
-    logWarn('order.create.blocked', { reason: 'kill_switch_ordering', traceId }, traceId)
-    return apiError('KILL_SWITCH_ACTIVE', 'Ordering is currently disabled (kill switch active).', 503, undefined, traceId)
+  // Kill switch guard: ordering.
+  // P0-23: uses getKillSwitchState() which FAIL-CLOSES on DB error (returns
+  // enabled=true) and emits an audited warn log so operators can observe
+  // dependency-failure events in the P0-22 audit chain.
+  const orderingKs = await getKillSwitchState('ordering', traceId)
+  if (orderingKs.enabled) {
+    logWarn('order.create.blocked', {
+      reason: 'kill_switch_ordering',
+      ksSource: orderingKs.source,
+      ksReason: orderingKs.reason,
+      traceId,
+    }, traceId)
+    return apiError(
+      'KILL_SWITCH_ACTIVE',
+      orderingKs.source === 'safe-default'
+        ? 'Ordering temporarily unavailable (fail-safe engaged). Please retry shortly.'
+        : 'Ordering is currently disabled (kill switch active).',
+      503,
+      { killSwitchSource: orderingKs.source, killSwitchReason: orderingKs.reason ?? null },
+      traceId,
+    )
   }
   if (body.isCatering) {
-    const catKs = await db.killSwitch.findUnique({ where: { key: 'catering' } })
-    if (catKs?.enabled) {
-      logWarn('order.create.blocked', { reason: 'kill_switch_catering', traceId }, traceId)
-      return apiError('CONFLICT', 'Catering orders are currently disabled.', 403, undefined, traceId)
+    const catKs = await getKillSwitchState('catering', traceId)
+    if (catKs.enabled) {
+      logWarn('order.create.blocked', {
+        reason: 'kill_switch_catering',
+        ksSource: catKs.source,
+        ksReason: catKs.reason,
+        traceId,
+      }, traceId)
+      return apiError(
+        'KILL_SWITCH_ACTIVE',
+        catKs.source === 'safe-default'
+          ? 'Catering orders temporarily unavailable (fail-safe engaged).'
+          : 'Catering orders are currently disabled.',
+        503,
+        { killSwitchSource: catKs.source, killSwitchReason: catKs.reason ?? null },
+        traceId,
+      )
     }
   }
 
@@ -124,14 +155,7 @@ export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) 
 
   logInfo('order.create.success', { orderId: order.id, total, restaurantName: restaurant.name, traceId }, traceId)
 
-  await db.auditLog.create({
-    data: {
-      actorId: consumerId,
-      actorRole: 'CONSUMER',
-      action: 'ORDER_CREATED',
-      metadata: JSON.stringify({ orderId: order.id, total, restaurantId: body.restaurantId }),
-    },
-  })
+  await audit('ORDER_CREATED', { orderId: order.id, total, restaurantId: body.restaurantId }, consumerId, 'CONSUMER')
 
   emitOrderCreated({
     orderId: order.id,

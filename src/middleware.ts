@@ -118,8 +118,8 @@ export function middleware(req: NextRequest) {
     return NextResponse.next()
   }
 
-  // Skip test endpoints (P0-18 test fixture + audit integrity test)
-  if (pathname.includes('/verify-test') || pathname.includes('/audit-integrity-test') || pathname.includes('/p0-18-test')) {
+  // Skip test endpoints (P0-18 test fixture + audit integrity test + P0-23 kill-switch fail-safe test)
+  if (pathname.includes('/verify-test') || pathname.includes('/audit-integrity-test') || pathname.includes('/p0-18-test') || pathname.includes('/p0-23-test')) {
     return NextResponse.next()
   }
 

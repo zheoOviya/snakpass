@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/validation'
 import { withErrorHandler, apiError, AppError } from '@/lib/errors'
 import { verifyFirebaseToken, isAdminConfigured } from '@/lib/firebase-admin'
+import { audit } from '@/lib/audit'
 import { warn as logWarn } from '@/lib/logger'
 
 const firebaseSessionBodySchema = z.object({
@@ -61,19 +62,12 @@ export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) 
   const token = await createSession(user.id, user.role)
   await setSessionCookie(token)
 
-  await db.auditLog.create({
-    data: {
-      actorId: user.id,
-      actorRole: user.role,
-      action: 'AUTH_FIREBASE_OTP_LOGIN',
-      metadata: JSON.stringify({
-        purpose,
-        phone,
-        firebaseUid,
-        adminConfigured: isAdminConfigured(),
-      }),
-    },
-  })
+  await audit('AUTH_FIREBASE_OTP_LOGIN', {
+    purpose,
+    phone,
+    firebaseUid,
+    adminConfigured: isAdminConfigured(),
+  }, user.id, user.role)
 
   return NextResponse.json({
     user: { id: user.id, phone: user.phone, name: user.name, role: user.role, email: user.email ?? email },

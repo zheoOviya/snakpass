@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { validateBody, menuAvailabilityBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
+import { audit } from '@/lib/audit'
 
 // PATCH /api/menu/[id]  body: { isAvailable }
 export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: string }> }) =>
@@ -20,14 +21,7 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
       select: { id: true, name: true, isAvailable: true, restaurantId: true },
     })
 
-    await db.auditLog.create({
-      data: {
-        actorId: session.userId,
-        actorRole: session.role,
-        action: 'MENU_AVAILABILITY',
-        metadata: JSON.stringify({ itemId: id, name: item.name, available: isAvailable }),
-      },
-    })
+    await audit('MENU_AVAILABILITY', { itemId: id, name: item.name, available: isAvailable }, session.userId, session.role)
 
     return NextResponse.json({ item })
   })

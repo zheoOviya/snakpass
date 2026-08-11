@@ -7,7 +7,11 @@ import { db } from '../src/lib/db'
 async function main() {
   console.log('Seeding SnakZap...')
 
-  // Clean
+  // Clean — drop WORM triggers (prevent_audit_update/delete) so we can clear
+  // audit contamination, then delete audit logs FIRST (FK: auditLog.actorId → user.id)
+  await db.$executeRawUnsafe('DROP TRIGGER IF EXISTS prevent_audit_update')
+  await db.$executeRawUnsafe('DROP TRIGGER IF EXISTS prevent_audit_delete')
+  await db.auditLog.deleteMany()
   await db.orderItem.deleteMany()
   await db.order.deleteMany()
   await db.menuItem.deleteMany()
@@ -18,7 +22,6 @@ async function main() {
   await db.menuItem.deleteMany()
   await db.restaurant.deleteMany()
   await db.user.deleteMany()
-  await db.auditLog.deleteMany()
   await db.killSwitch.deleteMany()
 
   // Users — consumer + vendor use phone OTP; admin uses email+password+2FA OTP.
@@ -241,6 +244,25 @@ async function main() {
   console.log('  - 4 restaurants, ~25 menu items')
   console.log('  - 9 demo orders across statuses')
   console.log('  - 5 kill switches, 6 audit logs')
+
+  // Re-create WORM triggers (append-only enforcement at the storage level).
+  // These triggers were dropped at the start of seed to allow audit cleanup.
+  // In production they prevent any UPDATE or DELETE on AuditLog.
+  await db.$executeRawUnsafe(`
+    CREATE TRIGGER IF NOT EXISTS prevent_audit_update
+    BEFORE UPDATE ON AuditLog
+    BEGIN
+      SELECT RAISE(ABORT, 'AUDIT_WORM: UPDATE rejected — audit log is append-only');
+    END
+  `)
+  await db.$executeRawUnsafe(`
+    CREATE TRIGGER IF NOT EXISTS prevent_audit_delete
+    BEFORE DELETE ON AuditLog
+    BEGIN
+      SELECT RAISE(ABORT, 'AUDIT_WORM: DELETE rejected — audit log is append-only');
+    END
+  `)
+  console.log('  - WORM triggers re-created (append-only enforced)')
   console.log('Done.')
 }
 

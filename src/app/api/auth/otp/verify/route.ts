@@ -4,6 +4,7 @@ import { verifyOtp } from '@/lib/otp-service'
 import { createSession, setSessionCookie } from '@/lib/session'
 import { validateBody, otpVerifyBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
+import { audit } from '@/lib/audit'
 
 // POST /api/auth/otp/verify  { otpId, code, phone, purpose }
 export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
@@ -36,14 +37,7 @@ export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) 
   const token = await createSession(user.id, user.role)
   await setSessionCookie(token)
 
-  await db.auditLog.create({
-    data: {
-      actorId: user.id,
-      actorRole: user.role,
-      action: 'AUTH_OTP_LOGIN',
-      metadata: JSON.stringify({ purpose, phone }),
-    },
-  })
+  await audit('AUTH_OTP_LOGIN', { purpose, phone }, user.id, user.role)
 
   return NextResponse.json({
     user: { id: user.id, phone: user.phone, name: user.name, role: user.role, email: user.email },

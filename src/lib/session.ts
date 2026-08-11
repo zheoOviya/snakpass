@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers'
 import { db } from './db'
 import { randomToken } from './otp-service'
+import { setCsrfCookie } from './csrf'
 
 // Cookie-based session. The session token maps to a Session row in the DB
 // (userId + role + expiry). HttpOnly + SameSite=Lax.
@@ -32,6 +33,11 @@ export async function setSessionCookie(token: string) {
     maxAge: SESSION_TTL_DAYS * 24 * 60 * 60,
     secure: process.env.NODE_ENV === 'production',
   })
+  // P0-14: also set the CSRF cookie so the client can perform double-submit
+  // on subsequent state-changing requests. The CSRF token is generated here
+  // (server-side), and the cookie is HttpOnly=false so the client JS can read
+  // it and echo it back in the X-CSRF-Token header.
+  await setCsrfCookie()
 }
 
 export async function clearSessionCookie() {

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createBackup, verifyBackup, listBackups } from '@/lib/backup'
 import { getSessionUser } from '@/lib/session'
 import { withErrorHandler, apiError } from '@/lib/errors'
+import { audit } from '@/lib/audit'
 import { info as logInfo } from '@/lib/logger'
 import { db } from '@/lib/db'
 
@@ -27,14 +28,7 @@ export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) 
     size: result.size,
   }, traceId)
 
-  await db.auditLog.create({
-    data: {
-      actorId: session.userId,
-      actorRole: session.role,
-      action: 'BACKUP_CREATED',
-      metadata: JSON.stringify({ ok: result.ok, checksum: result.checksum, size: result.size }),
-    },
-  })
+  await audit('BACKUP_CREATED', { ok: result.ok, checksum: result.checksum, size: result.size }, session.userId, session.role)
 
   if (!result.ok) {
     return apiError('INTERNAL_ERROR', 'Backup failed', 500, undefined, traceId)

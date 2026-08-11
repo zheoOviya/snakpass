@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
 import { verifySupabaseToken, isUserRevoked, isSupabaseConfigured } from '@/lib/supabase-admin'
+import { audit } from '@/lib/audit'
 import { warn as logWarn } from '@/lib/logger'
 
 const supabaseSessionBodySchema = z.object({
@@ -59,14 +60,7 @@ export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) 
   const token = await createSession(user.id, user.role)
   await setSessionCookie(token)
 
-  await db.auditLog.create({
-    data: {
-      actorId: user.id,
-      actorRole: user.role,
-      action: 'AUTH_SUPABASE_OTP_LOGIN',
-      metadata: JSON.stringify({ purpose, phone, supabaseUid, email: email ?? null }),
-    },
-  })
+  await audit('AUTH_SUPABASE_OTP_LOGIN', { purpose, phone, supabaseUid, email: email ?? null }, user.id, user.role)
 
   return NextResponse.json({
     user: { id: user.id, phone: user.phone, name: user.name, role: user.role, email: user.email ?? email },
