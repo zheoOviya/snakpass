@@ -84,16 +84,16 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Syntax check backup-scheduler
-        run: bun build mini-services/backup-scheduler/index.ts --no-bundle --outdir /tmp/bs-check
+        run: bun build mini-services/backup-scheduler/index.ts --target=bun --outdir /tmp/bs-check
 
       - name: Syntax check alert-evaluator
-        run: bun build mini-services/alert-evaluator/index.ts --no-bundle --outdir /tmp/ae-check
+        run: bun build mini-services/alert-evaluator/index.ts --target=bun --outdir /tmp/ae-check
 
       - name: Syntax check realtime service
-        run: bun build mini-services/realtime/index.ts --no-bundle --outdir /tmp/rt-check
+        run: bun build mini-services/realtime/index.ts --target=bun --outdir /tmp/rt-check
 
       - name: Syntax check portal services
         run: |
-          bun build mini-services/consumer-portal/index.ts --no-bundle --outdir /tmp/cp-check
-          bun build mini-services/vendor-portal/index.ts --no-bundle --outdir /tmp/vp-check
-          bun build mini-services/admin-portal/index.ts --no-bundle --outdir /tmp/ap-check
+          bun build mini-services/consumer-portal/index.ts --target=bun --outdir /tmp/cp-check
+          bun build mini-services/vendor-portal/index.ts --target=bun --outdir /tmp/vp-check
+          bun build mini-services/admin-portal/index.ts --target=bun --outdir /tmp/ap-check
