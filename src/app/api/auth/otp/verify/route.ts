@@ -6,15 +6,15 @@ import { validateBody, otpVerifyBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
 
 // POST /api/auth/otp/verify  { otpId, code, phone, purpose }
-export const POST = (req: NextRequest) => withErrorHandler(async () => {
+export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
   const { otpId, code, phone, purpose } = await validateBody(req, otpVerifyBodySchema)
 
   const result = await verifyOtp(otpId, code)
   if (!result.ok) {
-    return apiError('AUTHENTICATION_REQUIRED', 'Invalid or expired OTP', 401)
+    return apiError('AUTHENTICATION_REQUIRED', 'Invalid or expired OTP', 401, undefined, traceId)
   }
   if (result.target !== phone) {
-    return apiError('AUTHENTICATION_REQUIRED', 'OTP target mismatch', 401)
+    return apiError('AUTHENTICATION_REQUIRED', 'OTP target mismatch', 401, undefined, traceId)
   }
 
   const role = purpose === 'vendor_login' ? 'VENDOR_OWNER' : 'CONSUMER'
@@ -22,14 +22,14 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
   let user = await db.user.findUnique({ where: { phone } })
   if (!user) {
     if (purpose === 'vendor_login') {
-      return apiError('AUTHORIZATION_DENIED', 'No vendor account for this phone', 403)
+      return apiError('AUTHORIZATION_DENIED', 'No vendor account for this phone', 403, undefined, traceId)
     }
     user = await db.user.create({
       data: { phone, role: 'CONSUMER', name: `User ${phone.slice(-4)}` },
     })
   } else {
     if (purpose === 'vendor_login' && !['VENDOR_OWNER', 'VENDOR_STAFF'].includes(user.role)) {
-      return apiError('AUTHORIZATION_DENIED', 'This phone is not a vendor account', 403)
+      return apiError('AUTHORIZATION_DENIED', 'This phone is not a vendor account', 403, undefined, traceId)
     }
   }
 

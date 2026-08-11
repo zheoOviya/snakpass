@@ -1,8 +1,8 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { createBackup, verifyBackup, listBackups } from '@/lib/backup'
 import { getSessionUser } from '@/lib/session'
 import { withErrorHandler, apiError } from '@/lib/errors'
-import { info as logInfo, newTraceId } from '@/lib/logger'
+import { info as logInfo } from '@/lib/logger'
 import { db } from '@/lib/db'
 
 // P0-16 — Backup API: operational scheduled execution + on-demand backup + verify
@@ -12,13 +12,12 @@ import { db } from '@/lib/db'
 // In dev, this endpoint provides on-demand backup + verify + evidence.
 
 // POST /api/backup — create a backup (admin only)
-export const POST = () => withErrorHandler(async () => {
+export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
   const session = await getSessionUser()
   if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.role)) {
-    return apiError('AUTHORIZATION_DENIED', 'Admin only', 403)
+    return apiError('AUTHORIZATION_DENIED', 'Admin only', 403, undefined, traceId)
   }
 
-  const traceId = newTraceId()
   const result = await createBackup()
 
   logInfo('backup-created', {
@@ -45,12 +44,12 @@ export const POST = () => withErrorHandler(async () => {
 })
 
 // GET /api/backup — list backups (admin only)
-export const GET = () => withErrorHandler(async () => {
+export const GET = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
   const session = await getSessionUser()
   if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.role)) {
-    return apiError('AUTHORIZATION_DENIED', 'Admin only', 403)
+    return apiError('AUTHORIZATION_DENIED', 'Admin only', 403, undefined, traceId)
   }
 
   const backups = await listBackups()
-  return NextResponse.json({ backups })
+  return NextResponse.json({ backups, traceId })
 })

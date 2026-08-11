@@ -1,9 +1,9 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { ALERT_RULES, fireAlert, getAlertAudit } from '@/lib/alerting'
 import { auditIntegrityCheck } from '@/lib/audit'
 import { db } from '@/lib/db'
 import { withErrorHandler } from '@/lib/errors'
-import { info as logInfo, newTraceId } from '@/lib/logger'
+import { info as logInfo } from '@/lib/logger'
 
 // P0-21 — Alert evaluation loop: wired to real metrics/signals
 // Control/Enabler: alerts fire on defined thresholds.
@@ -11,8 +11,7 @@ import { info as logInfo, newTraceId } from '@/lib/logger'
 // This endpoint is the alert evaluation loop. In production it would run on a
 // schedule (cron, every 60 seconds). In dev it's triggered on-demand.
 
-export const GET = () => withErrorHandler(async () => {
-  const traceId = newTraceId()
+export const GET = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
   const evaluations: Array<{ ruleId: string; metric: string; value: number; threshold: number; triggered: boolean }> = []
 
   // 1. DB health check

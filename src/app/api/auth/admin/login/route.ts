@@ -6,18 +6,18 @@ import { validateBody, adminLoginBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
 
 // POST /api/auth/admin/login  { email, password }
-export const POST = (req: NextRequest) => withErrorHandler(async () => {
+export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
   const { email, password } = await validateBody(req, adminLoginBodySchema)
   const normalizedEmail = email.trim().toLowerCase()
 
   const user = await db.user.findUnique({ where: { email: normalizedEmail } })
   if (!user || !user.passwordHash || !['ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
-    return apiError('AUTHENTICATION_REQUIRED', 'Invalid credentials', 401)
+    return apiError('AUTHENTICATION_REQUIRED', 'Invalid credentials', 401, undefined, traceId)
   }
 
   const ok = await verifyPassword(password, user.passwordHash)
   if (!ok) {
-    return apiError('AUTHENTICATION_REQUIRED', 'Invalid credentials', 401)
+    return apiError('AUTHENTICATION_REQUIRED', 'Invalid credentials', 401, undefined, traceId)
   }
 
   const { otpId, code } = await createOtp('email', normalizedEmail, 'admin_2fa')

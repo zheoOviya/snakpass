@@ -5,13 +5,12 @@ import { emitOrderUpdated } from '@/lib/realtime'
 import { createOtp } from '@/lib/otp-service'
 import { validateBody, statusUpdateBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
-import { info as logInfo, newTraceId } from '@/lib/logger'
+import { info as logInfo } from '@/lib/logger'
 
 // PATCH /api/orders/[id]/status  body: { status, actorRole? }
 export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: string }> }) =>
-  withErrorHandler(async () => {
+  withErrorHandler(req, async (traceId) => {
     const { id } = await params
-    const traceId = newTraceId()
     const { status: desired, actorRole } = await validateBody(req, statusUpdateBodySchema)
 
     const order = await db.order.findUnique({ where: { id }, include: { user: true } })

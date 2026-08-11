@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
 import { verifySupabaseToken, isUserRevoked, isSupabaseConfigured } from '@/lib/supabase-admin'
-import { warn as logWarn, newTraceId } from '@/lib/logger'
+import { warn as logWarn } from '@/lib/logger'
 
 const supabaseSessionBodySchema = z.object({
   accessToken: z.string().min(1, 'Supabase access token required'),
@@ -15,8 +15,7 @@ const supabaseSessionBodySchema = z.object({
 // POST /api/auth/supabase/session  { accessToken, purpose }
 //
 // DEV-002 CLOSURE: Server-side JWT verification via Supabase JWKS.
-export const POST = (req: NextRequest) => withErrorHandler(async () => {
-  const traceId = newTraceId()
+export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
   const { accessToken, purpose } = await validateBody(req, supabaseSessionBodySchema)
 
   if (!isSupabaseConfigured()) {

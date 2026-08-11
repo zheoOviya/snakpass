@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/validation'
 import { withErrorHandler, apiError, AppError } from '@/lib/errors'
 import { verifyFirebaseToken, isAdminConfigured } from '@/lib/firebase-admin'
-import { warn as logWarn, newTraceId } from '@/lib/logger'
+import { warn as logWarn } from '@/lib/logger'
 
 const firebaseSessionBodySchema = z.object({
   idToken: z.string().min(1, 'Firebase ID token required'),
@@ -21,8 +21,7 @@ const firebaseSessionBodySchema = z.object({
 //
 // In production (NODE_ENV=production): if Admin SDK is not configured, this
 // route returns 503 (DEPENDENCY_UNAVAILABLE). No demo-trust fallback.
-export const POST = (req: NextRequest) => withErrorHandler(async () => {
-  const traceId = newTraceId()
+export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
   const { idToken, purpose } = await validateBody(req, firebaseSessionBodySchema)
 
   // Verify the Firebase ID token server-side.

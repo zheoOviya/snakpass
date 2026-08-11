@@ -7,11 +7,11 @@ import { withErrorHandler, apiError } from '@/lib/errors'
 
 // PATCH /api/kill-switches/[key]  body: { enabled }
 export const PATCH = (req: NextRequest, { params }: { params: Promise<{ key: string }> }) =>
-  withErrorHandler(async () => {
+  withErrorHandler(req, async (traceId) => {
     const { key } = await params
     const session = await getSessionUser()
     if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.role)) {
-      return apiError('AUTHORIZATION_DENIED', 'Forbidden — admin only', 403)
+      return apiError('AUTHORIZATION_DENIED', 'Forbidden — admin only', 403, undefined, traceId)
     }
     const { enabled } = await validateBody(req, killSwitchToggleBodySchema)
 

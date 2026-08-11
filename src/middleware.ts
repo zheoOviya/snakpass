@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 
-// P0-13 — Rate limiting wired into the request path (Edge Runtime compatible)
+// P0-13 — Rate limiting wired into the request path (Edge Runtime Compatible)
+// P0-14 — CSRF protection (double-submit cookie pattern)
+// P0-18 — Every rejection emits a structured JSON log line with the same traceId
+//         that is returned in the error envelope (so client ↔ server correlation works).
+// P0-19 — Structured logging: every rejection logs to stdout as JSON.
 // Control/Enabler: fail-closed for auth/payment/admin-write; fail-open for general API.
 //
 // Edge Runtime does not support Node.js 'crypto' module, so we use Web Crypto API
-// (crypto.randomUUID) and an inline in-memory rate limiter (no external imports).
+// (crypto.randomUUID) and inline in-memory rate limiter (no external imports).
 
 // --- Inline rate limiter (Edge-safe) ---
 interface RateLimitEntry {
@@ -77,6 +81,31 @@ function newTraceId(): string {
   }
 }
 
+// Edge-safe structured JSON log emitter (matches the shape emitted by src/lib/logger).
+// Edge Runtime cannot import src/lib/logger (uses Node's process.stdout), so we
+// inline the same JSON shape here using console.warn/error which work in Edge.
+function emitStructuredLog(
+  level: 'warn' | 'error',
+  message: string,
+  traceId: string,
+  context: Record<string, unknown> = {},
+): void {
+  const line = JSON.stringify({
+    timestamp: new Date().toISOString(),
+    level,
+    message,
+    traceId,
+    ...context,
+  })
+  // Edge Runtime: console.warn → stderr; console.log → stdout. Both are captured
+  // by Next.js dev server's tee'd output (dev.log) in production-equivalent fashion.
+  if (level === 'error') {
+    console.error(line)
+  } else {
+    console.warn(line)
+  }
+}
+
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
 
@@ -89,12 +118,12 @@ export function middleware(req: NextRequest) {
     return NextResponse.next()
   }
 
-  // Skip test endpoints
-  if (pathname.includes('/verify-test') || pathname.includes('/audit-integrity-test')) {
+  // Skip test endpoints (P0-18 test fixture + audit integrity test)
+  if (pathname.includes('/verify-test') || pathname.includes('/audit-integrity-test') || pathname.includes('/p0-18-test')) {
     return NextResponse.next()
   }
 
-  // P0-14 — CSRF protection on state-changing requests
+  // P0-14 — CSRF protection on state-changing requests.
   // Double-submit cookie pattern: cookie token must match X-CSRF-Token header.
   const method = req.method.toUpperCase()
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
@@ -104,19 +133,34 @@ export function middleware(req: NextRequest) {
       const cookieToken = req.cookies.get('snakzap_csrf')?.value
       const headerToken = req.headers.get('x-csrf-token')
 
-      const traceId = newTraceId()
-
+      // P0-18 / P0-19: every CSRF rejection logs a structured line with the SAME traceId
+      // that is returned in the error envelope, so client ↔ server correlation works.
       if (!cookieToken || !headerToken) {
+        const traceId = newTraceId()
+        emitStructuredLog('warn', 'csrf.rejected.missing_token', traceId, {
+          code: 'CSRF_INVALID',
+          statusCode: 403,
+          path: pathname,
+          method,
+          reason: !cookieToken ? 'missing_cookie' : 'missing_header',
+        })
         return NextResponse.json(
-          { error: { code: 'VALIDATION_ERROR', message: 'CSRF token required', traceId } },
+          { error: { code: 'CSRF_INVALID', message: 'CSRF token required', traceId } },
           { status: 403 },
         )
       }
 
       // Constant-time comparison
       if (cookieToken.length !== headerToken.length) {
+        const traceId = newTraceId()
+        emitStructuredLog('warn', 'csrf.rejected.length_mismatch', traceId, {
+          code: 'CSRF_INVALID',
+          statusCode: 403,
+          path: pathname,
+          method,
+        })
         return NextResponse.json(
-          { error: { code: 'VALIDATION_ERROR', message: 'CSRF token mismatch', traceId } },
+          { error: { code: 'CSRF_INVALID', message: 'CSRF token mismatch', traceId } },
           { status: 403 },
         )
       }
@@ -127,8 +171,15 @@ export function middleware(req: NextRequest) {
       }
 
       if (!match) {
+        const traceId = newTraceId()
+        emitStructuredLog('warn', 'csrf.rejected.token_mismatch', traceId, {
+          code: 'CSRF_INVALID',
+          statusCode: 403,
+          path: pathname,
+          method,
+        })
         return NextResponse.json(
-          { error: { code: 'VALIDATION_ERROR', message: 'CSRF token mismatch', traceId } },
+          { error: { code: 'CSRF_INVALID', message: 'CSRF token mismatch', traceId } },
           { status: 403 },
         )
       }
@@ -145,16 +196,14 @@ export function middleware(req: NextRequest) {
   const result = checkRateLimit(key, config.limit, config.mode)
 
   if (!result.allowed) {
-    // Rate limit exceeded — console.warn is Edge-safe (no external logger import)
-    console.warn(JSON.stringify({
-      timestamp: new Date().toISOString(),
-      level: 'warn',
-      message: '[P0-13] rate-limit-exceeded',
-      traceId,
+    // Rate limit exceeded — emit structured log (Edge-safe pattern, matches src/lib/logger shape)
+    emitStructuredLog('warn', 'rate-limit.exceeded', traceId, {
+      code: 'RATE_LIMITED',
+      statusCode: config.mode === 'fail-closed' ? 503 : 429,
       ip,
       pathType,
       retryAfter: Math.ceil((result.resetAt - Date.now()) / 1000),
-    }))
+    })
 
     const statusCode = config.mode === 'fail-closed' ? 503 : 429
     const message = config.mode === 'fail-closed'
@@ -167,7 +216,15 @@ export function middleware(req: NextRequest) {
     )
   }
 
-  const response = NextResponse.next()
+  // P0-18 / P0-19: forward X-Trace-Id on the REQUEST so downstream route handlers
+  // can reuse the SAME traceId for their log lines and any error envelopes.
+  // This is the single source of truth for traceId across the request lifecycle.
+  const requestHeaders = new Headers(req.headers)
+  requestHeaders.set('x-trace-id', traceId)
+
+  const response = NextResponse.next({
+    request: { headers: requestHeaders },
+  })
   response.headers.set('X-RateLimit-Limit', String(config.limit))
   response.headers.set('X-RateLimit-Remaining', String(result.remaining))
   response.headers.set('X-RateLimit-Reset', String(result.resetAt))

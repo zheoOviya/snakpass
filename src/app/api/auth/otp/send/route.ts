@@ -4,7 +4,7 @@ import { validateBody, otpSendBodySchema } from '@/lib/validation'
 import { withErrorHandler } from '@/lib/errors'
 
 // POST /api/auth/otp/send  { phone, purpose: 'consumer_login' | 'vendor_login' }
-export const POST = (req: NextRequest) => withErrorHandler(async () => {
+export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
   const { phone, purpose } = await validateBody(req, otpSendBodySchema)
 
   const { otpId, code } = await createOtp('phone', phone, purpose)
@@ -14,5 +14,6 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
     demo: true,
     code,
     message: `OTP sent to ${phone}`,
+    traceId,
   })
 })

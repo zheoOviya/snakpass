@@ -1080,3 +1080,87 @@ Stage Summary:
 - P0-09 unblocked — can proceed to Wave-0 acceptance review.
 - Remaining open: DEV-001 (WORM — needs PostgreSQL), P0-27 (CI/CD — needs deploy env).
 - Wave-0 Gate: still NOT CLOSED (DEV-001 + P0-27 remain). Wave 1: LOCKED. P0-25: LOCKED.
+
+---
+Task ID: 45
+Agent: main
+Task: P0-18 (Error Handling) verification — real request evidence with traceId correlation across response + server log.
+
+Work Log:
+- Read worklog to understand prior state: P0-20 PASS, P0-19 PASS, P0-18 was the next checkpoint to verify.
+- Reviewed existing code:
+  - src/lib/errors.ts: had apiError() and withErrorHandler() that returned the standard envelope `{error:{code,message,traceId,details}}` BUT did NOT emit any structured server log on error.
+  - src/lib/logger.ts: structured JSON logger (timestamp, level, message, traceId) — emit to stdout/stderr.
+  - src/middleware.ts: rate-limit + CSRF middleware in Edge Runtime. Used `console.warn(JSON.stringify(...))` for rate-limit rejection, but CSRF rejection paths had NO log emission. Also the X-Trace-Id header was only set on RESPONSE, not REQUEST — so route handlers couldn't reuse the middleware's traceId.
+  - 14 routes used `withErrorHandler(async () => { const traceId = newTraceId(); ... })` — created a SECOND traceId inside the route, different from the X-Trace-Id header set by middleware. Response envelope used a THIRD traceId (from withErrorHandler's catch block) when an AppError was thrown.
+- Ran PRE-FIX Test 1: POST /api/orders without CSRF token → response had traceId `138e565c-...` but NO matching log line in dev.log. GAP.
+- Ran PRE-FIX Test 2: POST /api/auth/otp/send with invalid phone → response had traceId `29e54fd6-...` AND X-Trace-Id header `dcd50cd7-...` (DIFFERENT UUIDs!) and NO matching log line in dev.log. GAP.
+
+- Fixed src/lib/errors.ts:
+  - Added new ErrorCode `CSRF_INVALID` (semantically correct for CSRF rejections; previously mislabeled as `VALIDATION_ERROR`).
+  - Added `resolveTraceId(req)` helper that reads `X-Trace-Id` from request headers (set by middleware) — single source of truth.
+  - Rewrote `withErrorHandler` to support TWO calling conventions: `withErrorHandler(req, handler)` (reuses middleware's traceId) and `withErrorHandler(handler)` (generates fresh traceId).
+  - The catch block now ALWAYS emits a structured log line via the same traceId used in the response envelope:
+    - AppError → `warn(app.error.<code>, {code, statusCode, errorMessage, details}, tid)`
+    - Unknown Error → `error(unhandled.error, {errorName, errorMessage}, tid)` (raw message logged server-side ONLY; client receives generic "An unexpected error occurred" message).
+- Fixed src/middleware.ts:
+  - Added `emitStructuredLog(level, message, traceId, context)` Edge-safe helper (uses `console.warn`/`console.error` since Edge Runtime can't import Node's `process.stdout`).
+  - All 3 CSRF rejection branches now emit `warn(csrf.rejected.<reason>, {code, statusCode, path, method, reason}, traceId)` BEFORE returning the 403 envelope.
+  - The X-Trace-Id header is now forwarded on the REQUEST (via `NextResponse.next({request:{headers}})`) so route handlers can read and reuse it.
+- Fixed src/lib/logger.ts: spread context FIRST, then standard fields (timestamp, level, message, traceId) LAST — prevents context fields from accidentally overwriting the standard log fields.
+- Updated all 14 routes that use `withErrorHandler`:
+  - orders/route.ts (POST), orders/[id]/status/route.ts (PATCH)
+  - auth/otp/send/route.ts (POST), auth/otp/verify/route.ts (POST)
+  - auth/admin/login/route.ts (POST), auth/admin/verify/route.ts (POST)
+  - auth/firebase/session/route.ts (POST), auth/firebase/verify-test/route.ts (GET)
+  - auth/supabase/session/route.ts (POST)
+  - menu/[id]/route.ts (PATCH), kill-switches/[key]/route.ts (PATCH)
+  - backup/route.ts (POST + GET), alerts/evaluate/route.ts (GET)
+  - Pattern: `withErrorHandler(async () => { const traceId = newTraceId(); ... })` → `withErrorHandler(req, async (traceId) => { ... })`. Also passed `traceId` to all `apiError()` calls so the envelope's traceId always matches the route's traceId.
+- Added permanent P0-18 test fixture at src/app/api/p0-18-test/route.ts:
+  - GET throws a generic `new Error('simulated-downstream-failure: payment-gateway-timeout')` — used to verify the unhandled-500 path.
+  - POST throws a `TypeError` — verifies a different unexpected error class.
+  - Production guard: returns 403 if `NODE_ENV === 'production'`.
+  - Added `/p0-18-test` to middleware's skip list so CSRF doesn't interfere with the test.
+
+- Ran POST-FIX tests with raw HTTP evidence:
+
+  TEST 1 — CSRF rejection (POST /api/orders without CSRF token):
+    HTTP 403 Forbidden
+    Body: {"error":{"code":"CSRF_INVALID","message":"CSRF token required","traceId":"6d65b17e-4d27-41c8-908d-26fb9a82337e"}}
+    Server log: {"level":"warn","message":"csrf.rejected.missing_token","traceId":"6d65b17e-4d27-41c8-908d-26fb9a82337e","code":"CSRF_INVALID","statusCode":403,"path":"/api/orders","method":"POST","reason":"missing_cookie"}
+    → traceId MATCHES ✅, no leakage ✅.
+
+  TEST 2 — Validation error in route (POST /api/auth/otp/send with phone:"not-a-phone"):
+    HTTP 400 Bad Request
+    X-Trace-Id header: 18e83159-d940-4198-b93c-a3053fd07539
+    Body: {"error":{"code":"VALIDATION_ERROR","message":"Request validation failed","traceId":"18e83159-d940-4198-b93c-a3053fd07539","details":{"phone":"Invalid phone number (E.164 expected)"}}}
+    Server log: {"code":"VALIDATION_ERROR","statusCode":400,"errorMessage":"Request validation failed","details":{"phone":"Invalid phone number (E.164 expected)"},"timestamp":"2026-08-11T12:01:40.382Z","level":"warn","message":"app.error.VALIDATION_ERROR","traceId":"18e83159-d940-4198-b93c-a3053fd07539"}
+    → traceId MATCHES across response header, response body, AND server log ✅ (single source of truth). No leakage ✅. Message field correctly "app.error.VALIDATION_ERROR" (not overwritten by errorMessage) ✅.
+
+  TEST 3 — Unhandled 500 (GET /api/p0-18-test → throws Error):
+    HTTP 500 Internal Server Error
+    Body: {"error":{"code":"INTERNAL_ERROR","message":"An unexpected error occurred. Please retry.","traceId":"64113474-9999-4ac9-b107-34fdb5f64a08","details":{"name":"Error"}}}
+    Server log: {"errorName":"Error","errorMessage":"simulated-downstream-failure: payment-gateway-timeout","timestamp":"2026-08-11T12:03:06.884Z","level":"error","message":"unhandled.error","traceId":"64113474-9999-4ac9-b107-34fdb5f64a08"}
+    → traceId MATCHES ✅. NO LEAKAGE: actual error message "simulated-downstream-failure: payment-gateway-timeout" is ONLY in server log, NOT in client response. Client sees only generic "An unexpected error occurred. Please retry." + `details.name:"Error"` (generic class name, not stack trace) ✅.
+
+  SANITY CHECK — Success path (POST /api/auth/otp/send with valid phone):
+    HTTP 200 OK
+    X-Trace-Id header: 124d3407-7a01-4deb-b3b4-7695f05b4cd6
+    Body: {"otpId":"...","code":"879529","message":"OTP sent to +919876500001","traceId":"124d3407-7a01-4deb-b3b4-7695f05b4cd6"}
+    → traceId in response body MATCHES X-Trace-Id header ✅ (refactor didn't break the happy path).
+
+- Lint clean (eslint passes with no errors/warnings).
+
+Stage Summary:
+- P0-18 (Error Handling): PASS ✅ — three real error requests, three error classes (CSRF_INVALID / VALIDATION_ERROR / INTERNAL_ERROR), each with:
+  (1) correct HTTP status,
+  (2) standard envelope `{error:{code,message,traceId,details?}}`,
+  (3) traceId present in response,
+  (4) SAME traceId in structured server log,
+  (5) no sensitive/internal leakage (raw error message stays server-side only).
+- Root cause fixed: traceId fragmentation (middleware / route / envelope each had different UUIDs) replaced by single source of truth — middleware generates one traceId, forwards it on the request, route handler reuses it, withErrorHandler returns it in the envelope AND logs it.
+- CSRF rejection no longer silent: structured log emitted on every CSRF failure.
+- Unhandled errors no longer leak: raw error message logged server-side at `error` level, generic message returned to client.
+- Next checkpoint (per governance gate): P0-23 Kill switch — NOT YET STARTED, awaiting IDE verification of P0-18 PASS.
+- Updated authoritative ledger: P0-20 ✅, P0-19 ✅, P0-18 ✅ (new). Wave-0 Gate still NOT CLOSED (DEV-001 + P0-27 environment gaps remain).

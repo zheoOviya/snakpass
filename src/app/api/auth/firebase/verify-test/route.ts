@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { verifyFirebaseToken, isAdminConfigured } from '@/lib/firebase-admin'
 import { withErrorHandler, apiError } from '@/lib/errors'
 
@@ -25,8 +25,8 @@ async function runTest(name: string, input: string, expected: 'accept' | 'reject
   }
 }
 
-export const GET = () =>
-  withErrorHandler(async () => {
+export const GET = (req: NextRequest) =>
+  withErrorHandler(req, async (traceId) => {
     // Production guard — test endpoints must not be accessible in prod.
     if (process.env.NODE_ENV === 'production') {
       return apiError('AUTHORIZATION_DENIED', 'Test endpoint not available in production', 403)

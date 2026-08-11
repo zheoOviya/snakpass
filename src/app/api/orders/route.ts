@@ -4,7 +4,7 @@ import { getSessionUser } from '@/lib/session'
 import { emitOrderCreated } from '@/lib/realtime'
 import { validateBody, createOrderBodySchema } from '@/lib/validation'
 import { apiError, withErrorHandler } from '@/lib/errors'
-import { info as logInfo, warn as logWarn, newTraceId } from '@/lib/logger'
+import { info as logInfo, warn as logWarn } from '@/lib/logger'
 
 // GET /api/orders?role=consumer|vendor|admin&restaurantId=&status=&limit=
 export async function GET(req: NextRequest) {
@@ -60,9 +60,7 @@ export async function GET(req: NextRequest) {
 }
 
 // POST /api/orders  body: { restaurantId, items:[{menuItemId,name,price,quantity}], isCatering?, headcount?, note? }
-export const POST = (req: NextRequest) => withErrorHandler(async () => {
-  const traceId = newTraceId()
-
+export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
   // P0-12: Zod validation
   const body = await validateBody(req, createOrderBodySchema)
 
@@ -78,20 +76,20 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
     const catKs = await db.killSwitch.findUnique({ where: { key: 'catering' } })
     if (catKs?.enabled) {
       logWarn('order.create.blocked', { reason: 'kill_switch_catering', traceId }, traceId)
-      return NextResponse.json({ error: 'Catering orders are currently disabled.' }, { status: 503 })
+      return apiError('CONFLICT', 'Catering orders are currently disabled.', 403, undefined, traceId)
     }
   }
 
   const session = await getSessionUser()
   if (!session) {
     logWarn('order.create.unauthorized', { traceId }, traceId)
-    return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
+    return apiError('AUTHENTICATION_REQUIRED', 'Authentication required', 401, undefined, traceId)
   }
   const consumerId = session.userId
   const restaurant = await db.restaurant.findUnique({ where: { id: body.restaurantId } })
   if (!restaurant || !restaurant.isActive || restaurant.isSuspended) {
     logWarn('order.create.restaurant_unavailable', { restaurantId: body.restaurantId, traceId }, traceId)
-    return NextResponse.json({ error: 'Restaurant unavailable' }, { status: 400 })
+    return apiError('NOT_FOUND', 'Restaurant unavailable', 404, undefined, traceId)
   }
 
   const total = body.items.reduce((s: number, i: { price: number; quantity: number }) => s + i.price * i.quantity, 0)

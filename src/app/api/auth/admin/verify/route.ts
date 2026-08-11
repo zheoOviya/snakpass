@@ -6,17 +6,17 @@ import { validateBody, adminVerifyBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
 
 // POST /api/auth/admin/verify  { otpId, code }
-export const POST = (req: NextRequest) => withErrorHandler(async () => {
+export const POST = (req: NextRequest) => withErrorHandler(req, async (traceId) => {
   const { otpId, code } = await validateBody(req, adminVerifyBodySchema)
 
   const result = await verifyOtp(otpId, code)
   if (!result.ok || result.purpose !== 'admin_2fa') {
-    return apiError('AUTHENTICATION_REQUIRED', 'Invalid or expired 2FA code', 401)
+    return apiError('AUTHENTICATION_REQUIRED', 'Invalid or expired 2FA code', 401, undefined, traceId)
   }
 
   const user = await db.user.findUnique({ where: { email: result.target! } })
   if (!user || !['ADMIN', 'SUPER_ADMIN'].includes(user.role)) {
-    return apiError('AUTHORIZATION_DENIED', 'Not an admin account', 403)
+    return apiError('AUTHORIZATION_DENIED', 'Not an admin account', 403, undefined, traceId)
   }
 
   const token = await createSession(user.id, user.role)

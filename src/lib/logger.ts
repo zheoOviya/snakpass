@@ -36,12 +36,16 @@ export function log(
   context: Record<string, unknown> = {},
   traceId?: string,
 ): void {
+  // Spread context FIRST so the standard fields (timestamp, level, message,
+  // traceId) always win — context cannot accidentally overwrite them.
+  // This guarantees log-correlation invariants (P0-18 / P0-19): the message
+  // and traceId passed to log() are exactly what appears in the structured line.
   emit({
+    ...context,
     timestamp: new Date().toISOString(),
     level,
     message,
     traceId,
-    ...context,
   })
 }
 

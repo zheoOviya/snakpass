@@ -6,11 +6,11 @@ import { withErrorHandler, apiError } from '@/lib/errors'
 
 // PATCH /api/menu/[id]  body: { isAvailable }
 export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: string }> }) =>
-  withErrorHandler(async () => {
+  withErrorHandler(req, async (traceId) => {
     const { id } = await params
     const session = await getSessionUser()
     if (!session || !['VENDOR_OWNER', 'VENDOR_STAFF', 'ADMIN', 'SUPER_ADMIN'].includes(session.role)) {
-      return apiError('AUTHORIZATION_DENIED', 'Forbidden', 403)
+      return apiError('AUTHORIZATION_DENIED', 'Forbidden', 403, undefined, traceId)
     }
     const { isAvailable } = await validateBody(req, menuAvailabilityBodySchema)
 
