@@ -52,3 +52,19 @@ prompt
 server.log
 # Skills directory
 /skills/
+
+# P0-16/P0-21 runtime artifacts — must NOT be committed (contain runtime state, DB snapshots)
+db/custom.db
+db/custom.db-journal
+db/backups/
+db/alert-evaluation-log.jsonl
+db/*.db
+db/*.db-journal
+
+# Worklog + governance artifacts — these are development journals, not production code
+# (kept locally; commit selectively if needed for audit trail)
+worklog.md
+WAVE0_GATE_REVIEW.md
+IMPLEMENTATION_LOG.md
+DEVIATION_LOG.md
+WAVE0_EVIDENCE.md

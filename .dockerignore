@@ -1,0 +1,53 @@
+# P0-27 — .dockerignore
+# Excludes dev-only + runtime-state files from Docker build context.
+
+node_modules
+.next
+.git
+.gitignore
+
+# Runtime state (must NOT be baked into image)
+db/custom.db
+db/custom.db-journal
+db/backups/
+db/alert-evaluation-log.jsonl
+db/*.db
+db/*.db-journal
+
+# Dev journals + governance artifacts (not for production image)
+worklog.md
+WAVE0_GATE_REVIEW.md
+IMPLEMENTATION_LOG.md
+DEVIATION_LOG.md
+WAVE0_EVIDENCE.md
+dev.log
+dev.out.log
+*.log
+
+# Env files (provided at runtime, not baked in)
+.env
+.env.*
+!.env.example
+
+# IDE + tooling
+.claude
+.z-ai-config
+/skills/
+
+# Mini-services (deployed separately)
+mini-services/
+
+# Test fixtures (dev-only)
+src/app/api/audit-integrity-test/
+src/app/api/p0-18-test/
+src/app/api/p0-23-test/
+src/app/api/p0-13-test/
+src/app/api/auth/firebase/verify-test/
+
+# Docker files (don't copy into image)
+Dockerfile
+.dockerignore
+docker-compose.yml
+
+# CI files
+.github/
