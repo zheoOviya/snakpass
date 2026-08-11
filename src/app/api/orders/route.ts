@@ -4,7 +4,7 @@ import { getSessionUser } from '@/lib/session'
 import { emitOrderCreated } from '@/lib/realtime'
 import { validateBody, createOrderBodySchema } from '@/lib/validation'
 import { apiError, withErrorHandler } from '@/lib/errors'
-import { info as logInfo, newTraceId } from '@/lib/logger'
+import { info as logInfo, warn as logWarn, newTraceId } from '@/lib/logger'
 
 // GET /api/orders?role=consumer|vendor|admin&restaurantId=&status=&limit=
 export async function GET(req: NextRequest) {
@@ -61,28 +61,36 @@ export async function GET(req: NextRequest) {
 
 // POST /api/orders  body: { restaurantId, items:[{menuItemId,name,price,quantity}], isCatering?, headcount?, note? }
 export const POST = (req: NextRequest) => withErrorHandler(async () => {
+  const traceId = newTraceId()
+
   // P0-12: Zod validation
   const body = await validateBody(req, createOrderBodySchema)
+
+  logInfo('order.create.request', { restaurantId: body.restaurantId, itemCount: body.items.length, traceId }, traceId)
 
   // Kill switch guard: ordering
   const orderingKs = await db.killSwitch.findUnique({ where: { key: 'ordering' } })
   if (orderingKs?.enabled) {
-    return apiError('KILL_SWITCH_ACTIVE', 'Ordering is currently disabled (kill switch active).', 503)
+    logWarn('order.create.blocked', { reason: 'kill_switch_ordering', traceId }, traceId)
+    return apiError('KILL_SWITCH_ACTIVE', 'Ordering is currently disabled (kill switch active).', 503, undefined, traceId)
   }
   if (body.isCatering) {
     const catKs = await db.killSwitch.findUnique({ where: { key: 'catering' } })
     if (catKs?.enabled) {
+      logWarn('order.create.blocked', { reason: 'kill_switch_catering', traceId }, traceId)
       return NextResponse.json({ error: 'Catering orders are currently disabled.' }, { status: 503 })
     }
   }
 
   const session = await getSessionUser()
   if (!session) {
+    logWarn('order.create.unauthorized', { traceId }, traceId)
     return NextResponse.json({ error: 'Authentication required' }, { status: 401 })
   }
   const consumerId = session.userId
   const restaurant = await db.restaurant.findUnique({ where: { id: body.restaurantId } })
   if (!restaurant || !restaurant.isActive || restaurant.isSuspended) {
+    logWarn('order.create.restaurant_unavailable', { restaurantId: body.restaurantId, traceId }, traceId)
     return NextResponse.json({ error: 'Restaurant unavailable' }, { status: 400 })
   }
 
@@ -115,6 +123,8 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
     },
     include: { orderItems: true, restaurant: { select: { id: true, name: true } } },
   })
+
+  logInfo('order.create.success', { orderId: order.id, total, restaurantName: restaurant.name, traceId }, traceId)
 
   await db.auditLog.create({
     data: {
