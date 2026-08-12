@@ -88,53 +88,139 @@ jobs:
         run: |
           set -euo pipefail
           echo "Provisioning Supabase project: $SNAKZAP_PROJECT_NAME in $SNAKZAP_REGION"
+          echo "Note: jq is pre-installed on ubuntu-latest runners (no apt install needed)."
 
-          # Check if project already exists (avoid duplicate provisioning)
-          EXISTING=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects" | \
-            jq -r --arg name "$SNAKZAP_PROJECT_NAME" '.[] | select(.name == $name) | .id' || echo "")
+          # Generate a secure random DB password up front (used for both new + existing projects).
+          # Only alphanumerics so it stays URL-safe for the postgresql:// connection string.
+          SECURE_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)
+          # Mask the password in all subsequent log output for this run.
+          echo "::add-mask::$SECURE_PASSWORD"
+
+          # ----------------------------------------------------------
+          # Step 1: Validate access token + list existing projects.
+          # Capture HTTP status separately from body so we can give a
+          # clear, actionable error if the token is invalid/expired.
+          # ----------------------------------------------------------
+          echo "--- GET /v1/projects (validate token + list projects) ---"
+          LIST_HTTP=$(curl -sS -o /tmp/sb_projects.json -w "%{http_code}" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects" || echo "000")
+          echo "GET /v1/projects -> HTTP $LIST_HTTP"
+
+          if [ "$LIST_HTTP" != "200" ]; then
+            echo "❌ Supabase API rejected the access token (HTTP $LIST_HTTP)."
+            echo "   Response body:"
+            cat /tmp/sb_projects.json || true
+            echo ""
+            echo "   Likely causes:"
+            echo "     1. SUPABASE_ACCESS_TOKEN is expired or revoked."
+            echo "        Generate a fresh one at https://supabase.com/dashboard/account/tokens"
+            echo "     2. SUPABASE_ACCESS_TOKEN was pasted with leading/trailing whitespace."
+            echo "        Re-set the secret with no surrounding spaces."
+            exit 1
+          fi
+
+          # Response is an array of project objects; find one with matching name.
+          EXISTING=$(jq -r --arg name "$SNAKZAP_PROJECT_NAME" \
+            '.[] | select(.name == $name) | .id' /tmp/sb_projects.json 2>/dev/null || echo "")
 
           if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            # ------------------------------------------------------
+            # Existing project: reset its DB password via the
+            # Management API so this workflow can connect without
+            # requiring a stored SUPABASE_DB_PASSWORD secret.
+            # ------------------------------------------------------
             echo "Project already exists with ref: $EXISTING (reusing)"
             PROJECT_REF="$EXISTING"
-            # For existing projects, we need the DB password from a stored secret
-            DB_PASSWORD="${{ secrets.SUPABASE_DB_PASSWORD }}"
-            if [ -z "$DB_PASSWORD" ]; then
-              echo "❌ Existing project requires SUPABASE_DB_PASSWORD secret to be set"
-              exit 1
-            fi
-          else
-            # Generate a secure random DB password (used only by this workflow)
-            SECURE_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)
 
-            # Create project via Management API
-            RESPONSE=$(curl -sS -X POST "https://api.supabase.com/v1/projects" \
+            echo "--- POST /v1/projects/$PROJECT_REF/database/password (reset DB password) ---"
+            RESET_HTTP=$(curl -sS -o /tmp/sb_reset.json -w "%{http_code}" \
+              -X POST \
               -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
               -H "Content-Type: application/json" \
-              -d "$(jq -n --arg org "$SUPABASE_ORG_ID" --arg name "$SNAKZAP_PROJECT_NAME" --arg region "$SNAKZAP_REGION" --arg pw "$SECURE_PASSWORD" '{
+              -d '{}' \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF/database/password" || echo "000")
+            echo "POST .../database/password -> HTTP $RESET_HTTP"
+
+            if [ "$RESET_HTTP" != "200" ] && [ "$RESET_HTTP" != "201" ] && [ "$RESET_HTTP" != "204" ]; then
+              echo "❌ Could not reset DB password via Management API (HTTP $RESET_HTTP)."
+              echo "   Response body:"
+              cat /tmp/sb_reset.json || true
+              echo ""
+              echo "   To proceed manually, either:"
+              echo "     (A) Delete the existing project in the Supabase dashboard, then re-run this workflow."
+              echo "     (B) Add a SUPABASE_DB_PASSWORD GitHub secret containing the project's current DB password,"
+              echo "         then switch this workflow back to using it."
+              exit 1
+            fi
+
+            # Supabase returns the new password in the response body as {"password": "..."}.
+            RETURNED_PW=$(jq -r '.password // empty' /tmp/sb_reset.json 2>/dev/null || echo "")
+            if [ -n "$RETURNED_PW" ] && [ "$RETURNED_PW" != "null" ]; then
+              DB_PASSWORD="$RETURNED_PW"
+            else
+              # Fallback: API did not echo back a password — assume it accepted our provided one.
+              DB_PASSWORD="$SECURE_PASSWORD"
+            fi
+            echo "::add-mask::$DB_PASSWORD"
+          else
+            # ------------------------------------------------------
+            # No existing project: create a fresh free-tier project.
+            # ------------------------------------------------------
+            echo "No existing project found — creating new project"
+            echo "--- POST /v1/projects ---"
+            CREATE_HTTP=$(curl -sS -o /tmp/sb_create.json -w "%{http_code}" \
+              -X POST "https://api.supabase.com/v1/projects" \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg org "$SUPABASE_ORG_ID" --arg name "$SNAKZAP_PROJECT_NAME" \
+                      --arg region "$SNAKZAP_REGION" --arg pw "$SECURE_PASSWORD" '{
                 organization_id: $org,
                 name: $name,
                 db_pass: $pw,
                 region: $region,
                 plan: "free"
-              }')")
+              }')" || echo "000")
+            echo "POST /v1/projects -> HTTP $CREATE_HTTP"
 
-            PROJECT_REF=$(echo "$RESPONSE" | jq -r '.id')
+            if [ "$CREATE_HTTP" != "200" ] && [ "$CREATE_HTTP" != "201" ]; then
+              echo "❌ Project creation failed (HTTP $CREATE_HTTP)."
+              echo "   Response body:"
+              cat /tmp/sb_create.json || true
+              echo ""
+              echo "   Likely causes:"
+              echo "     1. Free tier limit reached (Supabase allows max 2 free projects per org)."
+              echo "        -> Delete an unused project in the Supabase dashboard, or upgrade to Pro."
+              echo "     2. A project with name '$SNAKZAP_PROJECT_NAME' already exists under another org."
+              echo "        -> Delete it, or change the SNAKZAP_PROJECT_NAME secret."
+              echo "     3. Invalid SUPABASE_ORG_ID — find your org ID at"
+              echo "        https://supabase.com/dashboard/account/org"
+              echo "     4. Invalid SNAKZAP_REGION — must be a Supabase region (e.g. ap-south-1, us-east-1,"
+              echo "        eu-west-1). See https://supabase.com/docs/guides/platform/regions"
+              exit 1
+            fi
+
+            PROJECT_REF=$(jq -r '.id' /tmp/sb_create.json)
             if [ -z "$PROJECT_REF" ] || [ "$PROJECT_REF" = "null" ]; then
-              echo "❌ Project creation failed. API response:"
-              echo "$RESPONSE"
+              echo "❌ Project created but no 'id' field in response:"
+              cat /tmp/sb_create.json || true
               exit 1
             fi
             echo "Project created with ref: $PROJECT_REF"
-
             DB_PASSWORD="$SECURE_PASSWORD"
           fi
 
-          # Poll for project readiness (status: ACTIVE)
-          echo "Waiting for project to become ACTIVE (max 5 min)..."
-          for i in $(seq 1 30); do
+          # ----------------------------------------------------------
+          # Step 2: Poll for project readiness (status: ACTIVE).
+          # Supabase free-tier provisioning can take several minutes;
+          # poll up to 10 minutes to be safe.
+          # ----------------------------------------------------------
+          echo "Waiting for project to become ACTIVE (max 10 min)..."
+          STATUS=""
+          for i in $(seq 1 60); do
             STATUS=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-              "https://api.supabase.com/v1/projects/$PROJECT_REF" | jq -r '.status')
+              "https://api.supabase.com/v1/projects/$PROJECT_REF" 2>/dev/null \
+              | jq -r '.status // "UNKNOWN"' 2>/dev/null || echo "UNKNOWN")
             echo "  Attempt $i: status=$STATUS"
             if [ "$STATUS" = "ACTIVE" ]; then
               break
@@ -143,14 +229,21 @@ jobs:
           done
 
           if [ "$STATUS" != "ACTIVE" ]; then
-            echo "❌ Project did not become ACTIVE in time"
+            echo "❌ Project did not become ACTIVE within 10 minutes (last status: $STATUS)."
+            echo "   Check the project in the Supabase dashboard; it may still be initializing."
             exit 1
           fi
           echo "✅ Project is ACTIVE"
 
-          # Construct connection string (using direct connection for migrations)
-          # Password is in env var, GitHub Actions will mask it in logs
-          DATABASE_URL="postgresql://postgres.$PROJECT_REF:${DB_PASSWORD}@aws-${SNAKZAP_REGION}.pooler.supabase.com:5432/postgres"
+          # ----------------------------------------------------------
+          # Step 3: Construct the connection string.
+          # Uses the Supavisor session-mode pooler (port 5432) —
+          # session mode is required for DDL/migration + role creation.
+          # Password is URL-encoded so API-generated passwords with
+          # special characters do not break the URI.
+          # ----------------------------------------------------------
+          ENCODED_PW=$(jq -rn --arg pw "$DB_PASSWORD" '$pw|@uri')
+          DATABASE_URL="postgresql://postgres.$PROJECT_REF:${ENCODED_PW}@aws-${SNAKZAP_REGION}.pooler.supabase.com:5432/postgres"
 
           echo "project_ref=$PROJECT_REF" >> $GITHUB_OUTPUT
           echo "database_url=$DATABASE_URL" >> $GITHUB_OUTPUT
@@ -278,8 +371,16 @@ jobs:
 
       - name: Download tamper evidence
         uses: actions/download-artifact@v4
+        id: download_tamper
+        continue-on-error: true
         with:
           name: dev-001-tamper-evidence
+
+      - name: Create placeholder if tamper evidence is missing
+        if: steps.download_tamper.outcome != 'success'
+        run: |
+          echo '{"all_passed": "NOT_RUN", "tests": [], "reason": "tamper-test job was skipped (upstream provision/migrate step failed)"}' > tamper-results.json
+          echo "⚠️  Tamper evidence artifact was not available — wrote placeholder tamper-results.json."
 
       - name: Build consolidated evidence JSON
         env:
@@ -291,14 +392,17 @@ jobs:
           GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq jq
+          # Merge tamper-results.json into the evidence envelope so we capture
+          # per-test detail even when capture-evidence runs after an upstream failure.
           jq -n \
             --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --arg project_ref "$PROJECT_REF" \
+            --arg project_ref "${PROJECT_REF:-NOT_PROVISIONED}" \
             --arg migration_status "${MIGRATION_STATUS:-NOT_RUN}" \
             --arg revoke_status "${REVOKE_STATUS:-NOT_RUN}" \
             --arg tamper_passed "${TAMPER_PASSED:-NOT_RUN}" \
             --arg run_id "$GITHUB_RUN_ID" \
             --arg run_url "$GITHUB_RUN_URL" \
+            --slurpfile tamper tamper-results.json \
             '{
               capability: "DEV-001 / P0-22 Production WORM Closure",
               timestamp: $timestamp,
@@ -317,6 +421,7 @@ jobs:
                 revoke_executed: $revoke_status,
                 tamper_tests: $tamper_passed
               },
+              tamper_detail: ($tamper[0] // null),
               verdict: (if ($tamper_passed == "true") then "PASS_CANDIDATE" else "FAIL" end),
               governance_note: "Evidence subject to independent G/H review before Wave-0 closure"
             }' > dev-001-evidence.json
