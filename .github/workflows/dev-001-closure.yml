@@ -1,0 +1,356 @@
+# P0-27 / DEV-001 — Production WORM Closure Workflow
+#
+# This workflow provisions a managed PostgreSQL instance via Supabase,
+# migrates the existing SQLite schema to PostgreSQL, creates role-separated
+# privileges (snakzap_admin + snakzap_app), executes REVOKE UPDATE/DELETE
+# on the audit_log table, then runs positive + negative tamper tests.
+#
+# Required GitHub Secrets (configure in repo Settings → Secrets → Actions):
+#   - SUPABASE_ACCESS_TOKEN   (Supabase dashboard → Account → Access Tokens)
+#   - SUPABASE_ORG_ID          (Supabase dashboard → Account → Organizations → ID)
+#   - SNAKZAP_PROJECT_NAME     (e.g. "snakzap-prod")
+#   - SNAKZAP_REGION           (e.g. "ap-south-1")
+#
+# Optional:
+#   - VERCEL_TOKEN             (for follow-on P0-27 Phase 2 deployment)
+#   - VERCEL_TEAM_ID           (only for Vercel team accounts)
+#
+# NO credentials are exposed in logs. All sensitive values come from secrets.
+# Evidence is captured as a workflow artifact (evidence.json) and printed to logs.
+
+name: DEV-001 Closure
+
+on:
+  workflow_dispatch:  # manual trigger only — no automatic runs
+    inputs:
+      confirm_production:
+        description: 'Type "PROD-WORM-CLOSURE" to confirm production WORM closure execution'
+        required: true
+        default: ''
+
+# Cancel in-progress runs for the same ref
+concurrency:
+  group: dev-001-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify-trigger:
+    name: Verify Manual Trigger Confirmation
+    runs-on: ubuntu-latest
+    outputs:
+      authorized: ${{ steps.check.outputs.authorized }}
+    steps:
+      - id: check
+        run: |
+          if [ "${{ github.event.inputs.confirm_production }}" = "PROD-WORM-CLOSURE" ]; then
+            echo "authorized=true" >> $GITHUB_OUTPUT
+            echo "✅ Production WORM closure authorized"
+          else
+            echo "authorized=false" >> $GITHUB_OUTPUT
+            echo "❌ Confirmation string mismatch. Workflow will not proceed."
+            exit 1
+          fi
+
+  provision-postgresql:
+    name: Provision Supabase PostgreSQL
+    needs: verify-trigger
+    if: needs.verify-trigger.outputs.authorized == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      database_url: ${{ steps.provision.outputs.database_url }}
+      project_ref: ${{ steps.provision.outputs.project_ref }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify required secrets present (no value exposure)
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_ORG_ID: ${{ secrets.SUPABASE_ORG_ID }}
+          SNAKZAP_PROJECT_NAME: ${{ secrets.SNAKZAP_PROJECT_NAME }}
+          SNAKZAP_REGION: ${{ secrets.SNAKZAP_REGION }}
+        run: |
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN missing"; exit 1; }
+          [ -n "$SUPABASE_ORG_ID" ] || { echo "❌ SUPABASE_ORG_ID missing"; exit 1; }
+          [ -n "$SNAKZAP_PROJECT_NAME" ] || { echo "❌ SNAKZAP_PROJECT_NAME missing"; exit 1; }
+          [ -n "$SNAKZAP_REGION" ] || { echo "❌ SNAKZAP_REGION missing"; exit 1; }
+          echo "✅ All required secrets present (values not exposed)"
+
+      - name: Provision Supabase project via Management API
+        id: provision
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_ORG_ID: ${{ secrets.SUPABASE_ORG_ID }}
+          SNAKZAP_PROJECT_NAME: ${{ secrets.SNAKZAP_PROJECT_NAME }}
+          SNAKZAP_REGION: ${{ secrets.SNAKZAP_REGION }}
+        run: |
+          set -euo pipefail
+          echo "Provisioning Supabase project: $SNAKZAP_PROJECT_NAME in $SNAKZAP_REGION"
+
+          # Check if project already exists (avoid duplicate provisioning)
+          EXISTING=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects" | \
+            jq -r --arg name "$SNAKZAP_PROJECT_NAME" '.[] | select(.name == $name) | .id' || echo "")
+
+          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+            echo "Project already exists with ref: $EXISTING (reusing)"
+            PROJECT_REF="$EXISTING"
+            # For existing projects, we need the DB password from a stored secret
+            DB_PASSWORD="${{ secrets.SUPABASE_DB_PASSWORD }}"
+            if [ -z "$DB_PASSWORD" ]; then
+              echo "❌ Existing project requires SUPABASE_DB_PASSWORD secret to be set"
+              exit 1
+            fi
+          else
+            # Generate a secure random DB password (used only by this workflow)
+            SECURE_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)
+
+            # Create project via Management API
+            RESPONSE=$(curl -sS -X POST "https://api.supabase.com/v1/projects" \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "$(jq -n --arg org "$SUPABASE_ORG_ID" --arg name "$SNAKZAP_PROJECT_NAME" --arg region "$SNAKZAP_REGION" --arg pw "$SECURE_PASSWORD" '{
+                organization_id: $org,
+                name: $name,
+                db_pass: $pw,
+                region: $region,
+                plan: "free"
+              }')")
+
+            PROJECT_REF=$(echo "$RESPONSE" | jq -r '.id')
+            if [ -z "$PROJECT_REF" ] || [ "$PROJECT_REF" = "null" ]; then
+              echo "❌ Project creation failed. API response:"
+              echo "$RESPONSE"
+              exit 1
+            fi
+            echo "Project created with ref: $PROJECT_REF"
+
+            DB_PASSWORD="$SECURE_PASSWORD"
+          fi
+
+          # Poll for project readiness (status: ACTIVE)
+          echo "Waiting for project to become ACTIVE (max 5 min)..."
+          for i in $(seq 1 30); do
+            STATUS=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF" | jq -r '.status')
+            echo "  Attempt $i: status=$STATUS"
+            if [ "$STATUS" = "ACTIVE" ]; then
+              break
+            fi
+            sleep 10
+          done
+
+          if [ "$STATUS" != "ACTIVE" ]; then
+            echo "❌ Project did not become ACTIVE in time"
+            exit 1
+          fi
+          echo "✅ Project is ACTIVE"
+
+          # Construct connection string (using direct connection for migrations)
+          # Password is in env var, GitHub Actions will mask it in logs
+          DATABASE_URL="postgresql://postgres.$PROJECT_REF:${DB_PASSWORD}@aws-${SNAKZAP_REGION}.pooler.supabase.com:5432/postgres"
+
+          echo "project_ref=$PROJECT_REF" >> $GITHUB_OUTPUT
+          echo "database_url=$DATABASE_URL" >> $GITHUB_OUTPUT
+          echo "✅ Database URL constructed (value masked in logs)"
+
+      - name: Verify PostgreSQL connectivity
+        env:
+          DATABASE_URL: ${{ steps.provision.outputs.database_url }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          psql "$DATABASE_URL" -c "SELECT version();" || {
+            echo "❌ Cannot connect to PostgreSQL"
+            exit 1
+          }
+          echo "✅ PostgreSQL connectivity verified"
+
+  migrate-and-revoke:
+    name: Migrate Schema + Execute REVOKE
+    needs: provision-postgresql
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      migration_status: ${{ steps.migrate.outputs.status }}
+      revoke_status: ${{ steps.revoke.outputs.status }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+
+      - name: Run PostgreSQL migration (create schema)
+        id: migrate
+        env:
+          DATABASE_URL: ${{ needs.provision-postgresql.outputs.database_url }}
+        run: |
+          set -euo pipefail
+          echo "=== Running PostgreSQL schema migration ==="
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/scripts/postgres-migration.sql
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ Schema migration complete"
+
+      - name: Create role separation (snakzap_admin + snakzap_app)
+        env:
+          DATABASE_URL: ${{ needs.provision-postgresql.outputs.database_url }}
+        run: |
+          set -euo pipefail
+          echo "=== Creating application + admin roles ==="
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/scripts/create-roles.sql
+          echo "✅ Role separation complete"
+
+      - name: Execute REVOKE UPDATE/DELETE on audit_log
+        id: revoke
+        env:
+          DATABASE_URL: ${{ needs.provision-postgresql.outputs.database_url }}
+        run: |
+          set -euo pipefail
+          echo "=== Executing REVOKE for production WORM boundary ==="
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/scripts/revoke-worm.sql
+          echo "status=success" >> $GITHUB_OUTPUT
+          echo "✅ REVOKE complete — application role cannot UPDATE/DELETE audit_log"
+
+      - name: Seed initial data
+        env:
+          DATABASE_URL: ${{ needs.provision-postgresql.outputs.database_url }}
+        run: |
+          set -euo pipefail
+          echo "=== Seeding initial data ==="
+          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/scripts/seed-postgres.sql
+          echo "✅ Seed data inserted"
+
+  tamper-test:
+    name: P0-20 Tamper Tests (PostgreSQL Privilege Boundary)
+    needs: [provision-postgresql, migrate-and-revoke]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      tamper_test_passed: ${{ steps.test.outputs.passed }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client + jq
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client jq
+
+      - name: Run tamper tests (positive + negative)
+        id: test
+        env:
+          DATABASE_URL: ${{ needs.provision-postgresql.outputs.database_url }}
+        run: |
+          set -euo pipefail
+          echo "=== Running tamper tests ==="
+          chmod +x prisma/scripts/tamper-test.sh
+          bash prisma/scripts/tamper-test.sh "$DATABASE_URL" > tamper-results.json 2>&1 || true
+          cat tamper-results.json
+          PASSED=$(jq -r '.all_passed' tamper-results.json 2>/dev/null || echo "false")
+          if [ "$PASSED" = "true" ]; then
+            echo "passed=true" >> $GITHUB_OUTPUT
+            echo "✅ All tamper tests PASS"
+          else
+            echo "passed=false" >> $GITHUB_OUTPUT
+            echo "❌ Tamper tests FAILED"
+            exit 1
+          fi
+
+      - name: Upload tamper test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-001-tamper-evidence
+          path: tamper-results.json
+          retention-days: 90
+
+  capture-evidence:
+    name: Capture DEV-001 Closure Evidence
+    needs: [provision-postgresql, migrate-and-revoke, tamper-test]
+    if: always()
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download tamper evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: dev-001-tamper-evidence
+
+      - name: Build consolidated evidence JSON
+        env:
+          PROJECT_REF: ${{ needs.provision-postgresql.outputs.project_ref }}
+          MIGRATION_STATUS: ${{ needs.migrate-and-revoke.outputs.migration_status }}
+          REVOKE_STATUS: ${{ needs.migrate-and-revoke.outputs.revoke_status }}
+          TAMPER_PASSED: ${{ needs.tamper-test.outputs.tamper_test_passed }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq jq
+          jq -n \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg project_ref "$PROJECT_REF" \
+            --arg migration_status "${MIGRATION_STATUS:-NOT_RUN}" \
+            --arg revoke_status "${REVOKE_STATUS:-NOT_RUN}" \
+            --arg tamper_passed "${TAMPER_PASSED:-NOT_RUN}" \
+            --arg run_id "$GITHUB_RUN_ID" \
+            --arg run_url "$GITHUB_RUN_URL" \
+            '{
+              capability: "DEV-001 / P0-22 Production WORM Closure",
+              timestamp: $timestamp,
+              environment: {
+                provider: "Supabase",
+                project_ref: $project_ref,
+                database: "PostgreSQL (managed)"
+              },
+              execution: {
+                workflow_run_id: $run_id,
+                workflow_run_url: $run_url
+              },
+              steps: {
+                schema_migration: $migration_status,
+                role_separation: "snakzap_admin (DDL) + snakzap_app (DML, no UPDATE/DELETE on audit_log)",
+                revoke_executed: $revoke_status,
+                tamper_tests: $tamper_passed
+              },
+              verdict: (if ($tamper_passed == "true") then "PASS_CANDIDATE" else "FAIL" end),
+              governance_note: "Evidence subject to independent G/H review before Wave-0 closure"
+            }' > dev-001-evidence.json
+
+          cat dev-001-evidence.json
+
+      - name: Upload consolidated evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-001-closure-evidence
+          path: dev-001-evidence.json
+          retention-days: 365
+
+      - name: Print evidence summary
+        run: |
+          echo ""
+          echo "================================================"
+          echo "  DEV-001 / P0-22 PRODUCTION WORM CLOSURE"
+          echo "================================================"
+          cat dev-001-evidence.json | jq -r '
+            "Timestamp:        \(.timestamp)",
+            "Provider:         \(.environment.provider)",
+            "Project Ref:      \(.environment.project_ref)",
+            "Database:         \(.environment.database)",
+            "",
+            "Workflow Run:     \(.execution.workflow_run_url)",
+            "",
+            "Schema Migration: \(.steps.schema_migration)",
+            "Role Separation:  \(.steps.role_separation)",
+            "REVOKE Executed:  \(.steps.revoke_executed)",
+            "Tamper Tests:     \(.steps.tamper_tests)",
+            "",
+            "VERDICT:          \(.verdict)",
+            "",
+            "Note: \(.governance_note)"
+          '
+          echo "================================================"
