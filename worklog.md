@@ -1204,3 +1204,84 @@ Stage Summary:
 - After push, the user should re-run the workflow manually with confirm_production=PROD-WORM-CLOSURE. The new error logging will pinpoint which of the three root-cause scenarios applies to their Supabase account; the existing-project branch will now self-heal by resetting the DB password via the API.
 - If the new run still fails at the provision step, the printed HTTP status code + response body will tell the user exactly what to fix (regenerate token, delete an unused project for free-tier limit, correct ORG_ID/REGION, etc.).
 - DEV-001 + P0-22 status: still OPEN — this fix is necessary but not sufficient; the workflow must actually complete successfully (all 5 tamper tests PASS) before DEV-001 can be closed.
+
+
+---
+
+## Task ID: 53 — Agent: workflow-status-checker
+
+**Goal:** Verify whether the DEV-001 Closure workflow fix has been committed/pushed to GitHub `origin/main`, and check the status of any new workflow runs.
+
+### Investigation method (read-only, unauthenticated GitHub API)
+- Pulled remote file via `https://raw.githubusercontent.com/zheoOviya/snakpass/main/.github/workflows/dev-001-closure.yml`
+- Pulled remote file metadata via `https://api.github.com/repos/zheoOviya/snakpass/contents/.github/workflows/dev-001-closure.yml`
+- Listed all workflows via `https://api.github.com/repos/zheoOviya/snakpass/actions/workflows`
+- Queried runs of the dev-001-closure workflow via `https://api.github.com/repos/zheoOviya/snakpass/actions/workflows/dev-001-closure.yml/runs`
+- Queried ALL recent runs via `https://api.github.com/repos/zheoOviya/snakpass/actions/runs?per_page=15`
+- Cross-checked the specific Run ID `31646938036` reported by the previous Task 52 agent via `https://api.github.com/repos/zheoOviya/snakpass/actions/runs/31646938036`
+- Cross-referenced local `git log`, `git status`, and `git rev-list --left-right --count origin/main...HEAD`
+- No pushes/dispatches attempted (no token, read-only mandate respected)
+
+### Findings
+
+**1. The fix is NOT committed to GitHub `origin/main`.**
+
+The remote file at `origin/main` is still the OLD version:
+
+| Marker | Remote (origin/main) | Local (HEAD) |
+|---|---|---|
+| `::add-mask::$SECURE_PASSWORD` | ❌ 0 | ✅ 2 |
+| `LIST_HTTP=$(curl … -w "%{http_code}")` | ❌ 0 | ✅ 1 |
+| `POST …/database/password` (password-reset API) | ❌ 0 | ✅ 3 |
+| `continue-on-error: true` on download-artifact | ❌ 0 | ✅ 1 |
+| "Create placeholder if tamper evidence is missing" step | ❌ 0 | ✅ 1 |
+| `SUPABASE_DB_PASSWORD` hard-requirement (bug) | ⚠️ 2 (still present) | ✅ 2 (only in fallback hint text, not in logic) |
+| Line count | 356 lines / 14491 bytes | 461 lines / 20953 bytes |
+
+Remote file blob SHA on GitHub: `0feb9030ed06e43861006fd8111143c259657d32`
+Remote origin/main HEAD commit: `9038ad03ce54e42b00ddb43bae3751369a655197` ("Merge origin/main + add DEV-001 closure artifacts", 2026-08-12T14:22:46Z) — this commit ADDED the workflow but with the OLD/buggy version.
+
+The user's local repo at `/home/z/my-project` HAS the fix committed locally:
+- Local HEAD: `d18b717fa2ee23776f147aa47d98e955dc07acbd` (msg "81d4ee3d-a756-495f-80d7-0f72a3692da7", 2026-08-12T23:01:39Z)
+- That commit modifies `.github/workflows/dev-001-closure.yml` (+161 lines / -29 lines, exactly the fix)
+- Local main is **2 commits ahead** of origin/main (the fix commit + a prior merge), and the local `origin/main` ref still points at `9038ad03` — i.e., `git push` was never run.
+
+So the user's belief "previously committed a fixed version" is only true locally — the fix commit `d18b717` is sitting on disk but was **never pushed** to GitHub (consistent with the previous Task 52 note: "Fix NOT pushed — no GitHub token, PAT was revoked for security").
+
+**2. There are ZERO runs of the DEV-001 Closure workflow on GitHub.**
+
+- `GET /actions/workflows/dev-001-closure.yml/runs?per_page=10` → `total_count: 0`
+- `GET /actions/workflows` confirms the workflow object itself exists: workflow ID `332822992`, name "DEV-001 Closure", path `.github/workflows/dev-001-closure.yml`, state `active`, created `2026-08-12T14:23:04Z` (matches commit `9038ad03`).
+- `GET /actions/runs?per_page=15` (all workflows) → `total_count: 3`, all three of which are CI (`ci.yml`) runs — none for dev-001-closure:
+  - Run 31606476795 — CI, push, success, head `9038ad03`, 2026-08-12T14:23:06Z
+  - Run 31509257404 — CI, push, success, head `654c146eb6d6`, 2026-08-11T15:51:01Z
+  - Run 31509116694 — CI, push, failure, head `a33bb5eb9ae8`, 2026-08-11T15:49:26Z
+- The previously-reported Run ID `31646938036` from Task 52 returns **404 "Not Found"** from the GitHub API (`GET /actions/runs/31646938036` → `{"message": "Not Found"}`). Either it never existed on this repo (possible misreading by the previous agent), or it was deleted. Either way it is not currently retrievable.
+
+**3. No job-level details to report** — because there are no runs of the dev-001-closure workflow to drill into.
+
+**4. No new run has been triggered.** The user has not clicked "Run workflow" since the fix (and cannot do so meaningfully until the fix is pushed, because clicking "Run workflow" on the GitHub Web UI would dispatch against `origin/main` HEAD — which still has the OLD buggy workflow file).
+
+### Stage Summary (Task 53)
+- ❌ **Fix NOT on GitHub.** Remote `origin/main` still has the original buggy `dev-001-closure.yml` with the `SUPABASE_DB_PASSWORD` hard-requirement and no `continue-on-error` / placeholder fallback on the evidence job.
+- ✅ **Fix IS committed locally** as commit `d18b717` (HEAD of local main, 2 commits ahead of origin/main). User must push this to GitHub before re-running.
+- ⚠️ **Zero DEV-001 Closure workflow runs exist on GitHub.** The previously-cited Run ID `31646938036` from Task 52 returns 404 from the GitHub API — its existence cannot be confirmed.
+- 🚫 **Cannot push or dispatch from this agent** — no GitHub token, read-only mandate. Even if we had a token, the user explicitly revoked the prior PAT for security.
+- 🚫 **Cannot fetch `/logs` or `/dispatches` endpoints** — both require authenticated write/admin access and would return 403 on a public repo without auth. Did not attempt.
+
+### Required next actions for the user (in order)
+1. **Push the local fix commit `d18b717` to GitHub `origin/main`** using a fresh PAT or SSH key (the previous PAT was revoked):
+   ```bash
+   # From /home/z/my-project after configuring auth:
+   git push origin main
+   ```
+   Or, if the user prefers not to deal with tokens locally, they can paste the local file contents (461 lines) into the GitHub Web UI file editor at https://github.com/zheoOviya/snakpass/edit/main/.github/workflows/dev-001-closure.yml and commit directly.
+2. **Verify the push landed**: visit https://github.com/zheoOviya/snakpass/blob/main/.github/workflows/dev-001-closure.yml and confirm the file is 461 lines and contains `::add-mask::$SECURE_PASSWORD` and the `POST .../database/password` block.
+3. **Manually trigger the workflow** at https://github.com/zheoOviya/snakpass/actions/workflows/dev-001-closure.yml → click "Run workflow" → branch `main` → input `confirm_production` = `PROD-WORM-CLOSURE`.
+4. **Watch the new run**: the workflow should now produce HTTP-status logging at every Supabase API call, and if an existing project is detected, it will self-heal via the password-reset Management API instead of failing on a missing `SUPABASE_DB_PASSWORD` secret.
+5. **If the new run still fails**, the printed HTTP status code + response body in the new logs will pinpoint which of the three root-cause scenarios applies (invalid token / existing project free-tier limit / API-rejected create call) — much more actionable than the previous sub-second failure.
+6. **Regardless of run outcome**, the capture-evidence job will now ALWAYS produce a `dev-001-closure-evidence` artifact (thanks to `continue-on-error: true` + the placeholder-tamper step), so the user gets a downloadable evidence envelope even on total failure.
+
+### Rate-limit notes for the next agent
+- Hit GitHub's secondary rate limit (abuse-detection 403 with "API rate limit exceeded for 47.57.242.119" body) twice while doing sequential API pings, despite the hourly core quota showing 36–45/60 remaining. The fix was to insert 60–90s sleeps between calls.
+- The hourly quota as of last check: **41/60 remaining**, reset epoch `1786580521`.
