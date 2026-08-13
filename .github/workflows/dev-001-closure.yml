@@ -317,11 +317,24 @@ jobs:
           DATABASE_URL: ${{ steps.provision.outputs.database_url }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
-          psql "$DATABASE_URL" -c "SELECT version();" || {
-            echo "❌ Cannot connect to PostgreSQL"
-            exit 1
-          }
-          echo "✅ PostgreSQL connectivity verified"
+          # Wait for DNS to propagate — newly created Supabase projects may
+          # take 30-60 seconds for the pooler hostname to become resolvable.
+          echo "Waiting 30s for DNS to propagate..."
+          sleep 30
+          # Try connecting up to 3 times with 15s intervals
+          for i in 1 2 3; do
+            echo "Connection attempt $i of 3..."
+            if psql "$DATABASE_URL" -c "SELECT version();" 2>&1; then
+              echo "✅ PostgreSQL connectivity verified"
+              exit 0
+            fi
+            echo "Attempt $i failed, waiting 15s..."
+            sleep 15
+          done
+          echo "❌ Cannot connect to PostgreSQL after 3 attempts"
+          echo "   This may be a DNS propagation delay for newly created Supabase projects."
+          echo "   The project was created successfully — try re-running the workflow."
+          exit 1
 
   migrate-and-revoke:
     name: Migrate Schema + Execute REVOKE
