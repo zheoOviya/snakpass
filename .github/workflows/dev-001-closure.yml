@@ -323,85 +323,92 @@ jobs:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           DB_PASSWORD_ENV: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client dnsutils
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client dnsutils socat
 
           # Extract password from DATABASE_URL (it's masked but still valid in the env var)
           DB_PW=$(echo "$DATABASE_URL" | sed -E 's|postgresql://[^:]+:([^@]+)@.*|\1|')
           echo "::add-mask::$DB_PW"
 
-          # Try multiple connection strategies:
-          #
-          # Strategy 1: Direct connection db.{ref}.supabase.co on port 5432
-          #   - This resolves to IPv6 by default (which GitHub Actions can't reach)
-          #   - But we can try resolving the IPv4 A record and connect directly to the IP
-          #
-          # Strategy 2: Pooler connection aws-{region}.pooler.supabase.com on port 5432
-          #   - May not be DNS-resolvable for newly created projects (takes hours)
-          #
-          # Strategy 3: Transaction pooler on port 6543 (different hostname, might work)
+          # ==============================================================
+          # Supabase free-tier projects only have IPv6 connectivity.
+          # GitHub Actions runners don't support IPv6.
+          # Solution: resolve the IPv6 address of db.{ref}.supabase.co,
+          # then use socat to create a local IPv4→IPv6 proxy.
+          # ==============================================================
 
-          echo "=== Strategy 1: Direct connection with IPv4 ==="
           DIRECT_HOST="db.${PROJECT_REF}.supabase.co"
-          echo "  Resolving: $DIRECT_HOST"
-          # Try both A (IPv4) and AAAA (IPv6) records
-          DIRECT_IPV4=$(dig +short A "$DIRECT_HOST" 2>/dev/null | head -1)
+          echo "=== Resolving $DIRECT_HOST ==="
           DIRECT_IPV6=$(dig +short AAAA "$DIRECT_HOST" 2>/dev/null | head -1)
+          DIRECT_IPV4=$(dig +short A "$DIRECT_HOST" 2>/dev/null | head -1)
           echo "  IPv4: ${DIRECT_IPV4:-none}"
           echo "  IPv6: ${DIRECT_IPV6:-none}"
 
           if [ -n "$DIRECT_IPV4" ]; then
-            echo "  ✅ IPv4 found — connecting directly to IP..."
+            echo "✅ IPv4 available — connecting directly..."
             if PGPASSWORD="$DB_PW" psql -h "$DIRECT_IPV4" -p 5432 -U "postgres.${PROJECT_REF}" -d postgres -c "SELECT version();" 2>&1; then
               echo "✅ PostgreSQL connectivity verified via direct IPv4"
-              # Update DATABASE_URL to use the IPv4 address
               echo "database_url=postgresql://postgres.${PROJECT_REF}:${DB_PW}@${DIRECT_IPV4}:5432/postgres" >> $GITHUB_OUTPUT
               exit 0
             fi
           fi
 
-          echo ""
-          echo "=== Strategy 2: Pooler connection ==="
-          POOLER_HOST=$(echo "$DATABASE_URL" | sed -E 's/.*@([^:]+):.*/\1/')
-          echo "  Resolving: $POOLER_HOST"
-          POOLER_IPV4=$(dig +short A "$POOLER_HOST" 2>/dev/null | head -1)
-          echo "  IPv4: ${POOLER_IPV4:-none}"
-
-          if [ -n "$POOLER_IPV4" ]; then
-            echo "  ✅ IPv4 found — connecting via pooler..."
-            if psql "$DATABASE_URL" -c "SELECT version();" 2>&1; then
-              echo "✅ PostgreSQL connectivity verified via pooler"
-              exit 0
-            fi
+          if [ -z "$DIRECT_IPV6" ]; then
+            echo "❌ No IPv4 or IPv6 address found for $DIRECT_HOST"
+            echo "   The Supabase project may not be fully initialized yet."
+            exit 1
           fi
 
+          # Create a local IPv4→IPv6 proxy using socat
+          # socat listens on localhost:15432 (IPv4) and forwards to [IPv6]:5432
           echo ""
-          echo "=== Strategy 3: Transaction pooler on port 6543 ==="
-          # Try different pooler hostname formats
-          for POOLER_PORT in 6543 5432; do
-            for POOLER_PREFIX in "aws-ap-northeast-1" "aws-us-east-1" "aws-eu-west-1"; do
-              TX_HOST="${POOLER_PREFIX}.pooler.supabase.com"
-              TX_IPV4=$(dig +short A "$TX_HOST" 2>/dev/null | head -1)
-              if [ -n "$TX_IPV4" ]; then
-                echo "  Found pooler: $TX_HOST ($TX_IPV4) port $POOLER_PORT"
-                if PGPASSWORD="$DB_PW" psql -h "$TX_IPV4" -p "$POOLER_PORT" -U "postgres.${PROJECT_REF}" -d postgres -c "SELECT version();" 2>&1; then
-                  echo "✅ PostgreSQL connectivity verified via $TX_HOST:$POOLER_PORT"
-                  echo "database_url=postgresql://postgres.${PROJECT_REF}:${DB_PW}@${TX_IPV4}:${POOLER_PORT}/postgres" >> $GITHUB_OUTPUT
-                  exit 0
-                fi
-              fi
-            done
-          done
+          echo "=== Creating IPv4→IPv6 proxy via socat ==="
+          echo "  Forwarding: 127.0.0.1:15432 → [$DIRECT_IPV6]:5432"
+          socat TCP4-LISTEN:15432,fork,reuseaddr TCP6:"[$DIRECT_IPV6]":5432 &
+          SOCAT_PID=$!
+          echo "  socat PID: $SOCAT_PID"
+          sleep 2
 
+          # Verify socat is running
+          if ! kill -0 $SOCAT_PID 2>/dev/null; then
+            echo "❌ socat failed to start"
+            exit 1
+          fi
+
+          # Try connecting through the proxy
           echo ""
-          echo "❌ All connection strategies failed."
-          echo "   The Supabase project was created successfully (ref: $PROJECT_REF)."
-          echo "   DNS propagation for the pooler may take several hours on the free tier."
-          echo ""
-          echo "   Options:"
-          echo "   1. Wait 1-2 hours and re-run this workflow."
-          echo "   2. Connect via Supabase Dashboard SQL Editor to verify the project works."
-          echo "   3. Use a paid Supabase plan for instant pooler availability."
-          exit 1
+          echo "=== Connecting through IPv4→IPv6 proxy ==="
+          if PGPASSWORD="$DB_PW" psql -h 127.0.0.1 -p 15432 -U "postgres.${PROJECT_REF}" -d postgres -c "SELECT version();" 2>&1; then
+            echo "✅ PostgreSQL connectivity verified via IPv4→IPv6 proxy!"
+            # Set the DATABASE_URL for downstream jobs to use the proxy
+            echo "database_url=postgresql://postgres.${PROJECT_REF}:${DB_PW}@127.0.0.1:15432/postgres" >> $GITHUB_OUTPUT
+            # Note: downstream jobs can't use the proxy because socat dies with this job.
+            # But we can pass the IPv6 address + password for them to set up their own proxy.
+            echo "ipv6_address=$DIRECT_IPV6" >> $GITHUB_OUTPUT
+            echo "db_password=$DB_PW" >> $GITHUB_OUTPUT
+            echo "✅ Outputs set for downstream jobs"
+            exit 0
+          else
+            echo "❌ Connection through proxy failed"
+            # Try pooler as fallback
+            echo ""
+            echo "=== Trying pooler as fallback ==="
+            POOLER_HOST=$(echo "$DATABASE_URL" | sed -E 's/.*@([^:]+):.*/\1/')
+            POOLER_IPV4=$(dig +short A "$POOLER_HOST" 2>/dev/null | head -1)
+            if [ -n "$POOLER_IPV4" ]; then
+              if psql "$DATABASE_URL" -c "SELECT version();" 2>&1; then
+                echo "✅ PostgreSQL connectivity verified via pooler"
+                exit 0
+              fi
+            fi
+            echo "❌ All connection strategies failed."
+            echo "   IPv6 address: $DIRECT_IPV6"
+            echo "   The project is reachable via IPv6 but GitHub Actions doesn't support IPv6."
+            echo "   Options:"
+            echo "   1. Wait 2-4 hours for pooler DNS to propagate, then re-run."
+            echo "   2. Use a paid Supabase plan for instant pooler."
+            echo "   3. Run the workflow from a runner that supports IPv6."
+            exit 1
+          fi
 
   migrate-and-revoke:
     name: Migrate Schema + Execute REVOKE
