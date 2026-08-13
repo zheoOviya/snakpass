@@ -35,12 +35,33 @@
   3. **Separate audit database** with no mutation API exposed — application can only INSERT; no UPDATE/DELETE path exists.
   In all cases: unauthorized UPDATE/DELETE attempt must be REJECTED (not just detected), and the rejection must be at the storage/permission level (not bypassable by DB write access).
 
-- **Status:** **OPEN** — mitigation layers implemented (hash-chain + SQLite triggers); acceptance criterion outstanding (production storage-level WORM).
-  - Mitigation layers: hash-chain (detection) + SQLite triggers (DB-level rejection, but bypassable).
-  - Outstanding: production storage architecture that provides un-bypassable WORM enforcement.
-  - SQLite dev environment CANNOT faithfully enforce storage-level WORM — bypass test proves it.
-- **Blocks:** P0-22 reaching `Production-ready` (S9). Does NOT block `Implemented` (S4).
-- **Discovered:** Sprint 1, Wave 0. Bypass test: Sprint 1, Wave 0 closure attempt.
+- **Status:** **CLOSED** ✅ — PostgreSQL REVOKE boundary verified via independent G/H review.
+  - **Closure date:** 2026-08-13
+  - **G/H Review:** `GH_REVIEW_DEV001.md` — Verdict: ACCEPT_WITH_CONDITIONS → conditions met → FINAL PASS
+  - **Closure evidence:**
+    1. Supabase managed PostgreSQL provisioned (project ref: `zmzqqcyapcezmaqvuzzd`, region: ap-northeast-1)
+    2. Schema migration executed — 9 tables + WORM trigger functions (`prevent_audit_update`, `prevent_audit_delete`)
+    3. Role separation: `snakzap_admin` (CREATEDB/CREATEROLE, full DDL+DML) + `snakzap_app` (NOCREATEDB/NOCREATEROLE, DML only)
+    4. `REVOKE UPDATE, DELETE, TRUNCATE ON "AuditLog" FROM snakzap_app` — executed successfully
+    5. `information_schema.role_table_grants` verification: snakzap_app has INSERT + SELECT only (NO UPDATE/DELETE/TRUNCATE)
+    6. `has_table_privilege()` runtime ACL check:
+       - INSERT → ALLOWED ✅
+       - SELECT → ALLOWED ✅
+       - UPDATE → DENIED ✅
+       - DELETE → DENIED ✅
+       - TRUNCATE → DENIED ✅
+    7. Artifact verified: `dev-001-gap-closure-evidence` (GitHub Actions Run ID 31703708419, artifact ID 9182282334)
+  - **Accepted evidence gap:** Direct UPDATE/DELETE execution producing PostgreSQL error code 42501 was not captured (Supabase Management API cannot SET ROLE to snakzap_app; GitHub Actions runners lack IPv6). Accepted by G/H reviewer as technically equivalent — `has_table_privilege()` and direct privilege denial consult the same PostgreSQL ACL predicate (`pg_class_aclcheck()`).
+  - **Workflow runs (reproducible):**
+    - SQL execution: https://github.com/zheoOviya/snakpass/actions/runs/31698185552
+    - Gap closure (has_table_privilege): https://github.com/zheoOviya/snakpass/actions/runs/31703708419
+  - **Mitigation layers retained (defense in depth):**
+    1. Application-level append-only (`src/lib/audit.ts`)
+    2. Hash-chain tamper-evidence (`prevHash` + `hash` SHA-256)
+    3. PostgreSQL WORM trigger functions (secondary defense)
+    4. **PostgreSQL REVOKE privilege boundary (primary defense — un-bypassable by application role)**
+  - **Blocks:** No longer blocks P0-22 `Production-ready` (S9). P0-22 can proceed to acceptance review.
+- **Discovered:** Sprint 1, Wave 0. Bypass test: Sprint 1, Wave 0 closure attempt. Closed: 2026-08-13 (PostgreSQL REVOKE boundary + independent G/H review).
 
 ### DEV-002 — P0-09 Firebase verify: demo-trust mode (no service-account credentials)
 
