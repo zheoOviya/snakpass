@@ -1,0 +1,291 @@
+# =============================================================================
+# P0-27 — SnakZap Production Rollback Workflow
+# -----------------------------------------------------------------------------
+# Manually triggered (workflow_dispatch). Accepts a target deployment URL or
+# deployment ID and rolls production traffic back to it via the Vercel API.
+#
+# Then runs the same smoke-test suite against the rolled-back production URL,
+# captures start→complete→verified timing, asserts ≤10 minutes, and uploads
+# evidence as a workflow artifact.
+#
+# Required GitHub Secrets (Settings → Secrets → Actions):
+#   VERCEL_TOKEN         — Vercel personal access token
+#   VERCEL_ORG_ID        — Vercel team/user ID
+#   VERCEL_PROJECT_ID    — Vercel project ID
+#
+# Time budget (asserted):
+#   rollback_start          → T0
+#   rollback_complete       → T1  (Vercel API promotion returns)
+#   health_verified        → T2  (post-rollback smoke tests green)
+#   elapsed                 → T2 - T0   MUST be ≤ 600s (10 min)
+# =============================================================================
+
+name: Rollback (Vercel production)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Target deployment URL or Vercel deployment ID (e.g. https://snakzap-abc.vercel.app or dpl_abc123)'
+        required: true
+        type: string
+      reason:
+        description: 'Reason for rollback (will be recorded in evidence)'
+        required: true
+        type: string
+      skip_health_check:
+        description: 'Skip post-rollback health verification (NOT recommended)'
+        required: false
+        type: boolean
+        default: false
+
+# Rollback is serial — never run two at once.
+concurrency:
+  group: rollback-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  deployments: write
+  actions: read
+
+jobs:
+  rollback:
+    name: Rollback production + verify
+    runs-on: ubuntu-latest
+    environment:
+      # The environment gate gives an approver a final chance to abort.
+      name: production
+    timeout-minutes: 15
+    steps:
+      - name: Checkout (for smoke-test.sh access)
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Vercel CLI
+        run: bun add -g vercel@latest
+
+      - name: Initialize project config
+        env:
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+        run: |
+          mkdir -p .vercel
+          echo "orgId=\"$VERCEL_ORG_ID\"" > .vercel/project.local
+          echo "projectId=\"$VERCEL_PROJECT_ID\"" >> .vercel/project.local
+
+      # ----------------------------------------------------------------------
+      # Phase A — initiate rollback (T0)
+      # ----------------------------------------------------------------------
+      - name: Record rollback start (T0)
+        id: t0
+        run: |
+          echo "t0_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "t0_epoch=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+          echo "===== P0-27 ROLLBACK START ====="
+          echo "Target: ${{ inputs.target }}"
+          echo "Reason: ${{ inputs.reason }}"
+          echo "Started (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      # ----------------------------------------------------------------------
+      # Phase B — execute Vercel promote (T1)
+      # ----------------------------------------------------------------------
+      - name: Promote target deployment to production
+        id: t1
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          TARGET="${{ inputs.target }}"
+          echo "Promoting $TARGET → production..."
+          # `vercel promote` aliases the target deployment to the project's
+          # production domain. Idempotent if target is already production.
+          vercel promote "$TARGET" --token="$VERCEL_TOKEN" --yes
+          # Resolve the production URL of the project (alias host).
+          PROD_URL=$(vercel ls --token="$VERCEL_TOKEN" --yes \
+            | awk '/Ready/ {print $1}' | head -n1)
+          if [ -z "$PROD_URL" ]; then
+            # Fallback: derive from inputs.target if it already is a URL.
+            if [[ "$TARGET" == http* ]]; then PROD_URL="$TARGET"; else
+              echo "::error::Could not resolve production URL after promote."
+              exit 1
+            fi
+          fi
+          echo "t1_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "t1_epoch=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+          echo "prod_url=$PROD_URL" >> "$GITHUB_OUTPUT"
+          echo "promotion_target=$TARGET" >> "$GITHUB_OUTPUT"
+          echo "===== ROLLBACK PROMOTION COMPLETE ====="
+          echo "Production URL: $PROD_URL"
+          echo "Completed (UTC): $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+      # ----------------------------------------------------------------------
+      # Phase C — verify health (T2)
+      # ----------------------------------------------------------------------
+      - name: Verify post-rollback health
+        id: t2
+        if: ${{ inputs.skip_health_check != true }}
+        env:
+          BASE_URL: ${{ steps.t1.outputs.prod_url }}
+        run: |
+          set -euo pipefail
+          # Allow edge propagation after promotion.
+          echo "Waiting 20s for edge propagation..."
+          sleep 20
+          chmod +x ./scripts/smoke-test.sh
+          ./scripts/smoke-test.sh "$BASE_URL" > rollback-smoke-results.json
+          echo "===== Post-rollback smoke test summary ====="
+          cat rollback-smoke-results.json
+          if ! jq -e '.ok == true' rollback-smoke-results.json > /dev/null; then
+            echo "::error::Post-rollback smoke tests FAILED for $BASE_URL"
+            exit 1
+          fi
+          echo "t2_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "t2_epoch=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+          echo "===== HEALTH VERIFIED ====="
+
+      - name: Skip health verification (operator override)
+        if: ${{ inputs.skip_health_check == true }}
+        run: |
+          echo "::warning::Operator chose to skip post-rollback health verification."
+          echo "t2_iso=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_ENV"
+          echo "t2_epoch=$(date -u +%s)" >> "$GITHUB_ENV"
+
+      # ----------------------------------------------------------------------
+      # Phase D — assert ≤ 10 minutes
+      # ----------------------------------------------------------------------
+      - name: Assert rollback elapsed ≤ 10 minutes
+        id: timing
+        env:
+          T0: ${{ steps.t0.outputs.t0_epoch }}
+          T1: ${{ steps.t1.outputs.t1_epoch }}
+          T2: ${{ steps.t2.outputs.t2_epoch }}
+          T0_ISO: ${{ steps.t0.outputs.t0_iso }}
+          T1_ISO: ${{ steps.t1.outputs.t1_iso }}
+          T2_ISO: ${{ steps.t2.outputs.t2_iso }}
+        run: |
+          set -euo pipefail
+          # t2 may be empty if health was skipped — derive from now()
+          T2_EPOCH="${T2:-$(date -u +%s)}"
+          T2_ISO_RESOLVED="${T2_ISO:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
+
+          PROMOTE_SECS=$(( T1 - T0 ))
+          VERIFY_SECS=$(( T2_EPOCH - T1 ))
+          TOTAL_SECS=$(( T2_EPOCH - T0 ))
+
+          BUDGET_SECS=600  # 10 minutes
+
+          echo "===== P0-27 ROLLBACK TIMING ====="
+          echo "rollback_start    : ${T0_ISO}"
+          echo "rollback_complete : ${T1_ISO}  (promotion: ${PROMOTE_SECS}s)"
+          echo "health_verified   : ${T2_ISO_RESOLVED}  (verification: ${VERIFY_SECS}s)"
+          echo "TOTAL elapsed     : ${TOTAL_SECS}s   (budget: ${BUDGET_SECS}s)"
+
+          if [ "$TOTAL_SECS" -gt "$BUDGET_SECS" ]; then
+            echo "::error::Rollback exceeded 10-minute budget (took ${TOTAL_SECS}s)."
+            exit 1
+          fi
+          echo "✅ Rollback completed within ≤10-minute budget."
+
+          # Persist for evidence artifact
+          {
+            echo "rollback_start=${T0_ISO}"
+            echo "rollback_complete=${T1_ISO}"
+            echo "health_verified=${T2_ISO_RESOLVED}"
+            echo "promote_secs=${PROMOTE_SECS}"
+            echo "verify_secs=${VERIFY_SECS}"
+            echo "total_secs=${TOTAL_SECS}"
+            echo "budget_secs=${BUDGET_SECS}"
+            echo "within_budget=true"
+          } > timing.env
+
+      # ----------------------------------------------------------------------
+      # Phase E — evidence artifact
+      # ----------------------------------------------------------------------
+      - name: Build evidence bundle
+        env:
+          TARGET: ${{ inputs.target }}
+          REASON: ${{ inputs.reason }}
+          PROD_URL: ${{ steps.t1.outputs.prod_url }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          mkdir -p evidence
+          # timing.env was written by the prior step.
+          mv timing.env evidence/timing.env 2>/dev/null || cp timing.env evidence/timing.env 2>/dev/null || true
+          [ -f rollback-smoke-results.json ] && cp rollback-smoke-results.json evidence/ || true
+
+          # Compose JSON evidence document
+          jq -n \
+            --arg target "$TARGET" \
+            --arg reason "$REASON" \
+            --arg prod_url "$PROD_URL" \
+            --arg actor "$ACTOR" \
+            --arg triggered_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --slurpfile smoke <(jq '.' evidence/rollback-smoke-results.json 2>/dev/null || echo '[]') \
+            '{
+              task: "P0-27 rollback",
+              actor: $actor,
+              target: $target,
+              reason: $reason,
+              production_url: $prod_url,
+              triggered_at: $triggered_at,
+              timing: ( $ENV // {} ),
+              smoke: $smoke[0]
+            }' > evidence/rollback-evidence.json || \
+            cat > evidence/rollback-evidence.json <<JSON
+          {
+            "task": "P0-27 rollback",
+            "actor": "$ACTOR",
+            "target": "$TARGET",
+            "reason": "$REASON",
+            "production_url": "$PROD_URL",
+            "triggered_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "timing_file": "timing.env",
+            "smoke_file": "rollback-smoke-results.json"
+          }
+          JSON
+          echo "===== P0-27 ROLLBACK EVIDENCE ====="
+          cat evidence/rollback-evidence.json
+          echo
+          echo "===== timing.env ====="
+          cat evidence/timing.env
+
+      - name: Upload rollback evidence (artifact)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-evidence-${{ github.run_id }}
+          path: evidence/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Record GitHub deployment status (rolled back)
+        if: always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const state = '${{ job.status }}' === 'success' ? 'success' : 'failure';
+            const url = '${{ steps.t1.outputs.prod_url }}';
+            const { data: deploys } = await github.rest.repos.listDeployments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              environment: 'production',
+              per_page: 1,
+            });
+            if (deploys.length === 0) {
+              core.info('No prior production deployment to update; skipping status.');
+              return;
+            }
+            await github.rest.repos.createDeploymentStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              deployment_id: deploys[0].id,
+              state,
+              environment_url: url,
+              description: `P0-27 rollback → ${{ inputs.target }} (${state})`,
+            });
+            core.info(`Rollback deployment status recorded: ${state}`);

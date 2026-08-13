@@ -1,0 +1,612 @@
+     1→# P0-27 / DEV-001 — Production WORM Closure Workflow
+     2→#
+     3→# This workflow provisions a managed PostgreSQL instance via Supabase,
+     4→# migrates the existing SQLite schema to PostgreSQL, creates role-separated
+     5→# privileges (snakzap_admin + snakzap_app), executes REVOKE UPDATE/DELETE
+     6→# on the audit_log table, then runs positive + negative tamper tests.
+     7→#
+     8→# Required GitHub Secrets (configure in repo Settings → Secrets → Actions):
+     9→#   - SUPABASE_ACCESS_TOKEN   (Supabase dashboard → Account → Access Tokens)
+    10→#   - SUPABASE_ORG_ID          (Supabase dashboard → Account → Organizations → ID)
+    11→#   - SNAKZAP_PROJECT_NAME     (e.g. "snakzap-prod")
+    12→#   - SNAKZAP_REGION           (e.g. "ap-south-1")
+    13→#
+    14→# Optional:
+    15→#   - VERCEL_TOKEN             (for follow-on P0-27 Phase 2 deployment)
+    16→#   - VERCEL_TEAM_ID           (only for Vercel team accounts)
+    17→#
+    18→# NO credentials are exposed in logs. All sensitive values come from secrets.
+    19→# Evidence is captured as a workflow artifact (evidence.json) and printed to logs.
+    20→
+    21→name: DEV-001 Closure
+    22→
+    23→on:
+    24→  workflow_dispatch:  # manual trigger only — no automatic runs
+    25→    inputs:
+    26→      confirm_production:
+    27→        description: 'Type "PROD-WORM-CLOSURE" to confirm production WORM closure execution'
+    28→        required: true
+    29→        default: ''
+    30→
+    31→# Cancel in-progress runs for the same ref
+    32→concurrency:
+    33→  group: dev-001-${{ github.ref }}
+    34→  cancel-in-progress: false
+    35→
+    36→jobs:
+    37→  verify-trigger:
+    38→    name: Verify Manual Trigger Confirmation
+    39→    runs-on: ubuntu-latest
+    40→    outputs:
+    41→      authorized: ${{ steps.check.outputs.authorized }}
+    42→    steps:
+    43→      - id: check
+    44→        run: |
+    45→          if [ "${{ github.event.inputs.confirm_production }}" = "PROD-WORM-CLOSURE" ]; then
+    46→            echo "authorized=true" >> $GITHUB_OUTPUT
+    47→            echo "✅ Production WORM closure authorized"
+    48→          else
+    49→            echo "authorized=false" >> $GITHUB_OUTPUT
+    50→            echo "❌ Confirmation string mismatch. Workflow will not proceed."
+    51→            exit 1
+    52→          fi
+    53→
+    54→  provision-postgresql:
+    55→    name: Provision Supabase PostgreSQL
+    56→    needs: verify-trigger
+    57→    if: needs.verify-trigger.outputs.authorized == 'true'
+    58→    runs-on: ubuntu-latest
+    59→    timeout-minutes: 10
+    60→    outputs:
+    61→      database_url: ${{ steps.provision.outputs.database_url }}
+    62→      project_ref: ${{ steps.provision.outputs.project_ref }}
+    63→
+    64→    steps:
+    65→      - name: Checkout
+    66→        uses: actions/checkout@v4
+    67→
+    68→      - name: Verify required secrets present (no value exposure)
+    69→        env:
+    70→          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    71→          SUPABASE_ORG_ID: ${{ secrets.SUPABASE_ORG_ID }}
+    72→          SNAKZAP_PROJECT_NAME: ${{ secrets.SNAKZAP_PROJECT_NAME }}
+    73→          SNAKZAP_REGION: ${{ secrets.SNAKZAP_REGION }}
+    74→        run: |
+    75→          [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN missing"; exit 1; }
+    76→          [ -n "$SUPABASE_ORG_ID" ] || { echo "❌ SUPABASE_ORG_ID missing"; exit 1; }
+    77→          [ -n "$SNAKZAP_PROJECT_NAME" ] || { echo "❌ SNAKZAP_PROJECT_NAME missing"; exit 1; }
+    78→          [ -n "$SNAKZAP_REGION" ] || { echo "❌ SNAKZAP_REGION missing"; exit 1; }
+    79→          echo "✅ All required secrets present (values not exposed)"
+    80→
+    81→      - name: Provision Supabase project via Management API
+    82→        id: provision
+    83→        env:
+    84→          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    85→          SUPABASE_ORG_ID: ${{ secrets.SUPABASE_ORG_ID }}
+    86→          SNAKZAP_PROJECT_NAME: ${{ secrets.SNAKZAP_PROJECT_NAME }}
+    87→          SNAKZAP_REGION: ${{ secrets.SNAKZAP_REGION }}
+    88→        run: |
+    89→          set -euo pipefail
+    90→          echo "Provisioning Supabase project: $SNAKZAP_PROJECT_NAME in $SNAKZAP_REGION"
+    91→          echo "Note: jq is pre-installed on ubuntu-latest runners (no apt install needed)."
+    92→
+    93→          # Generate a secure random DB password up front (used for both new + existing projects).
+    94→          # Only alphanumerics so it stays URL-safe for the postgresql:// connection string.
+    95→          SECURE_PASSWORD=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)
+    96→          # Mask the password in all subsequent log output for this run.
+    97→          echo "::add-mask::$SECURE_PASSWORD"
+    98→
+    99→          # ----------------------------------------------------------
+   100→          # Step 1: Validate access token + list existing projects.
+   101→          # Capture HTTP status separately from body so we can give a
+   102→          # clear, actionable error if the token is invalid/expired.
+   103→          # ----------------------------------------------------------
+   104→          echo "--- GET /v1/projects (validate token + list projects) ---"
+   105→          LIST_HTTP=$(curl -sS -o /tmp/sb_projects.json -w "%{http_code}" \
+   106→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   107→            "https://api.supabase.com/v1/projects" || echo "000")
+   108→          echo "GET /v1/projects -> HTTP $LIST_HTTP"
+   109→
+   110→          if [ "$LIST_HTTP" != "200" ]; then
+   111→            echo "❌ Supabase API rejected the access token (HTTP $LIST_HTTP)."
+   112→            echo "   Response body:"
+   113→            cat /tmp/sb_projects.json || true
+   114→            echo ""
+   115→            echo "   Likely causes:"
+   116→            echo "     1. SUPABASE_ACCESS_TOKEN is expired or revoked."
+   117→            echo "        Generate a fresh one at https://supabase.com/dashboard/account/tokens"
+   118→            echo "     2. SUPABASE_ACCESS_TOKEN was pasted with leading/trailing whitespace."
+   119→            echo "        Re-set the secret with no surrounding spaces."
+   120→            exit 1
+   121→          fi
+   122→
+   123→          # ----------------------------------------------------------
+   124→          # Step 1.5: Resolve the org ID to a valid UUID.
+   125→          # The user might have provided a slug (e.g. "my-org") instead
+   126→          # of the UUID. We GET /v1/organizations and find the matching
+   127→          # org (by id OR slug), then use its canonical id for the
+   128→          # create-project call.
+   129→          # ----------------------------------------------------------
+   130→          echo "--- GET /v1/organizations (resolve org UUID) ---"
+   131→          ORG_HTTP=$(curl -sS -o /tmp/sb_orgs.json -w "%{http_code}" \
+   132→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   133→            "https://api.supabase.com/v1/organizations" || echo "000")
+   134→          echo "GET /v1/organizations -> HTTP $ORG_HTTP"
+   135→
+   136→          if [ "$ORG_HTTP" != "200" ]; then
+   137→            echo "❌ Could not list organizations (HTTP $ORG_HTTP)."
+   138→            cat /tmp/sb_orgs.json || true
+   139→            exit 1
+   140→          fi
+   141→
+   142→          # Try to match by id (exact match) OR by name/slug (case-insensitive).
+   143→          RESOLVED_ORG_ID=$(jq -r --arg provided "$SUPABASE_ORG_ID" '
+   144→            .[] | select(.id == $provided or (.name | ascii_downcase) == ($provided | ascii_downcase) or (.slug | ascii_downcase) == ($provided | ascii_downcase)) | .id
+   145→          ' /tmp/sb_orgs.json 2>/dev/null | head -1)
+   146→
+   147→          if [ -z "$RESOLVED_ORG_ID" ] || [ "$RESOLVED_ORG_ID" = "null" ]; then
+   148→            echo "❌ Could not find an organization matching SUPABASE_ORG_ID='$SUPABASE_ORG_ID'"
+   149→            echo "   Available organizations (id | name | slug):"
+   150→            jq -r '.[] | "     - id=\(.id) name=\(.name) slug=\(.slug // \"n/a\")"' /tmp/sb_orgs.json 2>/dev/null || cat /tmp/sb_orgs.json
+   151→            echo ""
+   152→            echo "   Fix: Update the SUPABASE_ORG_ID GitHub secret with one of the id values above."
+   153→            exit 1
+   154→          fi
+   155→
+   156→          if [ "$RESOLVED_ORG_ID" != "$SUPABASE_ORG_ID" ]; then
+   157→            echo "ℹ️  Resolved org: provided='$SUPABASE_ORG_ID' → canonical UUID='$RESOLVED_ORG_ID'"
+   158→          else
+   159→            echo "✅ Org ID verified: $RESOLVED_ORG_ID"
+   160→          fi
+   161→          ORG_ID_TO_USE="$RESOLVED_ORG_ID"
+   162→
+   163→          # Response is an array of project objects; find one with matching name.
+   164→          EXISTING=$(jq -r --arg name "$SNAKZAP_PROJECT_NAME" \
+   165→            '.[] | select(.name == $name) | .id' /tmp/sb_projects.json 2>/dev/null || echo "")
+   166→
+   167→          if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
+   168→            # ------------------------------------------------------
+   169→            # Existing project found with same name — REUSE it.
+   170→            # We don't know the original DB password (it was generated
+   171→            # by a previous run and not stored). But we CAN connect
+   172→            # using the Supabase service role key if configured, OR
+   173→            # we can use the Postgres connection string from the
+   174→            # Supabase dashboard (which the user would need to provide
+   175→            # as a secret).
+   176→            #
+   177→            # For now: reuse the project, but we need the DB password.
+   178→            # Since we don't have it, we'll DELETE + re-create only if
+   179→            # a SUPABASE_DB_PASSWORD secret is NOT set.
+   180→            # ------------------------------------------------------
+   181→            echo "Existing project found with ref: $EXISTING"
+   182→            PROJECT_REF="$EXISTING"
+   183→
+   184→            # Check if SUPABASE_DB_PASSWORD secret is configured
+   185→            DB_PASSWORD="${{ secrets.SUPABASE_DB_PASSWORD }}"
+   186→            if [ -n "$DB_PASSWORD" ]; then
+   187→              echo "✅ SUPABASE_DB_PASSWORD secret found — reusing existing project with stored password"
+   188→            else
+   189→              echo "⚠️  SUPABASE_DB_PASSWORD not set — need to delete + re-create project"
+   190→              echo "--- DELETE /v1/projects/$EXISTING ---"
+   191→              DELETE_HTTP=$(curl -sS -o /tmp/sb_delete.json -w "%{http_code}" \
+   192→                -X DELETE \
+   193→                -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   194→                "https://api.supabase.com/v1/projects/$EXISTING" || echo "000")
+   195→              echo "DELETE /v1/projects/$EXISTING -> HTTP $DELETE_HTTP"
+   196→
+   197→              if [ "$DELETE_HTTP" != "200" ] && [ "$DELETE_HTTP" != "202" ] && [ "$DELETE_HTTP" != "204" ]; then
+   198→                echo "❌ Could not delete existing project (HTTP $DELETE_HTTP)."
+   199→                cat /tmp/sb_delete.json || true
+   200→                exit 1
+   201→              fi
+   202→              echo "✅ Existing project deleted — waiting 30s for Supabase to release the name..."
+   203→              sleep 30
+   204→              EXISTING=""
+   205→            fi
+   206→          fi
+   207→
+   208→          # ------------------------------------------------------
+   209→          # No existing project (or existing project was just deleted):
+   210→          # create a fresh free-tier project.
+   211→          # Skip if we already reused an existing project above.
+   212→          # ------------------------------------------------------
+   213→          if [ -z "$PROJECT_REF" ] || [ "$PROJECT_REF" = "null" ]; then
+   214→            echo "Creating new project: $SNAKZAP_PROJECT_NAME"
+   215→            echo "--- POST /v1/projects ---"
+   216→            CREATE_HTTP=$(curl -sS -o /tmp/sb_create.json -w "%{http_code}" \
+   217→              -X POST "https://api.supabase.com/v1/projects" \
+   218→              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   219→              -H "Content-Type: application/json" \
+   220→              -H "supabase-api-version: 2024-02-15" \
+   221→              -d "$(jq -n --arg org "$ORG_ID_TO_USE" --arg name "$SNAKZAP_PROJECT_NAME" \
+   222→                      --arg region "$SNAKZAP_REGION" --arg pw "$SECURE_PASSWORD" '{
+   223→                organization_id: $org,
+   224→                name: $name,
+   225→                db_pass: $pw,
+   226→                region: $region,
+   227→                plan: "free"
+   228→              }')" || echo "000")
+   229→            echo "POST /v1/projects -> HTTP $CREATE_HTTP"
+   230→            echo "   Using org_id: $ORG_ID_TO_USE"
+   231→            echo "   Using region: $SNAKZAP_REGION"
+   232→
+   233→            if [ "$CREATE_HTTP" != "200" ] && [ "$CREATE_HTTP" != "201" ]; then
+   234→              echo "❌ Project creation failed (HTTP $CREATE_HTTP)."
+   235→              echo "   Response body:"
+   236→              cat /tmp/sb_create.json || true
+   237→              echo ""
+   238→              echo "   Likely causes:"
+   239→              echo "     1. Free tier limit reached (Supabase allows max 2 free projects per org)."
+   240→              echo "        -> Delete an unused project in the Supabase dashboard, or upgrade to Pro."
+   241→              echo "     2. A project with name '$SNAKZAP_PROJECT_NAME' already exists under another org."
+   242→              echo "        -> Delete it, or change the SNAKZAP_PROJECT_NAME secret."
+   243→              echo "     3. Invalid SUPABASE_ORG_ID — find your org ID at"
+   244→              echo "        https://supabase.com/dashboard/account/org"
+   245→              echo "     4. Invalid SNAKZAP_REGION — must be a Supabase region (e.g. ap-south-1, us-east-1,"
+   246→              echo "        eu-west-1). See https://supabase.com/docs/guides/platform/regions"
+   247→              exit 1
+   248→            fi
+   249→
+   250→            PROJECT_REF=$(jq -r '.id' /tmp/sb_create.json)
+   251→            if [ -z "$PROJECT_REF" ] || [ "$PROJECT_REF" = "null" ]; then
+   252→              echo "❌ Project created but no 'id' field in response:"
+   253→              cat /tmp/sb_create.json || true
+   254→              exit 1
+   255→            fi
+   256→            echo "Project created with ref: $PROJECT_REF"
+   257→            DB_PASSWORD="$SECURE_PASSWORD"
+   258→          else
+   259→            echo "✅ Reusing existing project (ref: $PROJECT_REF) — no need to create new"
+   260→          fi
+   261→
+   262→          # ----------------------------------------------------------
+   263→          # Step 2: Poll for project readiness (status: ACTIVE).
+   264→          # Supabase free-tier provisioning can take several minutes;
+   265→          # poll up to 10 minutes to be safe.
+   266→          # ----------------------------------------------------------
+   267→          echo "Waiting for project to become ACTIVE (max 10 min)..."
+   268→          STATUS=""
+   269→          for i in $(seq 1 60); do
+   270→            STATUS=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   271→              "https://api.supabase.com/v1/projects/$PROJECT_REF" 2>/dev/null \
+   272→              | jq -r '.status // "UNKNOWN"' 2>/dev/null || echo "UNKNOWN")
+   273→            echo "  Attempt $i: status=$STATUS"
+   274→            # Accept both "ACTIVE" and "ACTIVE_HEALTHY" — newer Supabase API versions
+   275→            # return ACTIVE_HEALTHY when the project is fully ready.
+   276→            if [ "$STATUS" = "ACTIVE" ] || [ "$STATUS" = "ACTIVE_HEALTHY" ]; then
+   277→              echo "✅ Project is ready (status: $STATUS)"
+   278→              STATUS="ACTIVE"  # normalize for the check below
+   279→              break
+   280→            fi
+   281→            sleep 10
+   282→          done
+   283→
+   284→          if [ "$STATUS" != "ACTIVE" ]; then
+   285→            echo "❌ Project did not become ACTIVE within 10 minutes (last status: $STATUS)."
+   286→            echo "   Check the project in the Supabase dashboard; it may still be initializing."
+   287→            exit 1
+   288→          fi
+   289→          echo "✅ Project is ACTIVE"
+   290→
+   291→          # ----------------------------------------------------------
+   292→          # Step 3: Construct the connection string.
+   293→          # IMPORTANT: Supabase's direct connection (db.{ref}.supabase.co)
+   294→          # uses IPv6 which is not reachable from GitHub Actions runners.
+   295→          # We MUST use the connection pooler (IPv4) instead.
+   296→          #
+   297→          # The pooler hostname format is: aws-{region}.pooler.supabase.com
+   298→          # We get the region from the project API response (not from the
+   299→          # SNAKZAP_REGION secret, which might have formatting issues).
+   300→          # ----------------------------------------------------------
+   301→          PROJECT_REGION=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   302→            "https://api.supabase.com/v1/projects/$PROJECT_REF" 2>/dev/null \
+   303→            | jq -r '.region // empty' 2>/dev/null || echo "")
+   304→
+   305→          if [ -z "$PROJECT_REGION" ] || [ "$PROJECT_REGION" = "null" ]; then
+   306→            echo "⚠️  Could not determine project region from API — using SNAKZAP_REGION as fallback"
+   307→            PROJECT_REGION="${SNAKZAP_REGION//\"/}"  # strip any quotes
+   308→          fi
+   309→          echo "Project region: $PROJECT_REGION"
+   310→
+   311→          ENCODED_PW=$(jq -rn --arg pw "$DB_PASSWORD" '$pw|@uri')
+   312→          # Try pooler (IPv4) first — port 5432 for session mode (required for DDL)
+   313→          DATABASE_URL="postgresql://postgres.$PROJECT_REF:${ENCODED_PW}@aws-${PROJECT_REGION}.pooler.supabase.com:5432/postgres"
+   314→
+   315→          echo "project_ref=$PROJECT_REF" >> $GITHUB_OUTPUT
+   316→          echo "database_url=$DATABASE_URL" >> $GITHUB_OUTPUT
+   317→          echo "✅ Database URL constructed (value masked in logs)"
+   318→
+   319→      - name: Verify PostgreSQL connectivity
+   320→        env:
+   321→          DATABASE_URL: ${{ steps.provision.outputs.database_url }}
+   322→          PROJECT_REF: ${{ steps.provision.outputs.project_ref }}
+   323→          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+   324→          DB_PASSWORD_ENV: ${{ secrets.SUPABASE_DB_PASSWORD }}
+   325→        run: |
+   326→          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client dnsutils socat
+   327→
+   328→          # Extract password from DATABASE_URL (it's masked but still valid in the env var)
+   329→          DB_PW=$(echo "$DATABASE_URL" | sed -E 's|postgresql://[^:]+:([^@]+)@.*|\1|')
+   330→          echo "::add-mask::$DB_PW"
+   331→
+   332→          # ==============================================================
+   333→          # Supabase free-tier projects only have IPv6 connectivity.
+   334→          # GitHub Actions runners don't support IPv6.
+   335→          # Solution: resolve the IPv6 address of db.{ref}.supabase.co,
+   336→          # then use socat to create a local IPv4→IPv6 proxy.
+   337→          # ==============================================================
+   338→
+   339→          DIRECT_HOST="db.${PROJECT_REF}.supabase.co"
+   340→          echo "=== Resolving $DIRECT_HOST ==="
+   341→          DIRECT_IPV6=$(dig +short AAAA "$DIRECT_HOST" 2>/dev/null | head -1)
+   342→          DIRECT_IPV4=$(dig +short A "$DIRECT_HOST" 2>/dev/null | head -1)
+   343→          echo "  IPv4: ${DIRECT_IPV4:-none}"
+   344→          echo "  IPv6: ${DIRECT_IPV6:-none}"
+   345→
+   346→          if [ -n "$DIRECT_IPV4" ]; then
+   347→            echo "✅ IPv4 available — connecting directly..."
+   348→            if PGPASSWORD="$DB_PW" psql -h "$DIRECT_IPV4" -p 5432 -U "postgres.${PROJECT_REF}" -d postgres -c "SELECT version();" 2>&1; then
+   349→              echo "✅ PostgreSQL connectivity verified via direct IPv4"
+   350→              echo "database_url=postgresql://postgres.${PROJECT_REF}:${DB_PW}@${DIRECT_IPV4}:5432/postgres" >> $GITHUB_OUTPUT
+   351→              exit 0
+   352→            fi
+   353→          fi
+   354→
+   355→          if [ -z "$DIRECT_IPV6" ]; then
+   356→            echo "❌ No IPv4 or IPv6 address found for $DIRECT_HOST"
+   357→            echo "   The Supabase project may not be fully initialized yet."
+   358→            exit 1
+   359→          fi
+   360→
+   361→          # Create a local IPv4→IPv6 proxy using socat
+   362→          # socat listens on localhost:15432 (IPv4) and forwards to [IPv6]:5432
+   363→          echo ""
+   364→          echo "=== Creating IPv4→IPv6 proxy via socat ==="
+   365→          echo "  Forwarding: 127.0.0.1:15432 → [$DIRECT_IPV6]:5432"
+   366→          socat TCP4-LISTEN:15432,fork,reuseaddr TCP6:"[$DIRECT_IPV6]":5432 &
+   367→          SOCAT_PID=$!
+   368→          echo "  socat PID: $SOCAT_PID"
+   369→          sleep 2
+   370→
+   371→          # Verify socat is running
+   372→          if ! kill -0 $SOCAT_PID 2>/dev/null; then
+   373→            echo "❌ socat failed to start"
+   374→            exit 1
+   375→          fi
+   376→
+   377→          # Try connecting through the proxy
+   378→          echo ""
+   379→          echo "=== Connecting through IPv4→IPv6 proxy ==="
+   380→          if PGPASSWORD="$DB_PW" psql -h 127.0.0.1 -p 15432 -U "postgres.${PROJECT_REF}" -d postgres -c "SELECT version();" 2>&1; then
+   381→            echo "✅ PostgreSQL connectivity verified via IPv4→IPv6 proxy!"
+   382→            # Set the DATABASE_URL for downstream jobs to use the proxy
+   383→            echo "database_url=postgresql://postgres.${PROJECT_REF}:${DB_PW}@127.0.0.1:15432/postgres" >> $GITHUB_OUTPUT
+   384→            # Note: downstream jobs can't use the proxy because socat dies with this job.
+   385→            # But we can pass the IPv6 address + password for them to set up their own proxy.
+   386→            echo "ipv6_address=$DIRECT_IPV6" >> $GITHUB_OUTPUT
+   387→            echo "db_password=$DB_PW" >> $GITHUB_OUTPUT
+   388→            echo "✅ Outputs set for downstream jobs"
+   389→            exit 0
+   390→          else
+   391→            echo "❌ Connection through proxy failed"
+   392→            # Try pooler as fallback
+   393→            echo ""
+   394→            echo "=== Trying pooler as fallback ==="
+   395→            POOLER_HOST=$(echo "$DATABASE_URL" | sed -E 's/.*@([^:]+):.*/\1/')
+   396→            POOLER_IPV4=$(dig +short A "$POOLER_HOST" 2>/dev/null | head -1)
+   397→            if [ -n "$POOLER_IPV4" ]; then
+   398→              if psql "$DATABASE_URL" -c "SELECT version();" 2>&1; then
+   399→                echo "✅ PostgreSQL connectivity verified via pooler"
+   400→                exit 0
+   401→              fi
+   402→            fi
+   403→            echo "❌ All connection strategies failed."
+   404→            echo "   IPv6 address: $DIRECT_IPV6"
+   405→            echo "   The project is reachable via IPv6 but GitHub Actions doesn't support IPv6."
+   406→            echo "   Options:"
+   407→            echo "   1. Wait 2-4 hours for pooler DNS to propagate, then re-run."
+   408→            echo "   2. Use a paid Supabase plan for instant pooler."
+   409→            echo "   3. Run the workflow from a runner that supports IPv6."
+   410→            exit 1
+   411→          fi
+   412→
+   413→  migrate-and-revoke:
+   414→    name: Migrate Schema + Execute REVOKE
+   415→    needs: provision-postgresql
+   416→    runs-on: ubuntu-latest
+   417→    timeout-minutes: 10
+   418→    outputs:
+   419→      migration_status: ${{ steps.migrate.outputs.status }}
+   420→      revoke_status: ${{ steps.revoke.outputs.status }}
+   421→
+   422→    steps:
+   423→      - name: Checkout
+   424→        uses: actions/checkout@v4
+   425→
+   426→      - name: Install PostgreSQL client
+   427→        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+   428→
+   429→      - name: Run PostgreSQL migration (create schema)
+   430→        id: migrate
+   431→        env:
+   432→          DATABASE_URL: ${{ needs.provision-postgresql.outputs.database_url }}
+   433→        run: |
+   434→          set -euo pipefail
+   435→          echo "=== Running PostgreSQL schema migration ==="
+   436→          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/scripts/postgres-migration.sql
+   437→          echo "status=success" >> $GITHUB_OUTPUT
+   438→          echo "✅ Schema migration complete"
+   439→
+   440→      - name: Create role separation (snakzap_admin + snakzap_app)
+   441→        env:
+   442→          DATABASE_URL: ${{ needs.provision-postgresql.outputs.database_url }}
+   443→        run: |
+   444→          set -euo pipefail
+   445→          echo "=== Creating application + admin roles ==="
+   446→          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/scripts/create-roles.sql
+   447→          echo "✅ Role separation complete"
+   448→
+   449→      - name: Execute REVOKE UPDATE/DELETE on audit_log
+   450→        id: revoke
+   451→        env:
+   452→          DATABASE_URL: ${{ needs.provision-postgresql.outputs.database_url }}
+   453→        run: |
+   454→          set -euo pipefail
+   455→          echo "=== Executing REVOKE for production WORM boundary ==="
+   456→          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/scripts/revoke-worm.sql
+   457→          echo "status=success" >> $GITHUB_OUTPUT
+   458→          echo "✅ REVOKE complete — application role cannot UPDATE/DELETE audit_log"
+   459→
+   460→      - name: Seed initial data
+   461→        env:
+   462→          DATABASE_URL: ${{ needs.provision-postgresql.outputs.database_url }}
+   463→        run: |
+   464→          set -euo pipefail
+   465→          echo "=== Seeding initial data ==="
+   466→          psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/scripts/seed-postgres.sql
+   467→          echo "✅ Seed data inserted"
+   468→
+   469→  tamper-test:
+   470→    name: P0-20 Tamper Tests (PostgreSQL Privilege Boundary)
+   471→    needs: [provision-postgresql, migrate-and-revoke]
+   472→    runs-on: ubuntu-latest
+   473→    timeout-minutes: 5
+   474→    outputs:
+   475→      tamper_test_passed: ${{ steps.test.outputs.passed }}
+   476→
+   477→    steps:
+   478→      - name: Checkout
+   479→        uses: actions/checkout@v4
+   480→
+   481→      - name: Install PostgreSQL client + jq
+   482→        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client jq
+   483→
+   484→      - name: Run tamper tests (positive + negative)
+   485→        id: test
+   486→        env:
+   487→          DATABASE_URL: ${{ needs.provision-postgresql.outputs.database_url }}
+   488→        run: |
+   489→          set -euo pipefail
+   490→          echo "=== Running tamper tests ==="
+   491→          chmod +x prisma/scripts/tamper-test.sh
+   492→          bash prisma/scripts/tamper-test.sh "$DATABASE_URL" > tamper-results.json 2>&1 || true
+   493→          cat tamper-results.json
+   494→          PASSED=$(jq -r '.all_passed' tamper-results.json 2>/dev/null || echo "false")
+   495→          if [ "$PASSED" = "true" ]; then
+   496→            echo "passed=true" >> $GITHUB_OUTPUT
+   497→            echo "✅ All tamper tests PASS"
+   498→          else
+   499→            echo "passed=false" >> $GITHUB_OUTPUT
+   500→            echo "❌ Tamper tests FAILED"
+   501→            exit 1
+   502→          fi
+   503→
+   504→      - name: Upload tamper test evidence
+   505→        if: always()
+   506→        uses: actions/upload-artifact@v4
+   507→        with:
+   508→          name: dev-001-tamper-evidence
+   509→          path: tamper-results.json
+   510→          retention-days: 90
+   511→
+   512→  capture-evidence:
+   513→    name: Capture DEV-001 Closure Evidence
+   514→    needs: [provision-postgresql, migrate-and-revoke, tamper-test]
+   515→    if: always()
+   516→    runs-on: ubuntu-latest
+   517→
+   518→    steps:
+   519→      - name: Checkout
+   520→        uses: actions/checkout@v4
+   521→
+   522→      - name: Download tamper evidence
+   523→        uses: actions/download-artifact@v4
+   524→        id: download_tamper
+   525→        continue-on-error: true
+   526→        with:
+   527→          name: dev-001-tamper-evidence
+   528→
+   529→      - name: Create placeholder if tamper evidence is missing
+   530→        if: steps.download_tamper.outcome != 'success'
+   531→        run: |
+   532→          echo '{"all_passed": "NOT_RUN", "tests": [], "reason": "tamper-test job was skipped (upstream provision/migrate step failed)"}' > tamper-results.json
+   533→          echo "⚠️  Tamper evidence artifact was not available — wrote placeholder tamper-results.json."
+   534→
+   535→      - name: Build consolidated evidence JSON
+   536→        env:
+   537→          PROJECT_REF: ${{ needs.provision-postgresql.outputs.project_ref }}
+   538→          MIGRATION_STATUS: ${{ needs.migrate-and-revoke.outputs.migration_status }}
+   539→          REVOKE_STATUS: ${{ needs.migrate-and-revoke.outputs.revoke_status }}
+   540→          TAMPER_PASSED: ${{ needs.tamper-test.outputs.tamper_test_passed }}
+   541→          GITHUB_RUN_ID: ${{ github.run_id }}
+   542→          GITHUB_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+   543→        run: |
+   544→          sudo apt-get update -qq && sudo apt-get install -y -qq jq
+   545→          # Merge tamper-results.json into the evidence envelope so we capture
+   546→          # per-test detail even when capture-evidence runs after an upstream failure.
+   547→          jq -n \
+   548→            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+   549→            --arg project_ref "${PROJECT_REF:-NOT_PROVISIONED}" \
+   550→            --arg migration_status "${MIGRATION_STATUS:-NOT_RUN}" \
+   551→            --arg revoke_status "${REVOKE_STATUS:-NOT_RUN}" \
+   552→            --arg tamper_passed "${TAMPER_PASSED:-NOT_RUN}" \
+   553→            --arg run_id "$GITHUB_RUN_ID" \
+   554→            --arg run_url "$GITHUB_RUN_URL" \
+   555→            --slurpfile tamper tamper-results.json \
+   556→            '{
+   557→              capability: "DEV-001 / P0-22 Production WORM Closure",
+   558→              timestamp: $timestamp,
+   559→              environment: {
+   560→                provider: "Supabase",
+   561→                project_ref: $project_ref,
+   562→                database: "PostgreSQL (managed)"
+   563→              },
+   564→              execution: {
+   565→                workflow_run_id: $run_id,
+   566→                workflow_run_url: $run_url
+   567→              },
+   568→              steps: {
+   569→                schema_migration: $migration_status,
+   570→                role_separation: "snakzap_admin (DDL) + snakzap_app (DML, no UPDATE/DELETE on audit_log)",
+   571→                revoke_executed: $revoke_status,
+   572→                tamper_tests: $tamper_passed
+   573→              },
+   574→              tamper_detail: ($tamper[0] // null),
+   575→              verdict: (if ($tamper_passed == "true") then "PASS_CANDIDATE" else "FAIL" end),
+   576→              governance_note: "Evidence subject to independent G/H review before Wave-0 closure"
+   577→            }' > dev-001-evidence.json
+   578→
+   579→          cat dev-001-evidence.json
+   580→
+   581→      - name: Upload consolidated evidence
+   582→        uses: actions/upload-artifact@v4
+   583→        with:
+   584→          name: dev-001-closure-evidence
+   585→          path: dev-001-evidence.json
+   586→          retention-days: 365
+   587→
+   588→      - name: Print evidence summary
+   589→        run: |
+   590→          echo ""
+   591→          echo "================================================"
+   592→          echo "  DEV-001 / P0-22 PRODUCTION WORM CLOSURE"
+   593→          echo "================================================"
+   594→          cat dev-001-evidence.json | jq -r '
+   595→            "Timestamp:        \(.timestamp)",
+   596→            "Provider:         \(.environment.provider)",
+   597→            "Project Ref:      \(.environment.project_ref)",
+   598→            "Database:         \(.environment.database)",
+   599→            "",
+   600→            "Workflow Run:     \(.execution.workflow_run_url)",
+   601→            "",
+   602→            "Schema Migration: \(.steps.schema_migration)",
+   603→            "Role Separation:  \(.steps.role_separation)",
+   604→            "REVOKE Executed:  \(.steps.revoke_executed)",
+   605→            "Tamper Tests:     \(.steps.tamper_tests)",
+   606→            "",
+   607→            "VERDICT:          \(.verdict)",
+   608→            "",
+   609→            "Note: \(.governance_note)"
+   610→          '
+   611→          echo "================================================"
+   612→
