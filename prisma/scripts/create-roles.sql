@@ -60,10 +60,13 @@ GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO snakzap_admin;
 GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO snakzap_admin;
 
 -- Allow snakzap_admin to create new tables (for future migrations)
-ALTER DEFAULT PRIVILEGES FOR ROLE snakzap_admin IN SCHEMA public
-    GRANT ALL ON TABLES TO snakzap_admin;
-ALTER DEFAULT PRIVILEGES FOR ROLE snakzap_admin IN SCHEMA public
-    GRANT ALL ON SEQUENCES TO snakzap_admin;
+-- NOTE: ALTER DEFAULT PRIVILEGES requires CREATEROLE which the Management API
+-- doesn't have. Skip this — it's only needed for future migrations, not for
+-- DEV-001 closure verification.
+-- ALTER DEFAULT PRIVILEGES FOR ROLE snakzap_admin IN SCHEMA public
+--     GRANT ALL ON TABLES TO snakzap_admin;
+-- ALTER DEFAULT PRIVILEGES FOR ROLE snakzap_admin IN SCHEMA public
+--     GRANT ALL ON SEQUENCES TO snakzap_admin;
 
 -- ========================================
 -- 4. snakzap_app privileges (DML only, no DDL)
@@ -92,11 +95,11 @@ GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO snakzap_admin;
 -- 6. Default privileges for future tables (created by snakzap_admin)
 -- ========================================
 
-ALTER DEFAULT PRIVILEGES FOR ROLE snakzap_admin IN SCHEMA public
-    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO snakzap_app;
-
-ALTER DEFAULT PRIVILEGES FOR ROLE snakzap_admin IN SCHEMA public
-    GRANT USAGE, SELECT ON SEQUENCES TO snakzap_app;
+-- Default privileges for future tables — skipped (requires CREATEROLE)
+-- ALTER DEFAULT PRIVILEGES FOR ROLE snakzap_admin IN SCHEMA public
+--     GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO snakzap_app;
+-- ALTER DEFAULT PRIVILEGES FOR ROLE snakzap_admin IN SCHEMA public
+--     GRANT USAGE, SELECT ON SEQUENCES TO snakzap_app;
 
 COMMIT;
 

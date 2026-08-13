@@ -20,13 +20,13 @@ TRUNCATE "OrderItem", "Order", "MenuItem", "Restaurant", "Session", "OtpRequest"
 -- 2. Users (consumer + vendor + admin)
 -- ========================================
 
-INSERT INTO "User" (id, phone, name, role, spiceTolerance, walletBalance, createdAt) VALUES
+INSERT INTO "User" ("id", "phone", "name", "role", "spiceTolerance", "walletBalance", "createdAt") VALUES
     ('user-consumer-001', '+919876500001', 'Aarav Sharma', 'CONSUMER', 3, 25000, NOW());
 
-INSERT INTO "User" (id, phone, name, role, spiceTolerance, createdAt) VALUES
+INSERT INTO "User" ("id", "phone", "name", "role", "spiceTolerance", "createdAt") VALUES
     ('user-vendor-001', '+919876500002', 'Spice Junction Owner', 'VENDOR_OWNER', 4, NOW());
 
-INSERT INTO "User" (id, phone, email, passwordHash, name, role, spiceTolerance, createdAt) VALUES
+INSERT INTO "User" ("id", "phone", "email", "passwordHash", "name", "role", "spiceTolerance", "createdAt") VALUES
     (
         'user-admin-001',
         '+919876500003',
@@ -43,7 +43,7 @@ INSERT INTO "User" (id, phone, email, passwordHash, name, role, spiceTolerance, 
 -- 3. Restaurants
 -- ========================================
 
-INSERT INTO "Restaurant" (id, name, cuisine, description, image, rating, prepTimeMins, priceForTwo, commissionRate, isActive, isSuspended, gstNumber, address, createdAt) VALUES
+INSERT INTO "Restaurant" ("id", "name", "cuisine", "description", "image", "rating", "prepTimeMins", "priceForTwo", "commissionRate", "isActive", "isSuspended", "gstNumber", "address", "createdAt") VALUES
     ('rest-001', 'Spice Junction', 'North Indian', 'Authentic Punjabi thalis, butter chicken & freshly baked naan. Pickup-only, ready in 20 mins.', '/images/r1.png', 4.6, 20, 45000, 0.08, TRUE, FALSE, '29ABCDE1234F1Z5', 'MG Road, Bengaluru', NOW()),
     ('rest-002', 'Dosa Den', 'South Indian', 'Crispy masala dosas, idli-vada sambar, filter coffee. Pickup-only, ready in 15 mins.', '/images/r2.png', 4.7, 15, 35000, 0.07, TRUE, FALSE, '29ABCDE1234F1Z5', 'Indiranagar, Bengaluru', NOW()),
     ('rest-003', 'Wok This Way', 'Chinese', 'Indo-Chinese favorites — chilli chicken, hakka noodles, manchurian. Pickup-only.', '/images/r3.png', 4.4, 25, 40000, 0.09, TRUE, FALSE, '29ABCDE1234F1Z5', 'Koramangala, Bengaluru', NOW()),
@@ -53,7 +53,7 @@ INSERT INTO "Restaurant" (id, name, cuisine, description, image, rating, prepTim
 -- 4. Menu items (sample)
 -- ========================================
 
-INSERT INTO "MenuItem" (id, restaurantId, name, description, price, image, spiceLevel, isVeg, isAvailable, category, createdAt) VALUES
+INSERT INTO "MenuItem" ("id", "restaurantId", "name", "description", "price", "image", "spiceLevel", "isVeg", "isAvailable", "category", "createdAt") VALUES
     ('menu-001', 'rest-001', 'Butter Chicken', 'Creamy tomato-based chicken curry with tandoori spices', 32000, '/images/svg/curry-chicken.svg', 2, FALSE, TRUE, 'Mains', NOW()),
     ('menu-002', 'rest-001', 'Paneer Butter Masala', 'Cottage cheese in rich tomato gravy', 28000, '/images/svg/curry-paneer.svg', 1, TRUE, TRUE, 'Mains', NOW()),
     ('menu-003', 'rest-001', 'Garlic Naan', 'Tandoor-baked flatbread with garlic butter', 6000, '/images/svg/naan-garlic.svg', 0, TRUE, TRUE, 'Breads', NOW()),
@@ -67,7 +67,7 @@ INSERT INTO "MenuItem" (id, restaurantId, name, description, price, image, spice
 -- 5. Kill switches (default: all OFF)
 -- ========================================
 
-INSERT INTO "KillSwitch" (id, key, label, description, enabled, severity, updatedAt) VALUES
+INSERT INTO "KillSwitch" ("id", "key", "label", "description", "enabled", "severity", "updatedAt") VALUES
     ('ks-001', 'ordering', 'Order Intake', 'Disable new order placement platform-wide', FALSE, 'CRITICAL', NOW()),
     ('ks-002', 'payments', 'Payments', 'Halt payment collection (checkout disabled)', FALSE, 'CRITICAL', NOW()),
     ('ks-003', 'catering', 'Catering Orders', 'Block B2B/catering order creation', FALSE, 'HIGH', NOW()),
@@ -81,7 +81,7 @@ ON CONFLICT (key) DO NOTHING;
 -- NOTE: This INSERT is run as admin. The WORM REVOKE only blocks snakzap_app.
 -- Admin (postgres superuser) can always insert.
 
-INSERT INTO "AuditLog" (id, actorId, actorRole, action, metadata, createdAt, prevHash, hash)
+INSERT INTO "AuditLog" ("id", "actorId", "actorRole", "action", "metadata", "createdAt", "prevHash", "hash")
 VALUES (
     'audit-seed-001',
     NULL,
