@@ -208,51 +208,56 @@ jobs:
           # ------------------------------------------------------
           # No existing project (or existing project was just deleted):
           # create a fresh free-tier project.
+          # Skip if we already reused an existing project above.
           # ------------------------------------------------------
-          echo "Creating new project: $SNAKZAP_PROJECT_NAME"
-          echo "--- POST /v1/projects ---"
-          CREATE_HTTP=$(curl -sS -o /tmp/sb_create.json -w "%{http_code}" \
-            -X POST "https://api.supabase.com/v1/projects" \
-            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            -H "supabase-api-version: 2024-02-15" \
-            -d "$(jq -n --arg org "$ORG_ID_TO_USE" --arg name "$SNAKZAP_PROJECT_NAME" \
-                    --arg region "$SNAKZAP_REGION" --arg pw "$SECURE_PASSWORD" '{
-              organization_id: $org,
-              name: $name,
-              db_pass: $pw,
-              region: $region,
-              plan: "free"
-            }')" || echo "000")
-          echo "POST /v1/projects -> HTTP $CREATE_HTTP"
-          echo "   Using org_id: $ORG_ID_TO_USE"
-          echo "   Using region: $SNAKZAP_REGION"
-
-          if [ "$CREATE_HTTP" != "200" ] && [ "$CREATE_HTTP" != "201" ]; then
-            echo "❌ Project creation failed (HTTP $CREATE_HTTP)."
-            echo "   Response body:"
-            cat /tmp/sb_create.json || true
-            echo ""
-            echo "   Likely causes:"
-            echo "     1. Free tier limit reached (Supabase allows max 2 free projects per org)."
-            echo "        -> Delete an unused project in the Supabase dashboard, or upgrade to Pro."
-            echo "     2. A project with name '$SNAKZAP_PROJECT_NAME' already exists under another org."
-            echo "        -> Delete it, or change the SNAKZAP_PROJECT_NAME secret."
-            echo "     3. Invalid SUPABASE_ORG_ID — find your org ID at"
-            echo "        https://supabase.com/dashboard/account/org"
-            echo "     4. Invalid SNAKZAP_REGION — must be a Supabase region (e.g. ap-south-1, us-east-1,"
-            echo "        eu-west-1). See https://supabase.com/docs/guides/platform/regions"
-            exit 1
-          fi
-
-          PROJECT_REF=$(jq -r '.id' /tmp/sb_create.json)
           if [ -z "$PROJECT_REF" ] || [ "$PROJECT_REF" = "null" ]; then
-            echo "❌ Project created but no 'id' field in response:"
-            cat /tmp/sb_create.json || true
-            exit 1
+            echo "Creating new project: $SNAKZAP_PROJECT_NAME"
+            echo "--- POST /v1/projects ---"
+            CREATE_HTTP=$(curl -sS -o /tmp/sb_create.json -w "%{http_code}" \
+              -X POST "https://api.supabase.com/v1/projects" \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              -H "supabase-api-version: 2024-02-15" \
+              -d "$(jq -n --arg org "$ORG_ID_TO_USE" --arg name "$SNAKZAP_PROJECT_NAME" \
+                      --arg region "$SNAKZAP_REGION" --arg pw "$SECURE_PASSWORD" '{
+                organization_id: $org,
+                name: $name,
+                db_pass: $pw,
+                region: $region,
+                plan: "free"
+              }')" || echo "000")
+            echo "POST /v1/projects -> HTTP $CREATE_HTTP"
+            echo "   Using org_id: $ORG_ID_TO_USE"
+            echo "   Using region: $SNAKZAP_REGION"
+
+            if [ "$CREATE_HTTP" != "200" ] && [ "$CREATE_HTTP" != "201" ]; then
+              echo "❌ Project creation failed (HTTP $CREATE_HTTP)."
+              echo "   Response body:"
+              cat /tmp/sb_create.json || true
+              echo ""
+              echo "   Likely causes:"
+              echo "     1. Free tier limit reached (Supabase allows max 2 free projects per org)."
+              echo "        -> Delete an unused project in the Supabase dashboard, or upgrade to Pro."
+              echo "     2. A project with name '$SNAKZAP_PROJECT_NAME' already exists under another org."
+              echo "        -> Delete it, or change the SNAKZAP_PROJECT_NAME secret."
+              echo "     3. Invalid SUPABASE_ORG_ID — find your org ID at"
+              echo "        https://supabase.com/dashboard/account/org"
+              echo "     4. Invalid SNAKZAP_REGION — must be a Supabase region (e.g. ap-south-1, us-east-1,"
+              echo "        eu-west-1). See https://supabase.com/docs/guides/platform/regions"
+              exit 1
+            fi
+
+            PROJECT_REF=$(jq -r '.id' /tmp/sb_create.json)
+            if [ -z "$PROJECT_REF" ] || [ "$PROJECT_REF" = "null" ]; then
+              echo "❌ Project created but no 'id' field in response:"
+              cat /tmp/sb_create.json || true
+              exit 1
+            fi
+            echo "Project created with ref: $PROJECT_REF"
+            DB_PASSWORD="$SECURE_PASSWORD"
+          else
+            echo "✅ Reusing existing project (ref: $PROJECT_REF) — no need to create new"
           fi
-          echo "Project created with ref: $PROJECT_REF"
-          DB_PASSWORD="$SECURE_PASSWORD"
 
           # ----------------------------------------------------------
           # Step 2: Poll for project readiness (status: ACTIVE).
