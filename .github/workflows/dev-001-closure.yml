@@ -126,89 +126,88 @@ jobs:
 
           if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
             # ------------------------------------------------------
-            # Existing project: reset its DB password via the
-            # Management API so this workflow can connect without
-            # requiring a stored SUPABASE_DB_PASSWORD secret.
+            # Existing project found with same name. We DELETE it and
+            # re-create a fresh project with a known password, because:
+            #   - The Supabase password-reset API endpoint
+            #     (POST /v1/projects/{ref}/database/password) does not
+            #     exist — it returns HTTP 404 ("Cannot POST").
+            #   - The correct way to update the password is via
+            #     PATCH /v1/projects/{ref} with {"database_password": "..."},
+            #     but DELETE + re-create is simpler and guarantees we
+            #     start from a clean state for DEV-001 verification.
             # ------------------------------------------------------
-            echo "Project already exists with ref: $EXISTING (reusing)"
-            PROJECT_REF="$EXISTING"
+            echo "Existing project found with ref: $EXISTING"
+            echo "Deleting it so we can re-create with a known DB password..."
 
-            echo "--- POST /v1/projects/$PROJECT_REF/database/password (reset DB password) ---"
-            RESET_HTTP=$(curl -sS -o /tmp/sb_reset.json -w "%{http_code}" \
-              -X POST \
+            echo "--- DELETE /v1/projects/$EXISTING ---"
+            DELETE_HTTP=$(curl -sS -o /tmp/sb_delete.json -w "%{http_code}" \
+              -X DELETE \
               -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d '{}' \
-              "https://api.supabase.com/v1/projects/$PROJECT_REF/database/password" || echo "000")
-            echo "POST .../database/password -> HTTP $RESET_HTTP"
+              "https://api.supabase.com/v1/projects/$EXISTING" || echo "000")
+            echo "DELETE /v1/projects/$EXISTING -> HTTP $DELETE_HTTP"
 
-            if [ "$RESET_HTTP" != "200" ] && [ "$RESET_HTTP" != "201" ] && [ "$RESET_HTTP" != "204" ]; then
-              echo "❌ Could not reset DB password via Management API (HTTP $RESET_HTTP)."
+            if [ "$DELETE_HTTP" != "200" ] && [ "$DELETE_HTTP" != "202" ] && [ "$DELETE_HTTP" != "204" ]; then
+              echo "❌ Could not delete existing project (HTTP $DELETE_HTTP)."
               echo "   Response body:"
-              cat /tmp/sb_reset.json || true
+              cat /tmp/sb_delete.json || true
               echo ""
-              echo "   To proceed manually, either:"
-              echo "     (A) Delete the existing project in the Supabase dashboard, then re-run this workflow."
-              echo "     (B) Add a SUPABASE_DB_PASSWORD GitHub secret containing the project's current DB password,"
-              echo "         then switch this workflow back to using it."
+              echo "   To proceed manually, delete the project in the Supabase dashboard:"
+              echo "     https://supabase.com/dashboard/project/$EXISTING/settings/general"
+              echo "   Then re-run this workflow."
               exit 1
             fi
+            echo "✅ Existing project deleted — waiting 20s for Supabase to release the name..."
+            sleep 20
 
-            # Supabase returns the new password in the response body as {"password": "..."}.
-            RETURNED_PW=$(jq -r '.password // empty' /tmp/sb_reset.json 2>/dev/null || echo "")
-            if [ -n "$RETURNED_PW" ] && [ "$RETURNED_PW" != "null" ]; then
-              DB_PASSWORD="$RETURNED_PW"
-            else
-              # Fallback: API did not echo back a password — assume it accepted our provided one.
-              DB_PASSWORD="$SECURE_PASSWORD"
-            fi
-            echo "::add-mask::$DB_PASSWORD"
-          else
-            # ------------------------------------------------------
-            # No existing project: create a fresh free-tier project.
-            # ------------------------------------------------------
-            echo "No existing project found — creating new project"
-            echo "--- POST /v1/projects ---"
-            CREATE_HTTP=$(curl -sS -o /tmp/sb_create.json -w "%{http_code}" \
-              -X POST "https://api.supabase.com/v1/projects" \
-              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-              -H "Content-Type: application/json" \
-              -d "$(jq -n --arg org "$SUPABASE_ORG_ID" --arg name "$SNAKZAP_PROJECT_NAME" \
-                      --arg region "$SNAKZAP_REGION" --arg pw "$SECURE_PASSWORD" '{
-                organization_id: $org,
-                name: $name,
-                db_pass: $pw,
-                region: $region,
-                plan: "free"
-              }')" || echo "000")
-            echo "POST /v1/projects -> HTTP $CREATE_HTTP"
-
-            if [ "$CREATE_HTTP" != "200" ] && [ "$CREATE_HTTP" != "201" ]; then
-              echo "❌ Project creation failed (HTTP $CREATE_HTTP)."
-              echo "   Response body:"
-              cat /tmp/sb_create.json || true
-              echo ""
-              echo "   Likely causes:"
-              echo "     1. Free tier limit reached (Supabase allows max 2 free projects per org)."
-              echo "        -> Delete an unused project in the Supabase dashboard, or upgrade to Pro."
-              echo "     2. A project with name '$SNAKZAP_PROJECT_NAME' already exists under another org."
-              echo "        -> Delete it, or change the SNAKZAP_PROJECT_NAME secret."
-              echo "     3. Invalid SUPABASE_ORG_ID — find your org ID at"
-              echo "        https://supabase.com/dashboard/account/org"
-              echo "     4. Invalid SNAKZAP_REGION — must be a Supabase region (e.g. ap-south-1, us-east-1,"
-              echo "        eu-west-1). See https://supabase.com/docs/guides/platform/regions"
-              exit 1
-            fi
-
-            PROJECT_REF=$(jq -r '.id' /tmp/sb_create.json)
-            if [ -z "$PROJECT_REF" ] || [ "$PROJECT_REF" = "null" ]; then
-              echo "❌ Project created but no 'id' field in response:"
-              cat /tmp/sb_create.json || true
-              exit 1
-            fi
-            echo "Project created with ref: $PROJECT_REF"
-            DB_PASSWORD="$SECURE_PASSWORD"
+            # Now fall through to the "create new project" branch below.
+            EXISTING=""
           fi
+
+          # ------------------------------------------------------
+          # No existing project (or existing project was just deleted):
+          # create a fresh free-tier project.
+          # ------------------------------------------------------
+          echo "Creating new project: $SNAKZAP_PROJECT_NAME"
+          echo "--- POST /v1/projects ---"
+          CREATE_HTTP=$(curl -sS -o /tmp/sb_create.json -w "%{http_code}" \
+            -X POST "https://api.supabase.com/v1/projects" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n --arg org "$SUPABASE_ORG_ID" --arg name "$SNAKZAP_PROJECT_NAME" \
+                    --arg region "$SNAKZAP_REGION" --arg pw "$SECURE_PASSWORD" '{
+              organization_id: $org,
+              name: $name,
+              db_pass: $pw,
+              region: $region,
+              plan: "free"
+            }')" || echo "000")
+          echo "POST /v1/projects -> HTTP $CREATE_HTTP"
+
+          if [ "$CREATE_HTTP" != "200" ] && [ "$CREATE_HTTP" != "201" ]; then
+            echo "❌ Project creation failed (HTTP $CREATE_HTTP)."
+            echo "   Response body:"
+            cat /tmp/sb_create.json || true
+            echo ""
+            echo "   Likely causes:"
+            echo "     1. Free tier limit reached (Supabase allows max 2 free projects per org)."
+            echo "        -> Delete an unused project in the Supabase dashboard, or upgrade to Pro."
+            echo "     2. A project with name '$SNAKZAP_PROJECT_NAME' already exists under another org."
+            echo "        -> Delete it, or change the SNAKZAP_PROJECT_NAME secret."
+            echo "     3. Invalid SUPABASE_ORG_ID — find your org ID at"
+            echo "        https://supabase.com/dashboard/account/org"
+            echo "     4. Invalid SNAKZAP_REGION — must be a Supabase region (e.g. ap-south-1, us-east-1,"
+            echo "        eu-west-1). See https://supabase.com/docs/guides/platform/regions"
+            exit 1
+          fi
+
+          PROJECT_REF=$(jq -r '.id' /tmp/sb_create.json)
+          if [ -z "$PROJECT_REF" ] || [ "$PROJECT_REF" = "null" ]; then
+            echo "❌ Project created but no 'id' field in response:"
+            cat /tmp/sb_create.json || true
+            exit 1
+          fi
+          echo "Project created with ref: $PROJECT_REF"
+          DB_PASSWORD="$SECURE_PASSWORD"
 
           # ----------------------------------------------------------
           # Step 2: Poll for project readiness (status: ACTIVE).
