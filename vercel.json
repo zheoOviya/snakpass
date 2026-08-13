@@ -1,0 +1,74 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "nextjs",
+  "installCommand": "bun install --frozen-lockfile",
+  "buildCommand": "next build",
+  "devCommand": "bun run dev",
+  "regions": [
+    "hnd1"
+  ],
+  "functions": {
+    "src/app/api/auth/**/*.ts": {
+      "maxDuration": 15
+    },
+    "src/app/api/orders/**/*.ts": {
+      "maxDuration": 15
+    },
+    "src/app/api/restaurants/**/*.ts": {
+      "maxDuration": 10
+    },
+    "src/app/api/admin/**/*.ts": {
+      "maxDuration": 15
+    },
+    "src/app/api/alerts/**/*.ts": {
+      "maxDuration": 15
+    },
+    "src/app/api/health/**/*.ts": {
+      "maxDuration": 5
+    },
+    "src/app/api/kill-switches/**/*.ts": {
+      "maxDuration": 10
+    },
+    "src/app/api/menu/**/*.ts": {
+      "maxDuration": 10
+    },
+    "src/app/api/audit-logs/**/*.ts": {
+      "maxDuration": 10
+    },
+    "src/app/api/audit-integrity-test/**/*.ts": {
+      "maxDuration": 10
+    },
+    "src/app/api/backup/**/*.ts": {
+      "maxDuration": 30
+    }
+  },
+  "crons": [],
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "Permissions-Policy", "value": "geolocation=(), microphone=(), camera=()" }
+      ]
+    }
+  ],
+  "redirects": [],
+  "rewrites": [],
+  "trailingSlash": false,
+  "cleanUrls": true,
+  "github": {
+    "enabled": false,
+    "silent": false,
+    "autoJobCancelation": true
+  },
+  "build": {
+    "env": {
+      "NEXT_TELEMETRY_DISABLED": "1"
+    }
+  },
+  "env": {
+    "NEXT_TELEMETRY_DISABLED": "1"
+  }
+}
