@@ -1285,3 +1285,69 @@ So the user's belief "previously committed a fixed version" is only true locally
 ### Rate-limit notes for the next agent
 - Hit GitHub's secondary rate limit (abuse-detection 403 with "API rate limit exceeded for 47.57.242.119" body) twice while doing sequential API pings, despite the hourly core quota showing 36–45/60 remaining. The fix was to insert 60–90s sleeps between calls.
 - The hourly quota as of last check: **41/60 remaining**, reset epoch `1786580521`.
+
+
+---
+
+## Task ID: 54 — Agent: independent-gh-reviewer
+
+**Goal:** Independent governance/handoff review of the DEV-001 / P0-22 (Production WORM Closure) PASS_CANDIDATE evidence chain. Issue a formal ACCEPT / ACCEPT_WITH_CONDITIONS / REJECT verdict.
+
+### Independence statement
+This reviewer did NOT implement any of the code under review, did NOT trigger any of the workflow runs, and evaluated the evidence on its own merits. Where I could not independently verify a claim, I said so explicitly in the review document.
+
+### Verification methods used
+- **Local file inspection:** read `prisma/scripts/postgres-migration.sql` (242 lines), `prisma/scripts/create-roles.sql` (126 lines), `prisma/scripts/revoke-worm.sql` (99 lines), `prisma/scripts/seed-postgres.sql` (130 lines), `prisma/scripts/tamper-test-function.sql` (98 lines), `prisma/scripts/tamper-test.sh`. Read all 4 DEV-001 workflow YAMLs (`dev-001-closure.yml`, `dev-001-sql-execution.yml`, `dev-001-hardening.yml`, `dev-001-gap-closure.yml`).
+- **Local git audit:** `git log --format='%h %ci %s' -10` showed the iteration history (7b3e8fa → d33c1c6 → 71bdc6f → 30664dc → a3ef946 → 9eda8b2 → 3d39fa8 → bd0db3f → 67eea8c). `git ls-remote origin` confirmed local HEAD `67eea8c2ad5f67a8930e6204b64d4e39d673a2d0` = remote `origin/main` HEAD — IDE has pushed all closure commits to GitHub. `git fetch origin` updated local `origin/main` ref from stale `a8cae85` to current `67eea8c`.
+- **Remote workflow file verification:** fetched all 4 workflow YAMLs via `https://raw.githubusercontent.com/zheoOviya/snakpass/main/.github/workflows/dev-001-*.yml` (raw CDN, not rate-limited). All 4 returned HTTP 200 and were byte-identical (`diff -q` IDENTICAL) to local files. Confirms workflows are committed to `origin/main`.
+- **GitHub Actions run verification via HTML scrape:** the GitHub Actions REST API was rate-limited (0/60 remaining, unauthenticated) throughout the review window. Fell back to fetching the HTML pages of `https://github.com/zheoOviya/snakpass/actions` (427 KB) and individual run pages (210 KB each). The HTML contains aria-labels of the form `"completed successfully:  Run N of <workflow name>."` paired with run URLs `/zheoOviya/snakpass/actions/runs/<id>`. Extracted 25 unique run IDs across 4 workflows with their status labels:
+  - **DEV-001 Evidence Gap Closure** — 4 runs, ALL "completed successfully": Run 1 (`31702754171`), Run 2 (`31703062207`), Run 3 (`31703428580`), Run 4 (`31703708419` ← most recent).
+  - **DEV-001 Hardening v2** — 2 runs, ALL "completed successfully": Run 1 (`31700274356`), Run 2 (`31700530002`).
+  - **DEV-001 SQL Execution** — 3 runs, ALL "completed successfully": Run 1 (`31697643815`), Run 2 (`31697830769`), Run 3 (`31698185552`).
+  - **DEV-001 Closure** (older abandoned approach) — 4 runs, ALL "failed": Run 20 (`31660317243`), Run 21 (`31660494767`), Run 22 (`31660893492`), Run 23 (`31661075901`). Consistent with the Task 52 diagnosis.
+- **Commit SHA traceability:** fetched run-page HTML for gap-closure Run 4 (`/actions/runs/31703708419`) and SQL-execution Run 3 (`/actions/runs/31698185552`). Page titles contain the commit SHA: "DEV-001 Evidence Gap Closure · zheoOviya/snakpass@67eea8c · GitHub" confirms Run 4 is at commit `67eea8c2` = local HEAD = origin/main HEAD. SQL-execution Run 3 is at commit `71bdc6f` (also visible in local `git log`).
+- **Documentation drift audit:** `DEVIATION_LOG.md` line 38 still says DEV-001 = OPEN. `WAVE0_EVIDENCE.md` line 487 still says "P0-22 → OPEN (DEV-001) 🔴". `worklog.md` ends at Task 53 (workflow-status-checker) which reported "Zero DEV-001 Closure workflow runs exist on GitHub" — this is now STALE (9 new successful runs exist across the 3 new workflows). The IDE has NOT appended a worklog entry documenting the new gap-closure workflow runs or their outputs.
+
+### Verification limitations (explicit)
+1. **GitHub API rate limit exhausted** throughout review window (0/60 remaining, reset ~35 min after start). Could NOT fetch `actions/runs/<id>` JSON metadata via API. Relied on HTML scrape as substitute — HTML gives workflow-level conclusion but not step-level output.
+2. **No GitHub PAT.** Could NOT download job logs (the `/actions/jobs/<job_id>/logs` endpoint requires authentication, even for public repos). Could NOT download artifacts (the `/actions/runs/<id>/artifacts` endpoint + artifact download URL both require auth). Could NOT independently inspect the actual `tamper-test-results.json` JSON content produced by the gap-closure workflow.
+3. **Cannot connect to Supabase PostgreSQL directly** (IPv6 limitation, same as IDE). Could NOT independently run `has_table_privilege()` against `zmzqqcyapcezmaqvuzzd`.
+4. **GitHub Actions run page is JS-rendered.** Step-level output (the actual `cat tamper-test-results.json` output, the `PASS_CANDIDATE` verdict line) is loaded via JavaScript fetching from the API — not in the raw HTML. Could NOT verify the actual SQL output content from the run page HTML.
+
+### Evidence assessment summary
+- **A. Schema Migration** — ✅ Correct. All 9 tables, FKs, indexes, hash-chain columns, WORM trigger functions (`prevent_audit_update`, `prevent_audit_delete`). Idempotent. Production-grade.
+- **B. Role Separation** — ✅ Correct & meaningful. `snakzap_admin` (CREATEDB/CREATEROLE) vs `snakzap_app` (NOCREATEDB/NOCREATEROLE). AuditLog gets only SELECT+INSERT for snakzap_app (boundary line). Caveat: hardcoded placeholder passwords, must rotate in production.
+- **C. REVOKE Boundary** — ✅ Correct & self-asserting. Explicit REVOKE UPDATE/DELETE/TRUNCATE on AuditLog from snakzap_app. Verification query raises EXCEPTION if boundary violated. TRUNCATE correctly treated as separate privilege.
+- **D. information_schema Evidence** — ✅ Valid static evidence. Reflects current ACL state. Combined with inline `RAISE EXCEPTION` assertion = strong static proof. Not sufficient alone as runtime evidence.
+- **E. has_table_privilege() Runtime ACL Check** — ✅ Valid runtime function. Internally calls `pg_class_aclcheck()` — the same predicate PostgreSQL's executor uses to raise SQLSTATE 42501. Functionally equivalent to attempting the operation. Limitations: doesn't prove app connects as snakzap_app (deployment concern), doesn't exercise trigger layer, returns boolean not SQLSTATE.
+- **F. Accepted Evidence Gap (Direct 42501)** — ⚠️ Acceptable substitution for the *specific* claim. The IDE tried 4 approaches (direct DB psql, SET ROLE in DO block, SECURITY DEFINER function, has_table_privilege) and all but the last failed due to environmental constraints (IPv6, Supabase Management API role restrictions). has_table_privilege() returning false == executor raising 42501 — they cannot disagree. Risk: Low for the specific claim; higher for the broader "audit log is un-mutable from application" claim (depends on app's runtime connection role, not verified here).
+- **G. Reproducibility** — ✅ Strong for workflows + scripts (committed, byte-identical to remote). ⚠️ Artifact content not pre-captured locally; reproducibility of artifact content requires re-running workflow or API fetch.
+
+### Verdict
+**ACCEPT_WITH_CONDITIONS**
+
+The technical evidence chain is sufficient for the specific claim (PostgreSQL privileges deny UPDATE/DELETE/TRUNCATE to snakzap_app on AuditLog). The substitution of `has_table_privilege()` for the direct 42501 capture is functionally equivalent and technically sound. However, FINAL PASS is contingent on:
+
+- **Condition 1 (BLOCKING):** Orchestrator (with GitHub PAT) downloads the `dev-001-gap-closure-evidence` artifact from Run 4 (ID `31703708419`) at commit `67eea8c2`, and verifies the `tamper-test-results.json` content shows the 5 expected rows: INSERT/SELECT → ALLOWED, UPDATE/DELETE/TRUNCATE → DENIED. If matches → FINAL PASS. If not → REJECT.
+- **Condition 2 (BLOCKING):** `DEVIATION_LOG.md` updated — DEV-001 entry revised from "OPEN" to "CLOSED" with cross-reference to `GH_REVIEW_DEV001.md` + Run URL + artifact name + verified JSON content.
+- **Condition 3 (NON-BLOCKING, archival):** New worklog entry appended (this one) documenting the 9 new workflow runs (3 SQL-exec + 2 hardening + 4 gap-closure) with Run URLs, commit SHAs, and the actual artifact JSON content.
+- **Condition 4 (NON-BLOCKING, evidence quality):** IDE clarifies why the `dev_001_tamper_test()` SECURITY DEFINER function approach (commit `9eda8b2`) was abandoned in `bd0db3f`. If the function actually worked and captured real 42501 codes, that would be strictly stronger evidence.
+- **Condition 5 (NON-BLOCKING, production-launch prerequisite — NOT for DEV-001 closure):** Verify the application's runtime DATABASE_URL uses `snakzap_app` (not postgres superuser, not Supabase pooler's authenticator). The WORM boundary only applies if the app actually connects as snakzap_app. Out of scope for DEV-001 (which is about the boundary existing) but prerequisite for the broader "audit log is un-mutable from application" claim.
+
+### Files written
+- `/home/z/my-project/GH_REVIEW_DEV001.md` — formal review document (~14 KB, structured per the required template: Reviewer, Evidence Reviewed, Assessment A-G, Strengths, Weaknesses, Risk Assessment, Verdict, Conditions, Recommendation).
+
+### Stage Summary (Task 54)
+- ✅ **Workflow runs VERIFIED via HTML scrape:** 9 successful runs across 3 new DEV-001 workflows (SQL-Execution × 3, Hardening v2 × 2, Gap-Closure × 4). Run URLs and commit SHAs traceable. Latest gap-closure Run 4 (`31703708419`) at commit `67eea8c2` = local HEAD = `origin/main` HEAD.
+- ✅ **SQL scripts VERIFIED locally:** postgres-migration.sql (9 tables + WORM triggers), create-roles.sql (snakzap_admin/snakzap_app separation), revoke-worm.sql (REVOKE UPDATE/DELETE/TRUNCATE + self-asserting verification) — all syntactically correct and semantically sound.
+- ✅ **Workflow YAML files VERIFIED on GitHub:** raw.githubusercontent.com fetch confirms 4 DEV-001 workflow files exist on `origin/main` and are byte-identical to local copies.
+- ✅ **Technical substitution VERIFIED as sound:** `has_table_privilege()` calls the same `pg_class_aclcheck()` predicate PostgreSQL's executor uses to raise SQLSTATE 42501 — they cannot disagree.
+- ⚠️ **Artifact content NOT independently verified:** I could not download the `tamper-test-results.json` artifact (no GitHub PAT + rate limit exhausted). The IDE's claim that the artifact shows the expected DENIED values is taken at face value — flagged as the keystone blocking condition.
+- ⚠️ **Workflow "success" conclusion ≠ SQL execution proof:** the gap-closure workflow prints PASS_CANDIDATE/FAIL but does NOT exit non-zero on FAIL — so "completed successfully:" labels prove the workflow ran, NOT that the WORM boundary holds. Same for SQL-execution workflow (all 5 SQL steps gated on `if: sql_endpoint == 'works'`; if endpoint test fails, steps are SKIPPED, fallback step runs, workflow still concludes success).
+- ⚠️ **Documentation drift DETECTED:** `DEVIATION_LOG.md`, `WAVE0_EVIDENCE.md`, and `worklog.md` all still record DEV-001 as OPEN. No worklog entry has been appended by the IDE documenting the new gap-closure workflow runs. PASS_CANDIDATE status lives only in the task description and the workflow artifacts — not in any project-tracked document.
+- 🚫 **Cannot push, dispatch, or modify any files except `GH_REVIEW_DEV001.md`.** This worklog append is the only write permitted (per the task constraints — `worklog.md` after-completion append + `GH_REVIEW_DEV001.md` write).
+- 🚫 **Cannot spawn further subagents.** Review is final; Orchestrator must execute Conditions 1-3.
+
+### Recommendation to Orchestrator
+**Immediate next action:** Download the `dev-001-gap-closure-evidence` artifact from Run 4 (ID `31703708419`) via `https://api.github.com/repos/zheoOviya/snakpass/actions/runs/31703708419/artifacts` (requires PAT). Verify the JSON content matches the expected shape (Condition 1 in `GH_REVIEW_DEV001.md`). If yes → declare DEV-001 FINAL PASS + instruct IDE to fulfill Conditions 2 + 3. If no → REJECT, reopen DEV-001, instruct IDE to diagnose why `has_table_privilege()` returned unexpected values.
+
