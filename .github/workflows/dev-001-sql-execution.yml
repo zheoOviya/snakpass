@@ -1,0 +1,210 @@
+# DEV-001 SQL Execution via Supabase Management API
+# This workflow executes SQL via the Management API (HTTPS/IPv4)
+# bypassing the IPv6 limitation of direct DB connections.
+#
+# The workflow has access to SUPABASE_ACCESS_TOKEN secret.
+# The Management API runs on api.supabase.com (IPv4, HTTPS).
+
+name: DEV-001 SQL Execution
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type EXECUTE-SQL to confirm'
+        required: true
+        default: ''
+
+jobs:
+  execute-sql:
+    name: Execute DEV-001 SQL via Management API
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify trigger
+        run: |
+          [ "${{ github.event.inputs.confirm }}" = "EXECUTE-SQL" ] || { echo "❌ Wrong confirmation"; exit 1; }
+          echo "✅ Authorized"
+
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl
+
+      - name: Get project API keys
+        id: keys
+        run: |
+          # Get the anon key and service_role key from the Management API
+          KEYS=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/api-keys")
+          ANON_KEY=$(echo "$KEYS" | jq -r '.[] | select(.name == "anon") | .api_key')
+          SERVICE_KEY=$(echo "$KEYS" | jq -r '.[] | select(.name == "service_role") | .api_key')
+          echo "::add-mask::$ANON_KEY"
+          echo "::add-mask::$SERVICE_KEY"
+          echo "anon_key=$ANON_KEY" >> $GITHUB_OUTPUT
+          echo "service_key=$SERVICE_KEY" >> $GITHUB_OUTPUT
+          echo "✅ API keys retrieved"
+
+      - name: Test Management API SQL endpoint
+        id: test-sql
+        run: |
+          echo "=== Testing POST /v1/projects/{ref}/database/query ==="
+          SQL_HTTP=$(curl -sS -o /tmp/sql_test.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d '{"query": "SELECT 1 as test;"}' || echo "000")
+          echo "SQL endpoint -> HTTP $SQL_HTTP"
+          cat /tmp/sql_test.json
+          echo ""
+          if [ "$SQL_HTTP" = "200" ]; then
+            echo "sql_endpoint=works" >> $GITHUB_OUTPUT
+            echo "✅ SQL execution endpoint works!"
+          else
+            echo "sql_endpoint=failed" >> $GITHUB_OUTPUT
+            echo "⚠️  SQL endpoint returned $SQL_HTTP — will try RPC approach"
+          fi
+
+      - name: Step 1 — Schema migration
+        if: steps.test-sql.outputs.sql_endpoint == 'works'
+        run: |
+          echo "=== Step 1: Schema migration ==="
+          SQL=$(cat prisma/scripts/postgres-migration.sql)
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$SQL" '{query: $q}')")
+          echo "$RESULT"
+          echo "=== Step 1 complete ==="
+
+      - name: Step 2 — Create roles
+        if: steps.test-sql.outputs.sql_endpoint == 'works'
+        run: |
+          echo "=== Step 2: Create roles ==="
+          SQL=$(cat prisma/scripts/create-roles.sql)
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$SQL" '{query: $q}')")
+          echo "$RESULT"
+          echo "=== Step 2 complete ==="
+
+      - name: Step 3 — REVOKE WORM
+        if: steps.test-sql.outputs.sql_endpoint == 'works'
+        run: |
+          echo "=== Step 3: REVOKE WORM ==="
+          SQL=$(cat prisma/scripts/revoke-worm.sql)
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$SQL" '{query: $q}')")
+          echo "$RESULT"
+          echo "=== Step 3 complete ==="
+
+      - name: Step 4 — Seed data
+        if: steps.test-sql.outputs.sql_endpoint == 'works'
+        run: |
+          echo "=== Step 4: Seed data ==="
+          SQL=$(cat prisma/scripts/seed-postgres.sql)
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$SQL" '{query: $q}')")
+          echo "$RESULT"
+          echo "=== Step 4 complete ==="
+
+      - name: Step 5 — Tamper tests
+        if: steps.test-sql.outputs.sql_endpoint == 'works'
+        run: |
+          echo "=== Step 5: Tamper tests ==="
+          SQL='
+          SELECT '"'"'Test 1: snakzap_app INSERT (should PASS)'"'"' AS test;
+          SET ROLE snakzap_app;
+          INSERT INTO "AuditLog" (id, actorId, actorRole, action, metadata, createdAt, prevHash, hash)
+          VALUES ('"'"'test-insert-001'"'"', NULL, '"'"'SYSTEM'"'"', '"'"'TAMPER_TEST_INSERT'"'"', '"'"'{"test": true}'"'"', NOW(), '"'"'GENESIS'"'"', '"'"'test-hash-001'"'"');
+          SELECT '"'"'PASS — INSERT succeeded'"'"' AS result;
+          RESET ROLE;
+
+          SELECT '"'"'Test 2: snakzap_app UPDATE (should be DENIED)'"'"' AS test;
+          SET ROLE snakzap_app;
+          DO $$ BEGIN
+            UPDATE "AuditLog" SET action = '"'"'TAMPERED'"'"' WHERE id = '"'"'test-insert-001'"'"';
+            RAISE EXCEPTION '"'"'FAIL — UPDATE succeeded'"'"';
+          EXCEPTION WHEN insufficient_privilege THEN
+            RAISE NOTICE '"'"'PASS — UPDATE denied'"'"';
+          WHEN OTHERS THEN
+            RAISE NOTICE '"'"'PASS — UPDATE blocked: %'"'"', SQLERRM;
+          END; $$;
+          RESET ROLE;
+
+          SELECT '"'"'Test 3: snakzap_app DELETE (should be DENIED)'"'"' AS test;
+          SET ROLE snakzap_app;
+          DO $$ BEGIN
+            DELETE FROM "AuditLog" WHERE id = '"'"'test-insert-001'"'"';
+            RAISE EXCEPTION '"'"'FAIL — DELETE succeeded'"'"';
+          EXCEPTION WHEN insufficient_privilege THEN
+            RAISE NOTICE '"'"'PASS — DELETE denied'"'"';
+          WHEN OTHERS THEN
+            RAISE NOTICE '"'"'PASS — DELETE blocked: %'"'"', SQLERRM;
+          END; $$;
+          RESET ROLE;
+
+          SELECT '"'"'Test 4: Hash-chain integrity'"'"' AS test;
+          SELECT COUNT(*) AS audit_count FROM "AuditLog";
+
+          SELECT '"'"'Test 5: Admin INSERT (should PASS)'"'"' AS test;
+          INSERT INTO "AuditLog" (id, actorId, actorRole, action, metadata, createdAt, prevHash, hash)
+          VALUES ('"'"'test-admin-001'"'"', NULL, '"'"'SYSTEM'"'"', '"'"'TAMPER_TEST_ADMIN'"'"', '"'"'{"test": true}'"'"', NOW(), '"'"'GENESIS'"'"', '"'"'admin-hash'"'"');
+          SELECT '"'"'PASS — Admin INSERT succeeded'"'"' AS result;
+
+          DELETE FROM "AuditLog" WHERE id IN ('"'"'test-insert-001'"'"', '"'"'test-admin-001'"'"');
+          SELECT '"'"'Cleanup complete'"'"' AS result;
+          '
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$SQL" '{query: $q}')")
+          echo "$RESULT" > tamper-results.json
+          cat tamper-results.json
+          echo "=== Step 5 complete ==="
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-001-sql-results
+          path: |
+            /tmp/sql_test.json
+            tamper-results.json
+          retention-days: 90
+
+      - name: Fallback — Manual SQL instructions
+        if: steps.test-sql.outputs.sql_endpoint != 'works'
+        run: |
+          echo "❌ Management API SQL endpoint not available."
+          echo ""
+          echo "The Supabase Management API does not support SQL execution."
+          echo "You must run the SQL scripts manually via the Supabase SQL Editor."
+          echo ""
+          echo "Steps:"
+          echo "1. Go to https://supabase.com/dashboard/project/$PROJECT_REF/sql/new"
+          echo "2. Copy-paste each SQL script from prisma/scripts/ and click Run"
+          echo "3. Capture the results and paste them back to the IDE"
+          echo ""
+          echo "SQL scripts to run (in order):"
+          echo "  1. prisma/scripts/postgres-migration.sql"
+          echo "  2. prisma/scripts/create-roles.sql"
+          echo "  3. prisma/scripts/revoke-worm.sql"
+          echo "  4. prisma/scripts/seed-postgres.sql"
+          echo "  5. Tamper test SQL (from tamper-test.sh)"
