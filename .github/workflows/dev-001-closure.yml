@@ -120,6 +120,46 @@ jobs:
             exit 1
           fi
 
+          # ----------------------------------------------------------
+          # Step 1.5: Resolve the org ID to a valid UUID.
+          # The user might have provided a slug (e.g. "my-org") instead
+          # of the UUID. We GET /v1/organizations and find the matching
+          # org (by id OR slug), then use its canonical id for the
+          # create-project call.
+          # ----------------------------------------------------------
+          echo "--- GET /v1/organizations (resolve org UUID) ---"
+          ORG_HTTP=$(curl -sS -o /tmp/sb_orgs.json -w "%{http_code}" \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/organizations" || echo "000")
+          echo "GET /v1/organizations -> HTTP $ORG_HTTP"
+
+          if [ "$ORG_HTTP" != "200" ]; then
+            echo "❌ Could not list organizations (HTTP $ORG_HTTP)."
+            cat /tmp/sb_orgs.json || true
+            exit 1
+          fi
+
+          # Try to match by id (exact match) OR by name/slug (case-insensitive).
+          RESOLVED_ORG_ID=$(jq -r --arg provided "$SUPABASE_ORG_ID" '
+            .[] | select(.id == $provided or (.name | ascii_downcase) == ($provided | ascii_downcase) or (.slug | ascii_downcase) == ($provided | ascii_downcase)) | .id
+          ' /tmp/sb_orgs.json 2>/dev/null | head -1)
+
+          if [ -z "$RESOLVED_ORG_ID" ] || [ "$RESOLVED_ORG_ID" = "null" ]; then
+            echo "❌ Could not find an organization matching SUPABASE_ORG_ID='$SUPABASE_ORG_ID'"
+            echo "   Available organizations (id | name | slug):"
+            jq -r '.[] | "     - id=\(.id) name=\(.name) slug=\(.slug // \"n/a\")"' /tmp/sb_orgs.json 2>/dev/null || cat /tmp/sb_orgs.json
+            echo ""
+            echo "   Fix: Update the SUPABASE_ORG_ID GitHub secret with one of the id values above."
+            exit 1
+          fi
+
+          if [ "$RESOLVED_ORG_ID" != "$SUPABASE_ORG_ID" ]; then
+            echo "ℹ️  Resolved org: provided='$SUPABASE_ORG_ID' → canonical UUID='$RESOLVED_ORG_ID'"
+          else
+            echo "✅ Org ID verified: $RESOLVED_ORG_ID"
+          fi
+          ORG_ID_TO_USE="$RESOLVED_ORG_ID"
+
           # Response is an array of project objects; find one with matching name.
           EXISTING=$(jq -r --arg name "$SNAKZAP_PROJECT_NAME" \
             '.[] | select(.name == $name) | .id' /tmp/sb_projects.json 2>/dev/null || echo "")
@@ -173,7 +213,8 @@ jobs:
             -X POST "https://api.supabase.com/v1/projects" \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "$(jq -n --arg org "$SUPABASE_ORG_ID" --arg name "$SNAKZAP_PROJECT_NAME" \
+            -H "supabase-api-version: 2024-02-15" \
+            -d "$(jq -n --arg org "$ORG_ID_TO_USE" --arg name "$SNAKZAP_PROJECT_NAME" \
                     --arg region "$SNAKZAP_REGION" --arg pw "$SECURE_PASSWORD" '{
               organization_id: $org,
               name: $name,
@@ -182,6 +223,8 @@ jobs:
               plan: "free"
             }')" || echo "000")
           echo "POST /v1/projects -> HTTP $CREATE_HTTP"
+          echo "   Using org_id: $ORG_ID_TO_USE"
+          echo "   Using region: $SNAKZAP_REGION"
 
           if [ "$CREATE_HTTP" != "200" ] && [ "$CREATE_HTTP" != "201" ]; then
             echo "❌ Project creation failed (HTTP $CREATE_HTTP)."
