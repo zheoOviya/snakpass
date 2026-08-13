@@ -36,7 +36,22 @@ jobs:
       - name: Execute runtime privilege check
         run: |
           echo "=== Runtime privilege check via has_table_privilege() ==="
-          SQL='SELECT '"'"'INSERT'"'"' AS operation, '"'"'ALLOWED'"'"' AS expected, CASE WHEN has_table_privilege('"'"'snakzap_app'"'"', '"'"'AuditLog'"'"', '"'"'INSERT'"'"') THEN '"'"'ALLOWED'"'"' ELSE '"'"'DENIED'"'"' END AS actual UNION ALL SELECT '"'"'SELECT'"'"', '"'"'ALLOWED'"'"', CASE WHEN has_table_privilege('"'"'snakzap_app'"'"', '"'"'AuditLog'"'"', '"'"'SELECT'"'"') THEN '"'"'ALLOWED'"'"' ELSE '"'"'DENIED'"'"' END UNION ALL SELECT '"'"'UPDATE'"'"', '"'"'DENIED'"'"', CASE WHEN has_table_privilege('"'"'snakzap_app'"'"', '"'"'AuditLog'"'"', '"'"'UPDATE'"'"') THEN '"'"'ALLOWED'"'"' ELSE '"'"'DENIED'"'"' END UNION ALL SELECT '"'"'DELETE'"'"', '"'"'DENIED'"'"', CASE WHEN has_table_privilege('"'"'snakzap_app'"'"', '"'"'AuditLog'"'"', '"'"'DELETE'"'"') THEN '"'"'ALLOWED'"'"' ELSE '"'"'DENIED'"'"' END UNION ALL SELECT '"'"'TRUNCATE'"'"', '"'"'DENIED'"'"', CASE WHEN has_table_privilege('"'"'snakzap_app'"'"', '"'"'AuditLog'"'"', '"'"'TRUNCATE'"'"') THEN '"'"'ALLOWED'"'"' ELSE '"'"'DENIED'"'"' END;'
+          # has_table_privilege() takes table name as TEXT — must match the
+          # actual table name. In PostgreSQL, "AuditLog" is stored as "AuditLog"
+          # (case-sensitive because quoted in CREATE TABLE). The function accepts
+          # the name with proper quoting.
+          SQL=$(cat << 'SQLEOF'
+          SELECT 'INSERT' AS operation, 'ALLOWED' AS expected, CASE WHEN has_table_privilege('snakzap_app', '"AuditLog"', 'INSERT') THEN 'ALLOWED' ELSE 'DENIED' END AS actual
+          UNION ALL
+          SELECT 'SELECT', 'ALLOWED', CASE WHEN has_table_privilege('snakzap_app', '"AuditLog"', 'SELECT') THEN 'ALLOWED' ELSE 'DENIED' END
+          UNION ALL
+          SELECT 'UPDATE', 'DENIED', CASE WHEN has_table_privilege('snakzap_app', '"AuditLog"', 'UPDATE') THEN 'ALLOWED' ELSE 'DENIED' END
+          UNION ALL
+          SELECT 'DELETE', 'DENIED', CASE WHEN has_table_privilege('snakzap_app', '"AuditLog"', 'DELETE') THEN 'ALLOWED' ELSE 'DENIED' END
+          UNION ALL
+          SELECT 'TRUNCATE', 'DENIED', CASE WHEN has_table_privilege('snakzap_app', '"AuditLog"', 'TRUNCATE') THEN 'ALLOWED' ELSE 'DENIED' END;
+          SQLEOF
+          )
           PAYLOAD=$(jq -n --arg q "$SQL" '{query: $q}')
           RESULT=$(curl -sS -X POST \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
