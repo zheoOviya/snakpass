@@ -63,9 +63,9 @@ jobs:
           echo "SQL endpoint -> HTTP $SQL_HTTP"
           cat /tmp/sql_test.json
           echo ""
-          if [ "$SQL_HTTP" = "200" ]; then
+          if [ "$SQL_HTTP" = "200" ] || [ "$SQL_HTTP" = "201" ]; then
             echo "sql_endpoint=works" >> $GITHUB_OUTPUT
-            echo "✅ SQL execution endpoint works!"
+            echo "✅ SQL execution endpoint works! (HTTP $SQL_HTTP)"
           else
             echo "sql_endpoint=failed" >> $GITHUB_OUTPUT
             echo "⚠️  SQL endpoint returned $SQL_HTTP — will try RPC approach"
