@@ -283,34 +283,19 @@ jobs:
 
           # ----------------------------------------------------------
           # Step 3: Construct the connection string.
-          # Uses the Supavisor session-mode pooler (port 5432) —
-          # session mode is required for DDL/migration + role creation.
-          # Password is URL-encoded so API-generated passwords with
-          # special characters do not break the URI.
-          #
-          # IMPORTANT: We query the project details to get the ACTUAL
-          # region (the Supabase API may assign a different region
-          # than what was requested, or the user's SNAKZAP_REGION
-          # secret might use a format that doesn't match the pooler
-          # hostname convention).
+          # IMPORTANT: Supabase's pooler hostname may take time to become
+          # DNS-resolvable for newly created projects. We use the DIRECT
+          # connection (db.{ref}.supabase.co:5432) instead of the pooler,
+          # which is available immediately after project creation.
           # ----------------------------------------------------------
-          PROJECT_REGION=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            "https://api.supabase.com/v1/projects/$PROJECT_REF" 2>/dev/null \
-            | jq -r '.region // empty' 2>/dev/null || echo "")
-
-          if [ -z "$PROJECT_REGION" ] || [ "$PROJECT_REGION" = "null" ]; then
-            echo "⚠️  Could not determine project region from API — falling back to SNAKZAP_REGION"
-            PROJECT_REGION="$SNAKZAP_REGION"
-          fi
-          echo "Project region (from API): $PROJECT_REGION"
-
           ENCODED_PW=$(jq -rn --arg pw "$DB_PASSWORD" '$pw|@uri')
-          DATABASE_URL="postgresql://postgres.$PROJECT_REF:${ENCODED_PW}@aws-${PROJECT_REGION}.pooler.supabase.com:5432/postgres"
+          # Direct connection — available immediately, no DNS delay
+          DATABASE_URL="postgresql://postgres.$PROJECT_REF:${ENCODED_PW}@db.${PROJECT_REF}.supabase.co:5432/postgres"
 
           echo "project_ref=$PROJECT_REF" >> $GITHUB_OUTPUT
           echo "database_url=$DATABASE_URL" >> $GITHUB_OUTPUT
           echo "✅ Database URL constructed (value masked in logs)"
-          echo "   Connection host: aws-${PROJECT_REGION}.pooler.supabase.com:5432"
+          echo "   Connection: db.${PROJECT_REF}.supabase.co:5432 (direct)"
 
       - name: Verify PostgreSQL connectivity
         env:
