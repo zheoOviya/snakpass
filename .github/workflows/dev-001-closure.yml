@@ -320,46 +320,87 @@ jobs:
         env:
           DATABASE_URL: ${{ steps.provision.outputs.database_url }}
           PROJECT_REF: ${{ steps.provision.outputs.project_ref }}
-          DB_PASSWORD: ${{ steps.provision.outputs.db_password }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          DB_PASSWORD_ENV: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client dnsutils
-          # Wait for DNS to propagate — newly created Supabase projects may
-          # take 60-120 seconds for the pooler hostname to become resolvable.
-          echo "Waiting 60s for DNS to propagate..."
-          sleep 60
 
-          # Try pooler connection (IPv4) — up to 5 attempts with 30s intervals
-          echo "=== Trying pooler connection (IPv4) ==="
-          for i in 1 2 3 4 5; do
-            echo "Pooler attempt $i of 5..."
-            # Extract the hostname from DATABASE_URL for DNS lookup
-            POOLER_HOST=$(echo "$DATABASE_URL" | sed -E 's/.*@([^:]+):.*/\1/')
-            echo "  Resolving: $POOLER_HOST"
-            # Check if the hostname resolves to an IPv4 address
-            IPV4=$(dig +short A "$POOLER_HOST" 2>/dev/null | head -1)
-            echo "  IPv4 address: ${IPV4:-none}"
+          # Extract password from DATABASE_URL (it's masked but still valid in the env var)
+          DB_PW=$(echo "$DATABASE_URL" | sed -E 's|postgresql://[^:]+:([^@]+)@.*|\1|')
+          echo "::add-mask::$DB_PW"
 
-            if [ -n "$IPV4" ]; then
-              echo "  Hostname resolves — attempting psql connection..."
-              if psql "$DATABASE_URL" -c "SELECT version();" 2>&1; then
-                echo "✅ PostgreSQL connectivity verified via pooler"
-                exit 0
-              fi
-            else
-              echo "  Hostname not yet resolvable — waiting..."
+          # Try multiple connection strategies:
+          #
+          # Strategy 1: Direct connection db.{ref}.supabase.co on port 5432
+          #   - This resolves to IPv6 by default (which GitHub Actions can't reach)
+          #   - But we can try resolving the IPv4 A record and connect directly to the IP
+          #
+          # Strategy 2: Pooler connection aws-{region}.pooler.supabase.com on port 5432
+          #   - May not be DNS-resolvable for newly created projects (takes hours)
+          #
+          # Strategy 3: Transaction pooler on port 6543 (different hostname, might work)
+
+          echo "=== Strategy 1: Direct connection with IPv4 ==="
+          DIRECT_HOST="db.${PROJECT_REF}.supabase.co"
+          echo "  Resolving: $DIRECT_HOST"
+          # Try both A (IPv4) and AAAA (IPv6) records
+          DIRECT_IPV4=$(dig +short A "$DIRECT_HOST" 2>/dev/null | head -1)
+          DIRECT_IPV6=$(dig +short AAAA "$DIRECT_HOST" 2>/dev/null | head -1)
+          echo "  IPv4: ${DIRECT_IPV4:-none}"
+          echo "  IPv6: ${DIRECT_IPV6:-none}"
+
+          if [ -n "$DIRECT_IPV4" ]; then
+            echo "  ✅ IPv4 found — connecting directly to IP..."
+            if PGPASSWORD="$DB_PW" psql -h "$DIRECT_IPV4" -p 5432 -U "postgres.${PROJECT_REF}" -d postgres -c "SELECT version();" 2>&1; then
+              echo "✅ PostgreSQL connectivity verified via direct IPv4"
+              # Update DATABASE_URL to use the IPv4 address
+              echo "database_url=postgresql://postgres.${PROJECT_REF}:${DB_PW}@${DIRECT_IPV4}:5432/postgres" >> $GITHUB_OUTPUT
+              exit 0
             fi
-            sleep 30
+          fi
+
+          echo ""
+          echo "=== Strategy 2: Pooler connection ==="
+          POOLER_HOST=$(echo "$DATABASE_URL" | sed -E 's/.*@([^:]+):.*/\1/')
+          echo "  Resolving: $POOLER_HOST"
+          POOLER_IPV4=$(dig +short A "$POOLER_HOST" 2>/dev/null | head -1)
+          echo "  IPv4: ${POOLER_IPV4:-none}"
+
+          if [ -n "$POOLER_IPV4" ]; then
+            echo "  ✅ IPv4 found — connecting via pooler..."
+            if psql "$DATABASE_URL" -c "SELECT version();" 2>&1; then
+              echo "✅ PostgreSQL connectivity verified via pooler"
+              exit 0
+            fi
+          fi
+
+          echo ""
+          echo "=== Strategy 3: Transaction pooler on port 6543 ==="
+          # Try different pooler hostname formats
+          for POOLER_PORT in 6543 5432; do
+            for POOLER_PREFIX in "aws-ap-northeast-1" "aws-us-east-1" "aws-eu-west-1"; do
+              TX_HOST="${POOLER_PREFIX}.pooler.supabase.com"
+              TX_IPV4=$(dig +short A "$TX_HOST" 2>/dev/null | head -1)
+              if [ -n "$TX_IPV4" ]; then
+                echo "  Found pooler: $TX_HOST ($TX_IPV4) port $POOLER_PORT"
+                if PGPASSWORD="$DB_PW" psql -h "$TX_IPV4" -p "$POOLER_PORT" -U "postgres.${PROJECT_REF}" -d postgres -c "SELECT version();" 2>&1; then
+                  echo "✅ PostgreSQL connectivity verified via $TX_HOST:$POOLER_PORT"
+                  echo "database_url=postgresql://postgres.${PROJECT_REF}:${DB_PW}@${TX_IPV4}:${POOLER_PORT}/postgres" >> $GITHUB_OUTPUT
+                  exit 0
+                fi
+              fi
+            done
           done
 
-          echo "❌ Pooler connection failed after 5 attempts"
           echo ""
-          echo "=== Falling back to direct connection with IPv4 forced ==="
-          # The direct connection (db.{ref}.supabase.co:5432) resolves to IPv6
-          # by default, but we can force IPv4 with psql's -h flag using the
-          # resolved IPv4 address (if any) or the pooler on port 6543.
-          echo "Direct connection fallback not available — pooler DNS must propagate."
-          echo "The project was created successfully. Please re-run this workflow in 5-10 minutes"
-          echo "to allow Supabase DNS to fully propagate."
+          echo "❌ All connection strategies failed."
+          echo "   The Supabase project was created successfully (ref: $PROJECT_REF)."
+          echo "   DNS propagation for the pooler may take several hours on the free tier."
+          echo ""
+          echo "   Options:"
+          echo "   1. Wait 1-2 hours and re-run this workflow."
+          echo "   2. Connect via Supabase Dashboard SQL Editor to verify the project works."
+          echo "   3. Use a paid Supabase plan for instant pooler availability."
           exit 1
 
   migrate-and-revoke:
