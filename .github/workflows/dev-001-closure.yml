@@ -264,7 +264,11 @@ jobs:
               "https://api.supabase.com/v1/projects/$PROJECT_REF" 2>/dev/null \
               | jq -r '.status // "UNKNOWN"' 2>/dev/null || echo "UNKNOWN")
             echo "  Attempt $i: status=$STATUS"
-            if [ "$STATUS" = "ACTIVE" ]; then
+            # Accept both "ACTIVE" and "ACTIVE_HEALTHY" — newer Supabase API versions
+            # return ACTIVE_HEALTHY when the project is fully ready.
+            if [ "$STATUS" = "ACTIVE" ] || [ "$STATUS" = "ACTIVE_HEALTHY" ]; then
+              echo "✅ Project is ready (status: $STATUS)"
+              STATUS="ACTIVE"  # normalize for the check below
               break
             fi
             sleep 10
