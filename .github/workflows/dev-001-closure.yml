@@ -300,42 +300,59 @@ jobs:
             PROJECT_REGION="${SNAKZAP_REGION//\"/}"  # strip any quotes
           fi
           echo "Project region: $PROJECT_REGION"
-          # Debug: print region as hex to bypass GitHub secret masking
-          echo "Project region (hex): $(echo -n "$PROJECT_REGION" | xxd -p)"
-          echo "Project region (length): ${#PROJECT_REGION}"
-          echo "Project region (base64): $(echo -n "$PROJECT_REGION" | base64)"
 
           ENCODED_PW=$(jq -rn --arg pw "$DB_PASSWORD" '$pw|@uri')
-          # Use pooler (IPv4) — port 5432 for session mode (required for DDL)
+          # Try pooler (IPv4) first — port 5432 for session mode (required for DDL)
           DATABASE_URL="postgresql://postgres.$PROJECT_REF:${ENCODED_PW}@aws-${PROJECT_REGION}.pooler.supabase.com:5432/postgres"
 
           echo "project_ref=$PROJECT_REF" >> $GITHUB_OUTPUT
           echo "database_url=$DATABASE_URL" >> $GITHUB_OUTPUT
           echo "✅ Database URL constructed (value masked in logs)"
-          echo "   Pooler: aws-${PROJECT_REGION}.pooler.supabase.com:5432 (IPv4, session mode)"
 
       - name: Verify PostgreSQL connectivity
         env:
           DATABASE_URL: ${{ steps.provision.outputs.database_url }}
+          PROJECT_REF: ${{ steps.provision.outputs.project_ref }}
+          DB_PASSWORD: ${{ steps.provision.outputs.db_password }}
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client
+          sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client dnsutils
           # Wait for DNS to propagate — newly created Supabase projects may
-          # take 30-60 seconds for the pooler hostname to become resolvable.
-          echo "Waiting 30s for DNS to propagate..."
-          sleep 30
-          # Try connecting up to 3 times with 15s intervals
-          for i in 1 2 3; do
-            echo "Connection attempt $i of 3..."
-            if psql "$DATABASE_URL" -c "SELECT version();" 2>&1; then
-              echo "✅ PostgreSQL connectivity verified"
-              exit 0
+          # take 60-120 seconds for the pooler hostname to become resolvable.
+          echo "Waiting 60s for DNS to propagate..."
+          sleep 60
+
+          # Try pooler connection (IPv4) — up to 5 attempts with 30s intervals
+          echo "=== Trying pooler connection (IPv4) ==="
+          for i in 1 2 3 4 5; do
+            echo "Pooler attempt $i of 5..."
+            # Extract the hostname from DATABASE_URL for DNS lookup
+            POOLER_HOST=$(echo "$DATABASE_URL" | sed -E 's/.*@([^:]+):.*/\1/')
+            echo "  Resolving: $POOLER_HOST"
+            # Check if the hostname resolves to an IPv4 address
+            IPV4=$(dig +short A "$POOLER_HOST" 2>/dev/null | head -1)
+            echo "  IPv4 address: ${IPV4:-none}"
+
+            if [ -n "$IPV4" ]; then
+              echo "  Hostname resolves — attempting psql connection..."
+              if psql "$DATABASE_URL" -c "SELECT version();" 2>&1; then
+                echo "✅ PostgreSQL connectivity verified via pooler"
+                exit 0
+              fi
+            else
+              echo "  Hostname not yet resolvable — waiting..."
             fi
-            echo "Attempt $i failed, waiting 15s..."
-            sleep 15
+            sleep 30
           done
-          echo "❌ Cannot connect to PostgreSQL after 3 attempts"
-          echo "   This may be a DNS propagation delay for newly created Supabase projects."
-          echo "   The project was created successfully — try re-running the workflow."
+
+          echo "❌ Pooler connection failed after 5 attempts"
+          echo ""
+          echo "=== Falling back to direct connection with IPv4 forced ==="
+          # The direct connection (db.{ref}.supabase.co:5432) resolves to IPv6
+          # by default, but we can force IPv4 with psql's -h flag using the
+          # resolved IPv4 address (if any) or the pooler on port 6543.
+          echo "Direct connection fallback not available — pooler DNS must propagate."
+          echo "The project was created successfully. Please re-run this workflow in 5-10 minutes"
+          echo "to allow Supabase DNS to fully propagate."
           exit 1
 
   migrate-and-revoke:
