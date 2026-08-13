@@ -166,41 +166,43 @@ jobs:
 
           if [ -n "$EXISTING" ] && [ "$EXISTING" != "null" ]; then
             # ------------------------------------------------------
-            # Existing project found with same name. We DELETE it and
-            # re-create a fresh project with a known password, because:
-            #   - The Supabase password-reset API endpoint
-            #     (POST /v1/projects/{ref}/database/password) does not
-            #     exist — it returns HTTP 404 ("Cannot POST").
-            #   - The correct way to update the password is via
-            #     PATCH /v1/projects/{ref} with {"database_password": "..."},
-            #     but DELETE + re-create is simpler and guarantees we
-            #     start from a clean state for DEV-001 verification.
+            # Existing project found with same name — REUSE it.
+            # We don't know the original DB password (it was generated
+            # by a previous run and not stored). But we CAN connect
+            # using the Supabase service role key if configured, OR
+            # we can use the Postgres connection string from the
+            # Supabase dashboard (which the user would need to provide
+            # as a secret).
+            #
+            # For now: reuse the project, but we need the DB password.
+            # Since we don't have it, we'll DELETE + re-create only if
+            # a SUPABASE_DB_PASSWORD secret is NOT set.
             # ------------------------------------------------------
             echo "Existing project found with ref: $EXISTING"
-            echo "Deleting it so we can re-create with a known DB password..."
+            PROJECT_REF="$EXISTING"
 
-            echo "--- DELETE /v1/projects/$EXISTING ---"
-            DELETE_HTTP=$(curl -sS -o /tmp/sb_delete.json -w "%{http_code}" \
-              -X DELETE \
-              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-              "https://api.supabase.com/v1/projects/$EXISTING" || echo "000")
-            echo "DELETE /v1/projects/$EXISTING -> HTTP $DELETE_HTTP"
+            # Check if SUPABASE_DB_PASSWORD secret is configured
+            DB_PASSWORD="${{ secrets.SUPABASE_DB_PASSWORD }}"
+            if [ -n "$DB_PASSWORD" ]; then
+              echo "✅ SUPABASE_DB_PASSWORD secret found — reusing existing project with stored password"
+            else
+              echo "⚠️  SUPABASE_DB_PASSWORD not set — need to delete + re-create project"
+              echo "--- DELETE /v1/projects/$EXISTING ---"
+              DELETE_HTTP=$(curl -sS -o /tmp/sb_delete.json -w "%{http_code}" \
+                -X DELETE \
+                -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+                "https://api.supabase.com/v1/projects/$EXISTING" || echo "000")
+              echo "DELETE /v1/projects/$EXISTING -> HTTP $DELETE_HTTP"
 
-            if [ "$DELETE_HTTP" != "200" ] && [ "$DELETE_HTTP" != "202" ] && [ "$DELETE_HTTP" != "204" ]; then
-              echo "❌ Could not delete existing project (HTTP $DELETE_HTTP)."
-              echo "   Response body:"
-              cat /tmp/sb_delete.json || true
-              echo ""
-              echo "   To proceed manually, delete the project in the Supabase dashboard:"
-              echo "     https://supabase.com/dashboard/project/$EXISTING/settings/general"
-              echo "   Then re-run this workflow."
-              exit 1
+              if [ "$DELETE_HTTP" != "200" ] && [ "$DELETE_HTTP" != "202" ] && [ "$DELETE_HTTP" != "204" ]; then
+                echo "❌ Could not delete existing project (HTTP $DELETE_HTTP)."
+                cat /tmp/sb_delete.json || true
+                exit 1
+              fi
+              echo "✅ Existing project deleted — waiting 30s for Supabase to release the name..."
+              sleep 30
+              EXISTING=""
             fi
-            echo "✅ Existing project deleted — waiting 20s for Supabase to release the name..."
-            sleep 20
-
-            # Now fall through to the "create new project" branch below.
-            EXISTING=""
           fi
 
           # ------------------------------------------------------
