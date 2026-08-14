@@ -1,0 +1,283 @@
+# =============================================================================
+# P0-27 Phase 2 — Diagnose + Fix DB Pooler Hostname
+# -----------------------------------------------------------------------------
+# PROBLEM:
+#   Vercel staging deployment reports: "Can't reach database server at
+#   aws-0.ap-northeast-1.pooler.supabase.com:6543"
+#   The Supabase Management API endpoint GET /v1/projects/{ref}/config/database
+#   returned only {"message": ...} (error) — no pooler hostname available.
+#
+# THIS WORKFLOW:
+#   1. Queries multiple Supabase API endpoints for project + pooler info
+#   2. Tests DNS resolution for 4 possible pooler hostname formats
+#   3. Tests TCP connectivity (ports 6543 + 5432) for each
+#   4. Tests psql connection (snakzap_app + postgres) for each working host
+#   5. If a working hostname is found, updates the Vercel preview DATABASE_URL
+#
+# Possible hostname formats:
+#   a) aws-0.<region>.pooler.supabase.com       (standard supavisor)
+#   b) aws-<region>.pooler.supabase.com           (newer format without 0.)
+#   c) <project-ref>.pooler.supabase.com          (project-ref-based)
+#   d) aws-0-<region>.pooler.supabase.com         (dash-separated)
+# =============================================================================
+
+name: Diagnose + Fix DB Pooler Hostname
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type DIAGNOSE-DB to confirm'
+        required: true
+        default: ''
+
+jobs:
+  diagnose:
+    name: Diagnose DB pooler hostname + fix if found
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify trigger
+        run: |
+          [ "${{ github.event.inputs.confirm }}" = "DIAGNOSE-DB" ] || { echo "❌ Wrong confirmation"; exit 1; }
+          echo "✅ Authorized — Diagnose DB pooler hostname"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq jq curl dnsutils postgresql-client
+
+      - name: Verify secrets present
+        run: |
+          [ -n "$VERCEL_TOKEN" ] || { echo "❌ VERCEL_TOKEN NOT_SET"; exit 1; }
+          [ -n "$VERCEL_PROJECT_ID" ] || { echo "❌ VERCEL_PROJECT_ID NOT_SET"; exit 1; }
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN NOT_SET"; exit 1; }
+          [ -n "$SUPABASE_DB_PASSWORD" ] || { echo "❌ SUPABASE_DB_PASSWORD NOT_SET"; exit 1; }
+          echo "✅ Secrets present"
+
+      - name: Query Supabase API for project + pooler info
+        run: |
+          PROJECT_REF="zmzqqcyapcezmaqvuzzd"
+          AUTH="Authorization: Bearer $SUPABASE_ACCESS_TOKEN"
+
+          echo "=== GET /v1/projects/{ref} ==="
+          curl -sS -H "$AUTH" "https://api.supabase.com/v1/projects/$PROJECT_REF" | jq '{name, region, status, organization_id}' 2>/dev/null || echo "failed"
+
+          echo ""
+          echo "=== GET /v1/projects/{ref}/config/database (full) ==="
+          curl -sS -H "$AUTH" "https://api.supabase.com/v1/projects/$PROJECT_REF/config/database" 2>/dev/null | head -c 1000
+          echo ""
+
+          echo ""
+          echo "=== Try GET /v1/projects/{ref}/database/settings ==="
+          SETTINGS_HTTP=$(curl -sS -o /tmp/settings.json -w "%{http_code}" -H "$AUTH" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/settings" 2>/dev/null || echo "000")
+          echo "HTTP $SETTINGS_HTTP"
+          cat /tmp/settings.json 2>/dev/null | jq '.' 2>/dev/null | head -40 || cat /tmp/settings.json 2>/dev/null | head -c 500
+
+      - name: Test DNS resolution for all hostname formats
+        id: dns
+        run: |
+          PROJECT_REF="zmzqqcyapcezmaqvuzzd"
+          REGION="ap-northeast-1"
+
+          HOSTS=(
+            "aws-0.$REGION.pooler.supabase.com"
+            "aws-$REGION.pooler.supabase.com"
+            "$PROJECT_REF.pooler.supabase.com"
+            "aws-0-$REGION.pooler.supabase.com"
+          )
+
+          echo "=== DNS resolution test ==="
+          WORKING_HOSTS=""
+          for host in "${HOSTS[@]}"; do
+            echo -n "  $host → "
+            IP=$(dig +short "$host" 2>/dev/null | grep -E '^[0-9]+\.' | head -1)
+            if [ -n "$IP" ]; then
+              echo "RESOLVED ($IP)"
+              WORKING_HOSTS="$WORKING_HOSTS $host"
+            else
+              # Try AAAA (IPv6)
+              IP6=$(dig +short AAAA "$host" 2>/dev/null | head -1)
+              if [ -n "$IP6" ]; then
+                echo "RESOLVED IPv6 ($IP6)"
+                WORKING_HOSTS="$WORKING_HOSTS $host"
+              else
+                echo "FAILED"
+              fi
+            fi
+          done
+
+          echo ""
+          echo "working_hosts=$WORKING_HOSTS" >> $GITHUB_OUTPUT
+          echo "Working hosts:$WORKING_HOSTS"
+
+      - name: Test TCP connectivity (ports 6543 + 5432)
+        id: tcp
+        run: |
+          PROJECT_REF="zmzqqcyapcezmaqvuzzd"
+          WORKING_HOSTS="${{ steps.dns.outputs.working_hosts }}"
+
+          if [ -z "$WORKING_HOSTS" ]; then
+            echo "❌ No hosts resolved — pooler may not be enabled for this project"
+            echo "best_host=" >> $GITHUB_OUTPUT
+            echo "best_port=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "=== TCP connectivity test ==="
+          BEST_HOST=""
+          BEST_PORT=""
+          for host in $WORKING_HOSTS; do
+            for port in 6543 5432; do
+              echo -n "  $host:$port → "
+              if timeout 5 bash -c "echo > /dev/tcp/$host/$port" 2>/dev/null; then
+                echo "OPEN"
+                if [ -z "$BEST_HOST" ]; then
+                  BEST_HOST="$host"
+                  BEST_PORT="$port"
+                fi
+              else
+                echo "CLOSED/UNREACHABLE"
+              fi
+            done
+          done
+
+          echo ""
+          echo "best_host=$BEST_HOST" >> $GITHUB_OUTPUT
+          echo "best_port=$BEST_PORT" >> $GITHUB_OUTPUT
+          echo "Best host:port = $BEST_HOST:$BEST_PORT"
+
+      - name: Test psql connection (snakzap_app + postgres)
+        id: psql
+        run: |
+          PROJECT_REF="zmzqqcyapcezmaqvuzzd"
+          BEST_HOST="${{ steps.tcp.outputs.best_host }}"
+          BEST_PORT="${{ steps.tcp.outputs.best_port }}"
+          APP_PASSWORD="CHANGE_ME_IN_PRODUCTION_USE_SECRET_MANAGER"
+
+          if [ -z "$BEST_HOST" ]; then
+            echo "⚠️  No reachable pooler host found — cannot test psql"
+            echo "working_user=" >> $GITHUB_OUTPUT
+            echo "working_host=" >> $GITHUB_OUTPUT
+            echo "working_port=" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "=== psql connection test against $BEST_HOST:$BEST_PORT ==="
+
+          # Try snakzap_app
+          echo "--- snakzap_app.$PROJECT_REF ---"
+          PGPASSWORD="$APP_PASSWORD" psql -h "$BEST_HOST" -p "$BEST_PORT" \
+            -U "snakzap_app.$PROJECT_REF" -d postgres \
+            -c "SELECT current_user, current_database();" 2>&1 | head -10
+          APP_EXIT=$?
+
+          if [ $APP_EXIT -eq 0 ]; then
+            echo "✅ snakzap_app connection works!"
+            echo "working_user=snakzap_app.$PROJECT_REF" >> $GITHUB_OUTPUT
+            echo "working_host=$BEST_HOST" >> $GITHUB_OUTPUT
+            echo "working_port=$BEST_PORT" >> $GITHUB_OUTPUT
+            echo "working_password=$APP_PASSWORD" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️  snakzap_app failed — trying postgres superuser"
+            echo "--- postgres.$PROJECT_REF ---"
+            PGPASSWORD="$SUPABASE_DB_PASSWORD" psql -h "$BEST_HOST" -p "$BEST_PORT" \
+              -U "postgres.$PROJECT_REF" -d postgres \
+              -c "SELECT current_user, current_database();" 2>&1 | head -10
+            PG_EXIT=$?
+
+            if [ $PG_EXIT -eq 0 ]; then
+              echo "✅ postgres superuser works (snakzap_app password may be wrong)"
+              echo "working_user=postgres.$PROJECT_REF" >> $GITHUB_OUTPUT
+              echo "working_host=$BEST_HOST" >> $GITHUB_OUTPUT
+              echo "working_port=$BEST_PORT" >> $GITHUB_OUTPUT
+              echo "working_password=$SUPABASE_DB_PASSWORD" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Neither snakzap_app nor postgres could connect"
+              echo "working_user=" >> $GITHUB_OUTPUT
+              echo "working_host=" >> $GITHUB_OUTPUT
+              echo "working_port=" >> $GITHUB_OUTPUT
+              echo "working_password=" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Update Vercel preview DATABASE_URL if working host found
+        env:
+          WORKING_USER: ${{ steps.psql.outputs.working_user }}
+          WORKING_HOST: ${{ steps.psql.outputs.working_host }}
+          WORKING_PORT: ${{ steps.psql.outputs.working_port }}
+          WORKING_PASSWORD: ${{ steps.psql.outputs.working_password }}
+        if: steps.psql.outputs.working_host != ''
+        run: |
+          set -e
+          PROJECT_ID="$VERCEL_PROJECT_ID"
+          API_URL="https://api.vercel.com/v10/projects/$PROJECT_ID/env"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+          PROJECT_REF="zmzqqcyapcezmaqvuzzd"
+
+          ENCODED_PW=$(jq -rn --arg pw "$WORKING_PASSWORD" '$pw|@uri')
+          DATABASE_URL="postgresql://$WORKING_USER:$ENCODED_PW@$WORKING_HOST:$WORKING_PORT/postgres?pgbouncer=true&connection_limit=1"
+          echo "::add-mask::$DATABASE_URL"
+
+          echo "=== Updating Vercel preview DATABASE_URL ==="
+          echo "  user: $WORKING_USER"
+          echo "  host: $WORKING_HOST:$WORKING_PORT"
+
+          # Delete existing preview DATABASE_URL
+          ENV_LIST=$(curl -sS -H "$AUTH" "$API_URL")
+          EXISTING_IDS=$(echo "$ENV_LIST" | jq -r '.envs[] | select(.key == "DATABASE_URL" and (.target | contains(["preview"]))) | .id')
+          for ID in $EXISTING_IDS; do
+            echo "  Deleting old DATABASE_URL (id=$ID)"
+            curl -sS -X DELETE -H "$AUTH" "$API_URL/$ID" > /dev/null
+          done
+
+          # Create new
+          RESULT=$(curl -sS -X POST \
+            -H "$AUTH" \
+            -H "Content-Type: application/json" \
+            "$API_URL" \
+            -d "$(jq -n --arg v "$DATABASE_URL" '{
+              key: "DATABASE_URL",
+              value: $v,
+              target: ["preview"],
+              type: "encrypted"
+            }')")
+
+          NEW_ID=$(echo "$RESULT" | jq -r '.created.id // .id // empty')
+          if [ -n "$NEW_ID" ]; then
+            echo "  ✅ Created preview DATABASE_URL (id=$NEW_ID)"
+          else
+            echo "  ❌ Failed: $(echo "$RESULT" | jq -r '.error.message // "unknown"')"
+          fi
+
+      - name: Summary
+        run: |
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  DB POOLER DIAGNOSIS SUMMARY"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+          echo "Working host: ${{ steps.psql.outputs.working_host }}"
+          echo "Working port: ${{ steps.psql.outputs.working_port }}"
+          echo "Working user: ${{ steps.psql.outputs.working_user }}"
+          echo ""
+          if [ -n "${{ steps.psql.outputs.working_host }}" ]; then
+            echo "✅ Vercel preview DATABASE_URL updated"
+            echo "Next step: re-trigger staging deploy to test smoke tests"
+          else
+            echo "❌ No working pooler hostname found"
+            echo "Possible causes:"
+            echo "  - Pooler not enabled for this Supabase project"
+            echo "  - Wrong region in hostname"
+            echo "  - Network/firewall blocking port 6543/5432"
+          fi
+          echo "═══════════════════════════════════════════════════════════════"

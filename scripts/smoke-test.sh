@@ -118,7 +118,10 @@ probe() {
   # Evaluate predicate. jq emits true/false; default true when no predicate.
   local predicate_ok="false"
   if [ -z "$error_msg" ] && [ "$status_code" = "$expected" ]; then
-    predicate_ok="$(printf '%s' "$body_json" | jq -r "${predicate:-'true'}' | tostring" 2>/dev/null || echo 'false')"
+    # NOTE: Do NOT wrap the default in single quotes — the stray ' after
+    # the expansion breaks the jq filter when predicate IS set, causing
+    # all predicate checks to silently fail (jq exits non-zero → 'false').
+    predicate_ok="$(printf '%s' "$body_json" | jq -r "${predicate:-true} | tostring" 2>/dev/null || echo 'false')"
     if [ "$predicate_ok" != "true" ]; then
       predicate_ok="false"
     fi
