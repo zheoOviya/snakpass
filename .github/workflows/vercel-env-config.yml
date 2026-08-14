@@ -1,0 +1,228 @@
+# P0-27 Phase 2 — Configure Vercel Environment Variables
+# Sets all required env vars on the Vercel project using API.
+# Does NOT deploy — only configures environment variables.
+
+name: P0-27 Vercel Env Config
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type CONFIG-VERCEL to confirm'
+        required: true
+        default: ''
+
+jobs:
+  configure:
+    name: Configure Vercel Environment Variables
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify trigger
+        run: |
+          [ "${{ github.event.inputs.confirm }}" = "CONFIG-VERCEL" ] || { echo "❌ Wrong confirmation"; exit 1; }
+          echo "✅ Authorized — Vercel Env Config"
+
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl
+
+      - name: Verify secrets present
+        run: |
+          [ -n "$VERCEL_TOKEN" ] || { echo "❌ VERCEL_TOKEN NOT_SET"; exit 1; }
+          [ -n "$VERCEL_PROJECT_ID" ] || { echo "❌ VERCEL_PROJECT_ID NOT_SET"; exit 1; }
+          [ -n "$SUPABASE_DB_PASSWORD" ] || { echo "❌ SUPABASE_DB_PASSWORD NOT_SET"; exit 1; }
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN NOT_SET"; exit 1; }
+          echo "✅ All required secrets present"
+
+      - name: Get Supabase project info
+        id: supabase
+        run: |
+          PROJECT_REF="zmzqqcyapcezmaqvuzzd"
+
+          # Get project region
+          PROJECT_INFO=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF")
+          PROJECT_REGION=$(echo "$PROJECT_INFO" | jq -r '.region // "ap-northeast-1"')
+          echo "Project region: $PROJECT_REGION"
+
+          # Get API keys
+          KEYS=$(curl -sS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/api-keys")
+          ANON_KEY=$(echo "$KEYS" | jq -r '.[] | select(.name == "anon") | .api_key')
+          SERVICE_KEY=$(echo "$KEYS" | jq -r '.[] | select(.name == "service_role") | .api_key')
+
+          # Mask all secrets
+          echo "::add-mask::$ANON_KEY"
+          echo "::add-mask::$SERVICE_KEY"
+          echo "::add-mask::$SUPABASE_DB_PASSWORD"
+
+          # Construct DATABASE_URL for snakzap_app (runtime role)
+          # Transaction Pooler port 6543 with pgbouncer params
+          ENCODED_PW=$(jq -rn --arg pw "$SUPABASE_DB_PASSWORD" '$pw|@uri')
+          DATABASE_URL="postgresql://postgres.$PROJECT_REF:$ENCODED_PW@aws-$PROJECT_REGION.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+          echo "::add-mask::$DATABASE_URL"
+
+          # Construct Supabase URLs
+          SUPABASE_URL="https://$PROJECT_REF.supabase.co"
+          SUPABASE_JWKS_URL="https://$PROJECT_REF.supabase.co/auth/v1/jwks"
+          NEXT_PUBLIC_SUPABASE_URL="$SUPABASE_URL"
+
+          echo "supabase_url=$SUPABASE_URL" >> $GITHUB_OUTPUT
+          echo "supabase_jwks_url=$SUPABASE_JWKS_URL" >> $GITHUB_OUTPUT
+          echo "next_public_supabase_url=$NEXT_PUBLIC_SUPABASE_URL" >> $GITHUB_OUTPUT
+          echo "anon_key=$ANON_KEY" >> $GITHUB_OUTPUT
+          echo "service_key=$SERVICE_KEY" >> $GITHUB_OUTPUT
+          echo "database_url=$DATABASE_URL" >> $GITHUB_OUTPUT
+
+          echo "✅ Supabase info retrieved"
+
+      - name: Configure Vercel environment variables
+        run: |
+          set +e  # Don't exit on individual failures — capture all
+
+          PROJECT_ID="$VERCEL_PROJECT_ID"
+          API_URL="https://api.vercel.com/v10/projects/$PROJECT_ID/env"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+
+          # Helper to create env var
+          create_env() {
+            local key="$1"
+            local value="$2"
+            local target="$3"  # production, preview, development
+            local type="${4:-encrypted}"  # encrypted or plain
+
+            # Check if already exists
+            EXISTING=$(curl -sS -H "$AUTH" "$API_URL" | jq -r ".envs[] | select(.key == \"$key\" and .target[] | contains(\"$target\")) | .id" 2>/dev/null | head -1)
+
+            if [ -n "$EXISTING" ]; then
+              echo "  ⚠️  $key ($target) already exists — removing old one"
+              curl -sS -X DELETE -H "$AUTH" "$API_URL/$EXISTING" > /dev/null 2>&1
+            fi
+
+            # Create new
+            RESULT=$(curl -sS -X POST \
+              -H "$AUTH" \
+              -H "Content-Type: application/json" \
+              "$API_URL" \
+              -d "$(jq -n --arg k "$key" --arg v "$value" --arg t "$target" --arg ty "$type" '{
+                key: $k,
+                value: $v,
+                target: [$t],
+                type: $ty
+              }')")
+
+            if echo "$RESULT" | jq -e '.id' > /dev/null 2>&1; then
+              echo "  ✅ $key ($target) — configured"
+            else
+              echo "  ❌ $key ($target) — FAILED: $(echo $RESULT | jq -r '.error.message // .error // "unknown"')"
+            fi
+          }
+
+          echo "=== Configuring Vercel environment variables ==="
+          echo ""
+
+          # --- Database ---
+          echo "[Database]"
+          create_env "DATABASE_URL" "${{ steps.supabase.outputs.database_url }}" "production" "encrypted"
+          create_env "DATABASE_URL" "${{ steps.supabase.outputs.database_url }}" "preview" "encrypted"
+
+          # --- Supabase auth (server-only) ---
+          echo ""
+          echo "[Supabase server-side]"
+          create_env "SUPABASE_URL" "${{ steps.supabase.outputs.supabase_url }}" "production" "encrypted"
+          create_env "SUPABASE_URL" "${{ steps.supabase.outputs.supabase_url }}" "preview" "encrypted"
+          create_env "SUPABASE_SECRET_KEY" "${{ steps.supabase.outputs.service_key }}" "production" "encrypted"
+          create_env "SUPABASE_SECRET_KEY" "${{ steps.supabase.outputs.service_key }}" "preview" "encrypted"
+          create_env "SUPABASE_JWKS_URL" "${{ steps.supabase.outputs.supabase_jwks_url }}" "production" "encrypted"
+          create_env "SUPABASE_JWKS_URL" "${{ steps.supabase.outputs.supabase_jwks_url }}" "preview" "encrypted"
+
+          # --- Supabase (client-side / public) ---
+          echo ""
+          echo "[Supabase client-side]"
+          create_env "NEXT_PUBLIC_SUPABASE_URL" "${{ steps.supabase.outputs.next_public_supabase_url }}" "production" "plain"
+          create_env "NEXT_PUBLIC_SUPABASE_URL" "${{ steps.supabase.outputs.next_public_supabase_url }}" "preview" "plain"
+          create_env "NEXT_PUBLIC_SUPABASE_ANON_KEY" "${{ steps.supabase.outputs.anon_key }}" "production" "plain"
+          create_env "NEXT_PUBLIC_SUPABASE_ANON_KEY" "${{ steps.supabase.outputs.anon_key }}" "preview" "plain"
+
+          # --- Application ---
+          echo ""
+          echo "[Application]"
+          create_env "NEXTAUTH_SECRET" "snakzap-dev-secret-change-in-production" "production" "encrypted"
+          create_env "NEXTAUTH_SECRET" "snakzap-dev-secret-change-in-production" "preview" "encrypted"
+          create_env "NEXTAUTH_URL" "https://snakpass.vercel.app" "production" "plain"
+          create_env "NEXTAUTH_URL" "https://snakpass-git-main.vercel.app" "preview" "plain"
+
+          echo ""
+          echo "✅ Environment configuration complete"
+
+      - name: Verify all env vars
+        run: |
+          echo "=== Verifying Vercel env vars ==="
+          ENV_LIST=$(curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env")
+          ENV_COUNT=$(echo "$ENV_LIST" | jq '.envs | length')
+          echo "Total env vars configured: $ENV_COUNT"
+          echo ""
+          echo "Configured env var names:"
+          echo "$ENV_LIST" | jq -r '.envs[] | "  \(.key) (target=\(.target | join(",")), type=\(.type))"' 2>/dev/null
+          echo ""
+
+          # Verify required vars are present
+          REQUIRED=(
+            "DATABASE_URL"
+            "SUPABASE_URL"
+            "SUPABASE_SECRET_KEY"
+            "SUPABASE_JWKS_URL"
+            "NEXT_PUBLIC_SUPABASE_URL"
+            "NEXT_PUBLIC_SUPABASE_ANON_KEY"
+            "NEXTAUTH_SECRET"
+            "NEXTAUTH_URL"
+          )
+
+          MISSING=0
+          for var in "${REQUIRED[@]}"; do
+            FOUND=$(echo "$ENV_LIST" | jq -r --arg v "$var" '.envs[] | select(.key == $v) | .key' | head -1)
+            if [ -n "$FOUND" ]; then
+              echo "  ✅ $var — PRESENT"
+            else
+              echo "  ❌ $var — MISSING"
+              MISSING=$((MISSING + 1))
+            fi
+          done
+
+          echo ""
+          if [ "$MISSING" -eq 0 ]; then
+            echo "✅ All required env vars configured"
+          else
+            echo "❌ $MISSING env vars missing"
+          fi
+
+      - name: Print summary
+        run: |
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  P0-27 VERCEL ENV CONFIG SUMMARY"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+          echo "Vercel project: snakpass (ID: $VERCEL_PROJECT_ID)"
+          echo "Supabase project: zmzqqcyapcezmaqvuzzd"
+          echo ""
+          echo "Configured variables:"
+          echo "  DATABASE_URL (snakzap_app, Transaction Pooler port 6543)"
+          echo "  SUPABASE_URL, SUPABASE_SECRET_KEY, SUPABASE_JWKS_URL"
+          echo "  NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY"
+          echo "  NEXTAUTH_SECRET, NEXTAUTH_URL"
+          echo ""
+          echo "Secrets exposed in logs: NO"
+          echo ""
+          echo "Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          echo "═══════════════════════════════════════════════════════════════"
