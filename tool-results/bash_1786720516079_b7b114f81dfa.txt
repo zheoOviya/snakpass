@@ -1,0 +1,400 @@
+---
+Task ID: WAVE0-GOV-1
+Agent: Explore (research, READ-ONLY)
+Task: Code-level evidence for Wave-0 governance clarification (P0-13/14/16/21 integration status + Class-2/3 rollback + Wave-0 closure purpose)
+
+Work Log:
+- Read worklog.md Task 59 (Wave-0 Gate Review Report) for Orchestrator context + 3 governance questions.
+- Read in full: `src/lib/rate-limit.ts` (75 lines), `src/lib/csrf.ts` (53 lines), `src/lib/backup.ts` (90 lines), `src/lib/alerting.ts` (142 lines), `src/lib/deployment.ts` (89 lines), `src/middleware.ts` (181 lines), `src/app/api/backup/route.ts` (56 lines), `src/app/api/alerts/evaluate/route.ts` (99 lines), `mini-services/backup-scheduler/index.ts` (177 lines), `mini-services/alert-evaluator/index.ts` (237 lines), `vercel.json` (74 lines).
+- Read in full: `WAVE0_EVIDENCE.md`, `WAVE0_GATE_REVIEW.md`, `PRODUCTION_READINESS_MATRIX.md` (§7, §11, §14, §P0-27 detailed breakdown), `P0_TRACEABILITY_MAP.md` (§6 sign-off), `P0-27-PHASE2-REMEDIATION.md`, `IMPLEMENTATION_LOG.md`, `DEVIATION_LOG.md`, `README.md`, `SPRINT_PLAN.md` (Sprint 1 / Sprint 2 / Sprint 10 entries).
+- Read worklog Tasks 37 (Option B governance ruling), 40 (5 operational wiring gaps), 41 (governance correction 8/2/3), 42 (P0-16 + P0-21 schedulers built), 58 (Class-1 rollback drill), 59 (Wave-0 Gate Review).
+- Grepped for: `rate-limit|checkRateLimit|RATE_LIMITS|rateLimitKey` (found in src/lib/rate-limit.ts + src/middleware.ts; library NEVER imported elsewhere); `csrf|CSRF|verifyCsrfToken|setCsrfCookie|isStateChanging|snakzap_csrf|x-csrf-token|X-CSRF-Token` (found in src/lib/csrf.ts + src/middleware.ts; library NEVER imported elsewhere; cookie `snakzap_csrf` is READ by middleware but NEVER SET by any code path); `from '@/lib/deployment'` (NEVER imported anywhere); `from '@/lib/backup'` (only by src/app/api/backup/route.ts:2); `from '@/lib/alerting'` (only by src/app/api/alerts/evaluate/route.ts:2); `from '@/lib/rate-limit'` (NEVER imported anywhere); `from '@/lib/csrf'` (NEVER imported anywhere).
+- Cross-referenced staging smoke-test.sh (4 GET endpoints only — `/api/health`, `/api/auth/me`, `/api/restaurants`, `/api/kill-switches`) against middleware CSRF check (POST/PUT/PATCH/DELETE on non-auth routes).
+- Verified vercel.json `crons: []` (line 45) — no scheduled Vercel Cron for either backup or alert-evaluator.
+- Verified `src/app/api/p0-13-test/route.ts:5-10` imports `_setSimulateLimiterFailure`, `_getSimulateLimiterFailure`, `_resetAllRateLimits`, `_resetRateLimitKey` from `@/middleware` — but the current `src/middleware.ts` (181 lines) only exports `middleware` (line 80) and `config` (line 179); these symbols DO NOT EXIST — a stale test fixture with broken imports.
+
+Stage Summary:
+
+# Wave-0 Governance Clarification — Code-Level Evidence Report
+
+**Status:** READ-ONLY evidence extraction. NO file modifications, NO deployments, NO migrations.
+**Scope:** 3 Orchestrator questions — (Q1) P0-13/14/16/21 integration status; (Q2) Class-2/3 rollback drill requirement; (Q3) Wave-0 closure purpose.
+
+---
+
+## Q1 — P0-13 / P0-14 / P0-16 / P0-21 Integration Status
+
+### P0-13 (Rate limiting) — Classification: (b) PARTIALLY INTEGRATED
+
+**Library definition (orphaned):**
+- `src/lib/rate-limit.ts:1-75` — exports `checkRateLimit()` (line 24), `RATE_LIMITS` (line 51), `rateLimitKey()` (line 64), `getClientIP()` (line 69). In-memory limiter with 5 configs (auth, otpSend, otpVerify, payment, adminWrite = fail-closed; general = fail-open).
+- `from '@/lib/rate-limit'` — **NEVER imported anywhere** in `src/`, `mini-services/`, or `scripts/`. The library file is dead/orphaned code.
+
+**Runtime wiring (actually enforced):**
+- `src/middleware.ts:9-78` — has its OWN INLINE COPY of the rate limiter (interface `RateLimitEntry`, `store` Map, `WINDOW_MS`, `LimiterMode`, `RATE_LIMITS`, `checkRateLimit`, `classifyPath`, `getClientIP`).
+- `src/middleware.ts:138-168` — rate limiting IS enforced on every `/api/*` request (per `config.matcher = '/api/:path*'` at line 179-181). Skips `/api/health` (line 88) and test endpoints (line 93). Calls `checkRateLimit(key, config.limit, config.mode)` at line 145; returns 503 (fail-closed) or 429 (fail-open) when `result.allowed === false`.
+- `src/middleware.ts:170-176` — sets `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `X-Trace-Id` response headers on every limited response.
+
+**Why "library complete + integration deferred" is INACCURATE for P0-13:**
+- Rate limiting IS NOT deferred — it IS enforced on every API request via the inline middleware copy.
+- The library file `src/lib/rate-limit.ts` is dead code; the production runtime path uses the inline middleware copy (Edge-safe, no Node.js imports).
+- This was confirmed by worklog Task 40 line 931: "P0-13 (Rate limiter wired into request path): Created src/middleware.ts — Edge-safe inline rate limiter... Tested: first 3 OTP sends pass, 4th+5th → 503. ✅ Operational."
+- And by `WAVE0_EVIDENCE.md:461` "P0-13 → operational evidence ✅ (rate limiter in request path, fail-closed 503 tested)".
+
+**Real Phase-3 gap (not Wave-0):**
+- In-memory `Map` per Edge instance (line 14) → per-instance throttling, NOT global. Distributed attack across many IPs/instances would NOT be properly throttled.
+- Production needs Redis-backed limiter (already documented at `src/lib/rate-limit.ts:5-8` "In production this uses Redis (sliding window)").
+
+**Impact if accepting "library complete + integration deferred" framing for Wave-0:**
+- LOW RISK for Wave-0 (staging evidence) — rate limiting IS enforced; smoke tests pass.
+- The framing is misleading — the integration is NOT deferred, just implemented via inline copy rather than library import. The Orchestrator should re-classify P0-13 from "🟡 PARTIAL (lib not wired)" to "✅ Operationally evidenced (inline middleware); Phase-3 Redis-backed limiter pending" to match WAVE0_EVIDENCE.md line 461.
+
+---
+
+### P0-14 (CSRF protection) — Classification: (b) PARTIALLY INTEGRATED with CRITICAL runtime bug
+
+**Library definition (orphaned):**
+- `src/lib/csrf.ts:1-53` — exports `CSRF_COOKIE='snakzap_csrf'` (line 14), `generateCsrfToken()` (line 17), `setCsrfCookie()` (line 22), `verifyCsrfToken()` (line 36), `isStateChanging()` (line 51). Double-submit cookie pattern, constant-time compare.
+- `from '@/lib/csrf'` — **NEVER imported anywhere**. The library file is dead/orphaned code.
+
+**Runtime wiring (validation IS enforced, cookie setter IS NOT):**
+- `src/middleware.ts:97-136` — has INLINE CSRF validation. On POST/PUT/PATCH/DELETE to non-auth routes (line 100 + 103): reads `snakzap_csrf` cookie (line 104) + `x-csrf-token` header (line 105); returns 403 "CSRF token required" (line 109-114) if either is missing; returns 403 "CSRF token mismatch" (line 117-122, 129-134) if length differs or constant-time compare fails.
+- **CRITICAL BUG:** `setCsrfCookie()` is **NEVER CALLED anywhere** in `src/`, `mini-services/`, `scripts/`. Grepped for `snakzap_csrf` — found ONLY in:
+  - `src/lib/csrf.ts:14` (constant definition)
+  - `src/middleware.ts:104` (cookie read)
+  - `WAVE0_EVIDENCE.md:283` (documentation)
+  - NO code path SETS this cookie. NO client-side code reads it or sends `X-CSRF-Token` header.
+
+**Production consequence:**
+- ALL state-changing requests (POST/PUT/PATCH/DELETE) to non-auth API routes (orders, payments, kill-switches, menu, backup, alerts/evaluate, p0-13-test, p0-18-test, p0-23-test, audit-integrity-test) would be REJECTED with 403 "CSRF token required" in production.
+- Smoke tests do NOT catch this because they are ALL GET requests (`scripts/smoke-test.sh:154-164` — only `GET /api/health`, `GET /api/auth/me`, `GET /api/restaurants`, `GET /api/kill-switches`).
+- Worklog Task 40 line 932 claimed "✅ Operational" for P0-14, but the test was `POST without token → 403` — that's the middleware WORKING AS WRITTEN, but it doesn't prove that any client can obtain a valid token. The "operational" claim is half-true: validation IS operational; cookie issuance is NOT.
+
+**Why "library complete + integration deferred" is INACCURATE + HIGH RISK for P0-14:**
+- This is NOT a deferred integration. The validation IS wired; the cookie-setter is NOT wired. This is an ACTIVE production-breaking bug that would block every state-changing write (place order, toggle kill switch, etc.).
+- The Orchestrator should NOT accept this framing for Wave-0. Either:
+  1. Wire `setCsrfCookie()` into the login/session-creation paths (so the cookie is actually set), OR
+  2. Disable the CSRF middleware check until the cookie-setter is wired.
+- Accepting "library complete + integration deferred" would mask a current production-blocking bug.
+
+---
+
+### P0-16 (Backup + Recovery) — Classification: (b) PARTIALLY INTEGRATED (on-demand only; no scheduler running)
+
+**Library definition:**
+- `src/lib/backup.ts:1-90` — exports `createBackup()` (line 25, SQLite file copy + SHA-256), `verifyBackup()` (line 66, recompute + compare checksum), `listBackups()` (line 86, returns `[]` — STUB).
+- Hard-coded SQLite paths: `BACKUP_DIR = join(cwd, 'db', 'backups')` (line 13), `DB_PATH = join(cwd, 'db', 'custom.db')` (line 14) — INCOMPATIBLE with PostgreSQL (production/staging uses Supabase Postgres).
+
+**Library wiring (on-demand API route):**
+- `src/app/api/backup/route.ts:2` imports `createBackup, verifyBackup, listBackups` from `@/lib/backup`.
+- `POST /api/backup` (line 15-45) — admin-only; calls `createBackup()` (line 22); audit-logs BACKUP_CREATED (line 31-38).
+- `GET /api/backup` (line 48-56) — admin-only; calls `listBackups()` (line 54) — returns empty array.
+- `verifyBackup()` is imported but NOT called by the API route.
+
+**Scheduler (exists, NOT deployed):**
+- `mini-services/backup-scheduler/index.ts:1-177` — standalone Bun process on port 3004.
+- Has its OWN copy of backup logic (does NOT import from `@/lib/backup`) — lines 49-79 (`createBackupWithChecksum` + `verifyBackupIntegrity`).
+- `setInterval(async () => { ... }, DEV_INTERVAL_MS)` at line 161-164 with default `BACKUP_INTERVAL_MS = 24 * 60 * 60 * 1000` (24h, line 23); configurable via `BACKUP_INTERVAL_MS` env var (line 27).
+- Runs immediate backup on startup (line 158).
+- Hard-coded SQLite path: `DB_PATH = join(import.meta.dir, '..', '..', 'db', 'custom.db')` (line 21) — INCOMPATIBLE with PostgreSQL.
+- Health/trigger/evidence endpoints (lines 124-149).
+- NOT deployed anywhere (Vercel serverless can't run a long-lived process).
+
+**No scheduled execution in production/staging:**
+- `vercel.json:45` — `"crons": []` — NO Vercel Cron configured.
+- No GitHub Actions scheduled workflow for backups.
+- The mini-service exists in source but does NOT run.
+
+**Why "library complete + integration deferred" is REASONABLE for P0-16:**
+- The on-demand library + API route ARE wired and functional (admin can POST /api/backup).
+- The daily scheduler is a separate concern — its existence in source proves capability, but it's not deployed.
+- SQLite→pg_dump rewrite is a genuine Phase-3 production-launch blocker (the SQLite file-copy backup logic doesn't work with PostgreSQL).
+- For Wave-0 (evidence of capability): ACCEPTABLE — on-demand backup API + library + scheduler source code all exist; Phase-3 deploys the scheduler + rewrites with pg_dump.
+
+**Impact if accepting for Wave-0:**
+- LOW RISK for Wave-0 (staging evidence) — on-demand backup endpoint exists; scheduler source code exists.
+- HIGH RISK for production — no daily backups running in production. Mitigation: Phase-3 must deploy backup-scheduler + rewrite to pg_dump → Supabase Storage.
+
+---
+
+### P0-21 (Alerting) — Classification: (b) PARTIALLY INTEGRATED (on-demand only; no continuous loop running)
+
+**Library definition:**
+- `src/lib/alerting.ts:1-142` — 8 alert rules defined (lines 24-105: payment-success-rate, reconciliation-mismatch, invariant-violation, unknown-state-detected, dr-drill-failed, db-unavailable, auth-failure-spike, exception-queue-backlog); `fireAlert()` with per-rule cooldown (line 110); `getAlertAudit()` (line 140). In-memory `lastFired` Map (line 108).
+- Production integration: "send to PagerDuty/Opsgenie here" (line 134) — STUB; currently `console.error` only (line 136).
+
+**Library wiring (on-demand API route):**
+- `src/app/api/alerts/evaluate/route.ts:2` imports `ALERT_RULES, fireAlert, getAlertAudit` from `@/lib/alerting`.
+- `GET /api/alerts/evaluate` (line 14-82) — on-demand endpoint that evaluates all 8 rules against real DB state (DB health, audit integrity hash-chain, payment success rate, auth failure rate, exception queue depth, reconciliation mismatches, DR drill status) and fires alerts via `fireAlert()` (line 59-65).
+- No authentication gate (anyone can call /api/alerts/evaluate).
+
+**Scheduler (exists, NOT deployed):**
+- `mini-services/alert-evaluator/index.ts:1-237` — standalone Bun process on port 3005.
+- Has its OWN copy of the 8 alert rules (lines 33-42) — does NOT import from `@/lib/alerting`.
+- `setInterval(async () => { ... }, EVAL_INTERVAL_MS)` at line 232-234 with default 60000ms (60s, line 20); configurable via `ALERT_INTERVAL_MS` env var.
+- Runs immediate evaluation on startup (line 229).
+- Uses PrismaClient directly (line 16) — connects to DB.
+- Health/trigger/evidence endpoints (lines 193-221).
+- NOT deployed anywhere (Vercel serverless can't run a long-lived process).
+
+**No scheduled execution in production/staging:**
+- `vercel.json:45` — `"crons": []` — NO Vercel Cron configured.
+- The mini-service exists in source but does NOT run.
+
+**Why "library complete + integration deferred" is REASONABLE for P0-21:**
+- The library + on-demand API route ARE wired and functional (anyone can GET /api/alerts/evaluate).
+- The continuous evaluation loop is a separate concern — its existence in source proves capability, but it's not deployed.
+- For Wave-0 (evidence of capability): ACCEPTABLE — alerting library + on-demand API + evaluator source code all exist; Phase-3 deploys the evaluator.
+- Note: WAVE0_EVIDENCE.md:475-479 flagged "test contamination from prior audit-integrity-test requires clean-baseline re-run" — per worklog Task 42 line 989, this was resolved (cleaned audit log, rebuilt hash chain, 0 alerts on clean baseline).
+
+**Impact if accepting for Wave-0:**
+- LOW RISK for Wave-0 (staging evidence) — on-demand alert evaluation endpoint exists; evaluator source code exists.
+- MEDIUM RISK for production — no continuous alert monitoring in production (alerts only fire if someone manually calls /api/alerts/evaluate). Mitigation: Phase-3 must deploy alert-evaluator (or use Vercel Cron to invoke /api/alerts/evaluate every 60s).
+
+---
+
+### Q1 Summary Table
+
+| P0 | Library exists? | Library imported anywhere? | Runtime enforcement | Scheduler running? | Classification | Risk if accepted for Wave-0 |
+|----|----------------|---------------------------|---------------------|---------------------|----------------|------------------------------|
+| P0-13 Rate limit | ✅ `src/lib/rate-limit.ts:1-75` | ❌ NEVER imported | ✅ Inline copy in `src/middleware.ts:138-168` enforces on every /api/* | N/A (per-request) | (b) PARTIALLY INTEGRATED (lib orphaned; inline middleware works) | LOW — rate limiting IS enforced. Framing is misleading. |
+| P0-14 CSRF | ✅ `src/lib/csrf.ts:1-53` | ❌ NEVER imported | ⚠️ Inline middleware validates cookie+header (lines 97-136) BUT `setCsrfCookie()` NEVER called → all state-changing writes blocked 403 | N/A | (b) PARTIALLY INTEGRATED + CRITICAL BUG | HIGH — production-breaking bug hidden by GET-only smoke tests. NOT safe to accept. |
+| P0-16 Backup | ✅ `src/lib/backup.ts:1-90` | ✅ `src/app/api/backup/route.ts:2` | ✅ On-demand POST /api/backup (admin-only) | ❌ Mini-service exists; not deployed; no Vercel Cron | (b) PARTIALLY INTEGRATED (on-demand only) | LOW for Wave-0; HIGH for production. |
+| P0-21 Alerting | ✅ `src/lib/alerting.ts:1-142` | ✅ `src/app/api/alerts/evaluate/route.ts:2` | ✅ On-demand GET /api/alerts/evaluate | ❌ Mini-service exists; not deployed; no Vercel Cron | (b) PARTIALLY INTEGRATED (on-demand only) | LOW for Wave-0; MEDIUM for production. |
+
+**Key finding for Q1:** The WAVE0_GATE_REVIEW.md (Task 59) classification of all 4 as "library complete, NOT wired into middleware" is INACCURATE for P0-13 and P0-14. The earlier WAVE0_EVIDENCE.md (Task 41) classification is more accurate: P0-13 and P0-14 are operationally evidenced in the middleware request path (using inline code, not the library imports). For P0-16 and P0-21, the on-demand API routes are wired; only the continuous schedulers are not deployed.
+
+---
+
+## Q2 — Class-2 / Class-3 Rollback Drill Requirement
+
+### The 3 deployment classes per `src/lib/deployment.ts`
+
+**Library file:** `src/lib/deployment.ts:1-89` — defines:
+- `DeploymentClass = 'backward-compatible' | 'expand-migrate-contract' | 'breaking'` (line 47)
+- `classifyDeployment()` (line 49-61)
+- `getRollbackProcedure()` (line 64-89)
+- 5 feature flags (line 25-40, all default OFF)
+
+**Class-1 (backward-compatible):**
+- `classifyDeployment()` triggers when: `schemaBreaking=false`, `apiBreaking=false`, `hasMigration=false` (line 60).
+- `getRollbackProcedure()` returns: `maxRollbackTime='10 min'`, `procedure='Traffic rollback to previous version. No DB rollback needed.'`, `safeByDefault=true` (line 70-75).
+- **Drill status:** ✅ PERFORMED — worklog Task 58 line 1713-1802. Commit `583edb1` broke `/api/health`; rolled back to `d2646b6` via `vercel deploy --prebuilt`. T2-T0 = 71 seconds vs 600s budget (11.8%). Post-rollback smoke tests 4/4 PASS. Workflow: `staging-rollback-drill.yml`.
+
+**Class-2 (expand-migrate-contract):**
+- `classifyDeployment()` triggers when: `hasMigration=true`, `schemaBreaking=false`, `apiBreaking=false` (line 57-58).
+- `getRollbackProcedure()` returns: `maxRollbackTime='15 min'`, `procedure='Rollback to previous migration phase. Schema remains compatible.'`, `safeByDefault=true` (line 76-81).
+- **Drill status:** ❌ NOT PERFORMED. WAVE0_GATE_REVIEW.md §2.1 AC-2 line 36: "🟡 PARTIAL (design only). Defined in code; never exercised against a real schema migration."
+
+**Class-3 (breaking):**
+- `classifyDeployment()` triggers when: `schemaBreaking=true` OR `apiBreaking=true` (line 54-55).
+- `getRollbackProcedure()` returns: `maxRollbackTime='variable'`, `procedure='Forward-fix only. DB rollback may be unsafe. Requires explicit sign-off.'`, `safeByDefault=false` (line 82-87).
+- **Drill status:** ❌ NOT PERFORMED. WAVE0_GATE_REVIEW.md §2.1 AC-3 line 37: "🟡 PARTIAL (design only). Code path ready; no breaking deploy has been gated or flagged in production."
+
+### Wave-0 closure criteria for rollback drills
+
+**`PRODUCTION_READINESS_MATRIX.md` §14.1 P0 Launch Gate — 7 AND-conditions (line 805-819):**
+- Condition 5: "**Rollback drill passed** (per deployment class) | P0-27 rollback-drill report; Class 1 ≤ 10 min verified" (line 815).
+- The parenthetical "Class 1 ≤ 10 min verified" specifically calls out Class 1; "per deployment class" wording is ambiguous but the matrix's own P0-27 detailed breakdown (line 556) clarifies: "**The 10-minute rollback guarantee applies to backward-compatible (Class 1) deploys only.** Schema changes must use expand-migrate-contract so rollback is always safe. Breaking changes accept forward-fix as the recovery path."
+
+**Matrix §P0-27 detailed breakdown (line 542-556):**
+- Class 1: "Rollback ≤ 10 min (just traffic shift back)" — drill required (10-min budget).
+- Class 2: "A rollback at any phase is safe because the previous phase's schema is still compatible. **No breaking migration ships without this contract phase.**" — rollback is "always safe by design" — no drill required to verify safety.
+- Class 3: "rollback requires DB rollback too (which may be unsafe) → so breaking deploys require a forward-fix plan, not a rollback plan" — rollback is NOT the recovery path; forward-fix is. Drill of "rollback" would not apply.
+
+**`P0_TRACEABILITY_MAP.md` §6 (line 139-146):**
+- Gate 1 — Matrix Completion: ✅ GREEN
+- Gate 2 — Production Readiness (G + H per capability): ⏳ Pending implementation
+- No explicit requirement for Class-2/3 drills at Wave-0 closure.
+
+**`WAVE0_EVIDENCE.md:5` (Wave-0 closure criteria):**
+"Wave-0 Gate remains NOT CLOSED until ALL 13 P0s (including P0-09, P0-22) have complete G/H evidence AND both deviations are CLOSED." — does NOT explicitly require Class-2/3 rollback drills.
+
+**`WAVE0_GATE_REVIEW.md` §2.1 AC-8 (line 42):**
+"Rollback drill (per deployment class) | ✅ SATISFIED (Class-1 only) | worklog.md Task 58 — full Phase 1-4 drill; T2-T0=71s; smoke 4/4 PASS | **Class-1 only. Class-2/3 drills not performed (Phase 3).**"
+
+### Conclusion for Q2
+
+**Class-2/3 rollback drills are NOT a Wave-0 closure prerequisite per the documented criteria.** They are a Phase-3/production-launch concern, consistent with the matrix's 3-class design philosophy:
+- Class-1 needs the 10-min drill (rollback is the recovery path; budget matters).
+- Class-2 rollback is "always safe by design" (expand-migrate-contract pattern ensures schema compatibility across phases — no drill needed to verify safety).
+- Class-3 rollback is "not the recovery path" by design (forward-fix is) — drill would not apply.
+
+**However, two caveats for the Orchestrator:**
+1. **`src/lib/deployment.ts` is NEVER imported anywhere** — `from '@/lib/deployment'` returns no matches in `src/`, `mini-services/`, or `scripts/`. The `classifyDeployment()` and `getRollbackProcedure()` functions are documentation-as-code; they are NOT invoked by any runtime path (no CD workflow calls them, no API route imports them). The 3-class framework is verified only by manual unit tests (per WAVE0_EVIDENCE.md:398-402). If the Orchestrator wants Class-2/3 drills to be required, the framework itself would need to be wired into actual deployment classification (e.g., a CI check that classifies a release before deploy and refuses if Class-3 without sign-off).
+2. **WAVE0_GATE_REVIEW.md §2.1 AC-2 and AC-3 are PARTIAL** — design only, never exercised. If the Orchestrator interprets the matrix §14.1 condition 5 "per deployment class" strictly (i.e., drill EACH class), then AC-2/AC-3 would need to be elevated from PARTIAL to SATISFIED before production launch (Phase-3 concern, NOT Wave-0 concern).
+
+**Recommendation:** Class-1-only rollback drill is SUFFICIENT for Wave-0 closure per the documented criteria. Class-2/3 drills are appropriately Phase-3 production-launch prerequisites (consistent with the matrix's design philosophy that Class-2 rollback is "always safe by design" and Class-3 rollback is "not the recovery path").
+
+---
+
+## Q3 — Wave-0 Closure Purpose
+
+### Stated purpose per governance docs
+
+**`WAVE0_EVIDENCE.md:5` (most explicit definition):**
+> "**Governance rule:** Evidence preparation may proceed in parallel ≠ Wave-0 acceptance may proceed. **Wave-0 Gate remains NOT CLOSED until ALL 13 P0s (including P0-09, P0-22) have complete G/H evidence AND both deviations are CLOSED.**"
+
+**`IMPLEMENTATION_LOG.md:21-29` (governance lock):**
+> "Wave-0 acceptance requires evidence + review + approval for EVERY P0 (all 13). No architectural gap silently closed. Environment limitation ≠ bypass of acceptance criteria. 'Evidence preparation may proceed in parallel' ≠ 'Wave-0 acceptance may proceed'."
+
+**`PRODUCTION_READINESS_MATRIX.md` §11 Capability Lifecycle (9 states):**
+- S2 Specified → S3 Dependency-ready → S4 Implemented → S5 Tested → S6 Observed → S7 Failure-tested → S8 Reviewed → **S8 Approved (business owner accepts residual risk; final production gate)** → S9 Production-ready.
+- Per matrix line 831: "A capability may not gate launch until it reaches `Production-ready` (state 9, which requires `Approved` — business-owner sign-off)."
+
+**`PRODUCTION_READINESS_MATRIX.md` §14.1 P0 Launch Gate (line 805-819):**
+> "SnakZap launches **only when ALL seven conditions hold simultaneously.** Any single failure ⇒ NO-GO."
+> | 1 | All P0 capabilities at `Production-ready` (lifecycle state 9) | Capability lifecycle tracker — every P0 row green |
+> | 2 | All P0 invariants verified (I-01..I-14) |
+> | 3 | All critical external-dependency scenarios tested |
+> | 4 | DR drill passed |
+> | 5 | Rollback drill passed (per deployment class) |
+> | 6 | No unresolved P0 exception in the exception queue |
+> | 7 | No expired exception waiver |
+
+**`SPRINT_PLAN.md` (Wave 0 → Sprint 10 launch gate):**
+- Sprint 1 (line 95): "Wave 0 — Foundation" — start-assignment for all 13 Wave-0 P0s.
+- Sprint 2 (line 117-129): "Wave 1 — Direct root-dependents + Wave 0 completion" — Wave-0 P0s reach `Production-ready` / `Tested`.
+- Sprint 10 (line 233-247): "Launch gate verification + NO-GO remediation" — verifies all 7 §14.1 AND-conditions.
+
+### Classification of Wave-0 closure purpose
+
+**(b) "All 13 P0 items have passed their Wave-0 acceptance criteria (which may be lower than production-readiness)"** — but with a clarification: the Wave-0 acceptance criteria ARE S8 Approved → S9 Production-ready per capability, NOT the 7 §14.1 launch-gate conditions.
+
+Wave-0 closure = each of the 13 Wave-0 P0s reaches S9 Production-ready (G/H evidence complete + business owner approval + deviations closed).
+Production launch = Wave-0 closure + 6 OTHER §14.1 conditions (invariants, dependency scenarios, DR drill, exceptions, waivers — and the rollback drill is part of P0-27's S9 evidence, already counted under Wave-0).
+
+**Key distinction (per matrix §11 + §14.1):**
+- Wave-0 closure ≠ production launch.
+- Wave-0 closure = necessary but NOT sufficient for production launch.
+- Production launch = Wave-0 closure + 6 other AND-conditions in §14.1.
+
+### Caveats / documentation inconsistencies for the Orchestrator
+
+1. **`WAVE0_GATE_REVIEW.md` (Task 59) uses a NARROW interpretation** — its §10.1 "Wave-0 Closure Criteria Assessment" (line 338-348) lists only 7 criteria narrowly scoped to P0-27 Phase 2 (staging deployment, rollback drill, reproducibility, no new blockers, DEV-001 closed, etc.) — it does NOT explicitly verify all 13 P0s have G/H evidence.
+
+2. **`WAVE0_EVIDENCE.md` (Task 38) uses a BROADER interpretation** — line 5 explicitly requires "ALL 13 P0s (including P0-09, P0-22) have complete G/H evidence AND both deviations are CLOSED."
+
+3. **WAVE0_GATE_REVIEW.md §3.1 P0 inventory is INCOMPLETE** — it lists 7 PASS + 4 PARTIAL + 4 NOT-STARTED = 15 items in P0-13..P0-27 range. The 7+4=11 items map to the 11 non-deviation Wave-0 P0s, but the review does NOT explicitly account for P0-09 (Firebase/Supabase) and P0-12 (Zod validation) — both of which are Wave-0 per IMPLEMENTATION_LOG.md line 50-64. DEV-002 (P0-09) is now CLOSED per DEVIATION_LOG.md line 110; P0-12 was operationally evidenced per WAVE0_EVIDENCE.md line 466. So implicitly both are PASS, but the gate review doesn't say so.
+
+4. **The WAVE0_GATE_REVIEW.md §3.1 classification "P0-13 (rate limit lib, not wired)" and "P0-14 (CSRF lib, not wired)" is INCONSISTENT** with the earlier WAVE0_EVIDENCE.md:461-462 classification "P0-13 → operational evidence ✅ (rate limiter in request path)" and "P0-14 → operational evidence ✅ (CSRF middleware in request path)". The earlier classification is more accurate (rate limiting IS in the middleware; CSRF validation IS in the middleware — both via inline code rather than library imports).
+
+### Recommendation for Q3
+
+The Orchestrator should adopt the **BROADER interpretation (WAVE0_EVIDENCE.md line 5)** as authoritative:
+> Wave-0 closure = (i) ALL 13 P0s reach S9 Production-ready (G/H evidence + business-owner approval), AND (ii) both deviations CLOSED.
+
+Under this interpretation:
+- Wave-0 closure is NOT production launch.
+- Wave-0 closure does NOT require the 6 other §14.1 conditions (DR drill, dependency scenarios, exceptions, waivers) — those are production-launch prerequisites.
+- The 4 PARTIAL P0 items (P0-13/14/16/21) need their Wave-0 acceptance criteria clarified: is "library complete + integration deferred" sufficient for S9 Production-ready, or must the integration also be complete?
+
+Per matrix §11 line 831: "A capability may not gate launch until it reaches `Production-ready` (state 9, which requires `Approved` — business-owner sign-off)." — the business owner can accept residual risk (Phase-3 integration deferral) as part of S8 Approved. So "library complete + integration deferred to Phase 3" CAN be S9 Production-ready IF the business owner explicitly accepts the residual risk.
+
+**Final answer to Q3:** Wave-0 closure = "All 13 P0 items have passed their Wave-0 acceptance criteria (S9 Production-ready via G/H evidence + business-owner approval + deviations CLOSED)" — NOT production launch. The 6 OTHER §14.1 conditions are production-launch prerequisites, NOT Wave-0 closure prerequisites. Wave-0 closure enables Wave-1 unlock (per worklog Task 37 execution order step 6: "ACCEPTED → Wave 1 UNLOCK") and is a NECESSARY but NOT SUFFICIENT condition for production launch.
+
+---
+
+## Cross-cutting findings (not in Orchestrator's 3 questions but material)
+
+1. **`src/app/api/p0-13-test/route.ts:5-10` has STALE IMPORTS** — imports `_setSimulateLimiterFailure`, `_getSimulateLimiterFailure`, `_resetAllRateLimits`, `_resetRateLimitKey` from `@/middleware`, but the current `src/middleware.ts` (181 lines) does NOT export these symbols. Either:
+   - The middleware was simplified and these test fixtures were orphaned (build would fail on strict TypeScript), OR
+   - Next.js build tolerates missing exports (production-guarded route, returns 403 in production at line 29-31).
+   This is a code-hygiene issue; not a Wave-0 blocker but should be cleaned up.
+
+2. **`src/lib/deployment.ts` is NEVER IMPORTED ANYWHERE** — the 3-class framework (`classifyDeployment`, `getRollbackProcedure`, `FEATURE_FLAGS`) is documentation-as-code. No CD workflow, no API route, no runtime path invokes these functions. They are verified only by manual unit tests (WAVE0_EVIDENCE.md:398-402). This is consistent with WAVE0_GATE_REVIEW.md AC-2/AC-3 being "design only" — the design is in code form but not in any execution path.
+
+3. **Smoke test coverage gap** — `scripts/smoke-test.sh` only tests 4 GET endpoints. POST/PUT/PATCH/DELETE paths (orders, kill-switches toggle, menu, backup, alerts/evaluate) are NOT smoke-tested. This is why the P0-14 CSRF cookie-setter gap went undetected. Recommend: extend smoke-test.sh to include at least one authenticated POST/PUT to verify the CSRF round-trip works (or fails expectedly).
+
+---
+
+## Constraint Compliance Verification
+
+| Constraint | Status |
+|-----------|--------|
+| READ-ONLY review (no code changes) | ✅ No files modified |
+| No deployments | ✅ |
+| No migrations | ✅ |
+| No production modifications | ✅ |
+| No Wave-0 closure declaration | ✅ (this report provides evidence; Orchestrator retains closure decision) |
+| No Wave-1 unlock | ✅ |
+| No DEV-001 / P0-22 file changes | ✅ |
+| No governance file changes | ✅ |
+
+**This report is READ-ONLY evidence for the Orchestrator's 3 governance questions. It does NOT itself close Wave-0 or answer the questions — it provides the code-level evidence for the Orchestrator to decide.**
+
+STOP. Awaiting Orchestrator decision on the 3 governance questions.
+
+---
+Task ID: 60 — Wave-0 Governance Decision Memo (READ-ONLY, Orchestrator-Authorized)
+Agent: main (IDE)
+Date: 2026-08-14
+Task: Produce a READ-ONLY governance decision memo answering the Orchestrator's 3 questions (P0-13/14/16/21 impact matrix, Class-2/3 rollback prerequisite, Wave-0 closure purpose) + a final recommendation among CLOSE_WAVE_0 / HOLD_WAVE_0 — ADDITIONAL_EVIDENCE_REQUIRED / REJECT_WAVE_0 — REMEDIATION_REQUIRED.
+
+## Authorization
+- **Scope**: READ-ONLY governance clarification ONLY
+- **Forbidden**: Code changes, deployments, provisioning, migrations, production modifications, Wave-0 closure declaration, Wave-1 unlock
+
+## Method
+1. Launched Explore subagent (WAVE0-GOV-1) to do code-level evidence extraction for all 4 P0 items + Class-2/3 rollback + Wave-0 closure purpose.
+2. Synthesized findings into the Wave-0 Governance Decision Memo.
+
+## Critical Finding
+**P0-14 (CSRF) has an ACTIVE production-breaking bug** discovered during code-level investigation:
+- The CSRF validation middleware IS wired (`src/middleware.ts:97-136`) — it checks the `snakzap_csrf` cookie + `X-CSRF-Token` header on every non-auth POST/PUT/PATCH/DELETE.
+- BUT `setCsrfCookie()` (defined at `src/lib/csrf.ts:22`) is **NEVER CALLED anywhere** in the codebase — grepped `snakzap_csrf` across entire repo: found ONLY in `csrf.ts:14` (definition), `middleware.ts:104` (read), `WAVE0_EVIDENCE.md:283` (doc).
+- **Consequence**: No client can ever obtain a valid CSRF cookie → every state-changing request (orders, kill-switch toggles, menu changes, backups, alert evaluations) would be rejected with 403 "CSRF token required" in production.
+- **Why it was hidden**: `scripts/smoke-test.sh:154-164` only tests 4 GET endpoints. CSRF check only fires on POST/PUT/PATCH/DELETE — so GET smoke tests bypass CSRF entirely.
+- **Framing correction**: WAVE0_GATE_REVIEW.md (Task 59) classified P0-14 as "library complete, not wired into middleware" — this is INACCURATE. The validation IS wired; the cookie-setter is NOT. This is not a deferred integration — it is an active bug.
+
+## Work Log
+- Gathered code-level evidence for P0-13 (`src/lib/rate-limit.ts` + `src/middleware.ts`): rate limiting IS enforced via inline middleware (lib file is dead code but inline copy works). Re-classified as (b) PARTIALLY INTEGRATED (lib orphaned; inline works).
+- Gathered code-level evidence for P0-14 (`src/lib/csrf.ts` + `src/middleware.ts`): validation IS wired but `setCsrfCookie()` is NEVER called → active production-breaking bug. Re-classified as (b) PARTIALLY INTEGRATED + CRITICAL BUG.
+- Gathered code-level evidence for P0-16 (`src/lib/backup.ts` + `api/backup/route.ts` + `mini-services/backup-scheduler/`): on-demand API works; scheduler not deployed. Classified as (b) PARTIALLY INTEGRATED (on-demand only).
+- Gathered code-level evidence for P0-21 (`src/lib/alerting.ts` + `api/alerts/evaluate/route.ts` + `mini-services/alert-evaluator/`): on-demand API works; continuous loop not deployed. Classified as (b) PARTIALLY INTEGRATED (on-demand only).
+- Verified Class-2/3 rollback drill is NOT a Wave-0 closure prerequisite per `PRODUCTION_READINESS_MATRIX.md` §14.1 condition 5 + matrix line 556 ("10-minute rollback guarantee applies to backward-compatible (Class 1) deploys only").
+- Verified Wave-0 closure purpose = (b) "All 13 P0s reach S9 Production-ready + both deviations CLOSED" per `WAVE0_EVIDENCE.md` line 5.
+- Wrote `/home/z/my-project/WAVE0_GOVERNANCE_DECISION_MEMO.md` (governance decision memo with impact matrix + final recommendation).
+
+## Stage Summary
+
+### Final Recommendation
+```
+REJECT_WAVE_0 — REMEDIATION_REQUIRED
+```
+
+### Reasoning
+Wave-0 closure requires all 13 Wave-0 P0s to reach S9 Production-ready. P0-14 has an active production-breaking bug (CSRF cookie-setter never wired → all state-changing writes would 403). This is NOT a "library complete + integration deferred" situation — it is a half-implemented feature with a broken round-trip, hidden by GET-only smoke tests. No responsible business owner would approve this as S9 Production-ready.
+
+### Required Remediation (minimal, focused)
+**ONE remediation unblocks Wave-0 closure:**
+- P0-14 CSRF cookie-setter fix: wire `setCsrfCookie()` into login/session-creation paths, OR disable CSRF middleware check until wired, OR add a CSRF token endpoint.
+
+**Plus (recommended but not blocking):**
+- Extend `scripts/smoke-test.sh` to include at least one authenticated POST/PUT to verify the CSRF round-trip.
+- Re-classify P0-13 in WAVE0_GATE_REVIEW.md from "library complete, not wired" to "✅ Operationally evidenced (inline middleware); Phase-3 Redis-backed distributed limiter pending."
+
+### What This Recommendation Does NOT Require
+- ❌ No Class-2/3 rollback drill (not a Wave-0 prerequisite)
+- ❌ No production DATABASE_URL fix (Phase-3 production-launch blocker, not Wave-0)
+- ❌ No Fly.io/Railway provisioning (Phase-3)
+- ❌ No pg_dump backup rewrite (Phase-3)
+- ❌ No Wave-1 unlock (gated on Wave-0 closure)
+- ❌ No production deployment (not authorized)
+
+### Impact Matrix Summary
+
+| P0 | Risk if accepted for Wave-0 | Verdict |
+|----|------------------------------|---------|
+| P0-13 | 🟢 LOW — IS enforced via inline middleware; framing is misleading | Acceptable (re-classify) |
+| P0-14 | 🔴 HIGH — ACTIVE production-breaking bug (cookie-setter never wired) | **NOT acceptable — REMEDIATION REQUIRED** |
+| P0-16 | 🟢 LOW (Wave-0) / 🔴 HIGH (production) — on-demand API works; scheduler deferred | Acceptable for Wave-0 |
+| P0-21 | 🟢 LOW (Wave-0) / 🟡 MEDIUM (production) — on-demand API works; loop deferred | Acceptable for Wave-0 |
+
+### Files Written
+- `/home/z/my-project/WAVE0_GOVERNANCE_DECISION_MEMO.md` (governance decision memo with 3-question analysis + impact matrix + final recommendation)
+
+### Constraint Compliance
+- ✅ READ-ONLY — no code changes, no deployments, no provisioning, no migrations, no production modifications
+- ✅ No Wave-0 closure declaration (memo provides recommendation; Orchestrator retains closure decision)
+- ✅ No Wave-1 unlock

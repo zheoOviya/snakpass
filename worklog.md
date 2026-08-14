@@ -2663,3 +2663,490 @@ Production               🚫 NOT AUTHORIZED
 
 ## STOP
 Awaiting Orchestrator's explicit decision on Wave-0 closure (YES/NO) or any other authorized task.
+
+---
+Task ID: 63 — Wave-0 Closure Declared + Wave-1 Gate Review Commenced
+Agent: main (IDE)
+Date: 2026-08-14
+Task: Record Orchestrator's formal Wave-0 closure declaration. Begin READ-ONLY Wave-1 Gate Review.
+
+## Orchestrator Decision — Wave-0 CLOSED ✅
+```
+DEV-001 / P0-22          ✅ CLOSED
+P0-27 Phase 1            ✅ COMPLETE
+P0-27 Phase 2            ✅ COMPLETE
+Rollback Drill           ✅ VERIFIED — 71s / 600s
+P0-14                    ✅ REMEDIATED + STAGING VERIFIED
+Wave-0 Gate Review       ✅ COMPLETE
+Wave-0                   ✅ CLOSED
+Wave-1                   🔓 UNLOCKED
+Production               🚫 NOT AUTHORIZED
+```
+
+## Key Governance Rules (confirmed by Orchestrator)
+- Wave-0 closure is NOT production authorization
+- Wave-0 closure does NOT auto-execute Wave-1
+- Next action: READ-ONLY WAVE-1 GATE REVIEW
+- NO code changes, deployments, provisioning, or migrations in Wave-1 yet
+
+## Wave-1 Gate Review — Scope (9 questions)
+1. What P0/P1 items are in Wave-1?
+2. Current actual status of each item?
+3. What dependencies block Wave-1?
+4. Which tasks are already complete?
+5. Which tasks are obsolete/deferred?
+6. Are there production-impacting tasks in Wave-1?
+7. What authorization boundaries are required for Wave-1 execution?
+8. Should Wave-1 run in one execution wave or sub-waves?
+9. For each task: Do / Don't / Evidence / Exit Criteria?
+
+## Governance Flow
+```
+Wave-0 CLOSED
+    ↓
+Wave-1 UNLOCKED
+    ↓
+READ-ONLY WAVE-1 GATE REVIEW
+    ↓
+Orchestrator Execution Plan
+    ↓
+Explicit task authorization
+    ↓
+Execution
+```
+
+---
+Task ID: WAVE1-2
+Agent: Explore (research, READ-ONLY)
+Task: Wave-1 code-level current-state assessment (P0-17 idempotency, P0-25 concurrency, P0-26 DR)
+
+Work Log:
+- Read worklog.md Tasks 55–63 + WAVE0-GOV-1 to absorb Wave-0 history (staging deploy, rollback drill, P0-14 CSRF remediation, Wave-0 closure declaration, Wave-1 gate review commencement).
+- Read P0_DEPENDENCY_GRAPH.md (Artifact 2 — 28 P0 nodes, 5 edge types, DAG confirmed; critical path `P0-15 → P0-25 → P0-24 → P0-01 → P0-02 → P0-04 → P0-06 → P0-07`, 7 edges).
+- Read CRITICAL_PATH.md §2–3 (single critical path mechanically verified; P0-17/P0-25/P0-26 all in Wave-1 per IMPLEMENTATION_ORDER.md §3.1 row 1).
+- Read PRODUCTION_READINESS_MATRIX.md §7.1 + §14.1 + P0-17/25/26 detailed breakdowns (lines 447–540).
+- Read IMPLEMENTATION_ORDER.md §3 Wave-1 plan: 6 P0s (P0-25 Tier 2 HIGH, P0-17 Tier 4, P0-26 Tier 3 MEDIUM, P0-28 Tier 3, P0-10 Tier 4, P0-11 Tier 4); within-wave priority = P0-25 first.
+- Read WAVE0_GATE_REVIEW.md §3.2 P0 inventory (lines 60–82) confirming P0-17/24/25/26 all = 🔴 NOT STARTED / LOCKED.
+- Searched src/ for `idempot|Idempot|IDEMPOT` → **0 matches**.
+- Searched src/ for `idempotencyKey|idempotency_key|Idempotency-Key|x-idempotency` → **0 matches** in source code (matches only in docs: PRODUCTION_READINESS_MATRIX.md, P0_TRACEABILITY_MAP.md, P0_DEPENDENCY_GRAPH.md).
+- Read all files in src/lib/ (24 files: supabase-admin, deployment, backup, audit, validation, csrf-client, firebase, rate-limit, session, supabase, db, realtime, snack, logger, alerting, types, utils, firebase-admin, password, errors, killswitch, csrf, otp-service, cart-store). **No idempotency library file exists.**
+- Read prisma/schema.prisma — confirmed 8 models (User, OtpRequest, Session, Restaurant, MenuItem, Order, OrderItem, AuditLog, KillSwitch). **NO idempotencyKey field on any model. NO Payment model exists. NO Refund model exists. NO Ledger model exists. NO Outbox model exists. NO Fulfilment model exists.** The entire payment subsystem (P0-01..P0-07) is Wave-2+ work not yet started.
+- Read src/lib/validation.ts — confirmed `createOrderBodySchema` (line 58–69), `statusUpdateBodySchema` (line 98–101), `menuAvailabilityBodySchema` (line 104–106), `killSwitchToggleBodySchema` (line 109–111). **NONE of these schemas accept an idempotencyKey field.**
+- Read all 4 critical-write API routes:
+  - src/app/api/orders/route.ts:62–160 (POST /api/orders) — no idempotency key handling.
+  - src/app/api/orders/[id]/status/route.ts:10–78 (PATCH) — no idempotency key handling.
+  - src/app/api/kill-switches/[key]/route.ts:8–35 (PATCH) — no idempotency key handling.
+  - src/app/api/menu/[id]/route.ts:7–33 (PATCH) — no idempotency key handling.
+  - src/app/api/backup/route.ts:14–45 (POST) — no idempotency key handling.
+  - src/app/api/auth/otp/send/route.ts:6–18 (POST) — no idempotency key handling (relevant: OTP send can be retried; no dedup).
+  - src/app/api/auth/otp/verify/route.ts:8–52 (POST) — no idempotency key handling (relevant: OTP verify double-submit creates duplicate sessions).
+- Confirmed: NO /api/payments/ route exists (LS of src/app/api/ shows 22 route files; no `payments/` directory).
+- Searched src/ for `$transaction|$executeRaw|$queryRaw|optimistic|version|FOR UPDATE` → only 2 hits, both `SELECT 1` (health + alerts/evaluate, portable); 1 hit at src/lib/deployment.ts:39 (FEATURE_FLAGS.concurrencyControl, OFF by default, NEVER imported anywhere).
+- Searched src/ for `lock|Lock|FOR UPDATE|atomic|transaction` (case-insensitive broad scan) → all matches are either UI "block" CSS classes, hardcoded feature-flag descriptions, or unrelated text. **No DB transaction, no row locks, no optimistic-lock version field, no atomic decrement.**
+- Read src/lib/db.ts (13 lines) — confirmed: simple PrismaClient singleton, no transaction helper, no `$transaction` wrapper, no concurrency-control helper exported.
+- Read src/lib/snack.ts — confirmed: `NEXT_STATUS` state-machine map (line 14–21). Pure data, no concurrency guard.
+- Read src/lib/audit.ts — confirmed: `audit()` helper (line 30–60) does NOT wrap its read-prevHash-then-write-new-entry in a `$transaction` — concurrent `audit()` calls could both read the same prevHash and create a forked hash chain (a P0-25 case B concurrency hazard for the audit subsystem).
+- Searched src/ for `isFeatureEnabled|FEATURE_FLAGS` — **0 references outside deployment.ts itself**. The 5 feature flags (realPayments, pickupAttributionEnforcement, drDrillMode, outboxPublisher, concurrencyControl) are documentation-as-code only; no runtime consumer.
+- Read src/app/api/orders/route.ts:94–126 — POST /api/orders does NOT use `db.$transaction`. Order creation (order.create + auditLog.create) happens as TWO separate writes; if the second fails, the order exists without an audit log. No row-level lock on MenuItem; no atomic availability check (MenuItem.isAvailable is read implicitly via the create flow but never explicitly verified or locked). P0-25 Case A (inventory race) is **not addressed**.
+- Read src/app/api/orders/[id]/status/route.ts:17–46 — PATCH status does NOT use `db.$transaction`. Reads order, validates transition against `NEXT_STATUS`, writes new status. No version field check. No `WHERE status = <original>` clause in the UPDATE. P0-25 Case B (state-transition race) is **not addressed** — two concurrent PATCH calls could both validate against the old status and both succeed (last-writer-wins).
+- Searched src/ for `payment|Payment` → matches only in middleware.ts classifyPath (line 57: `pathname.startsWith('/api/payments')`), in rate-limit.ts:56 (config key), in killswitch.ts:14 (defaults), in alerting.ts:26–40 (alert rules), in deployment.ts:26 (feature flag). **NO actual Payment model, route, or business logic.** P0-25 Case C (payment duplicate) has no surface to dedupe against.
+- Searched src/ for `drill|disaster|recovery|restore|RPO|RTO` → matches only in alerting.ts:66–74 (a `dr-drill-failed` ALERT RULE — not a drill implementation), in deployment.ts:32–33 (FEATURE_FLAGS.drDrillMode, OFF, never imported), in alert-evaluator mini-service (hardcoded `dr_drill_pass=1` at line 148 — always passes), in api/alerts/evaluate/route.ts:68 (hardcoded `dr_drill_pass=1`), and in audit-integrity-test route (cleanup-restore-test semantics, unrelated).
+- LS scripts/ → only smoke-test.sh. NO restore scripts.
+- LS .github/workflows/ → 12 workflows (dev-001-*, ci.yml, deploy.yml, rollback.yml, staging-rollback-drill.yml, etc). **NO dr-drill.yml or restore workflow.** staging-rollback-drill.yml is for P0-27 (deployment rollback), NOT P0-26 (DR).
+- Read docs/BACKUP_REPLACEMENT_PLAN.md §3.6 (351 lines) — DR restore runbook is **documented as pseudocode in a planning doc**; not implemented. `pg_dump` rewrite + Supabase Storage target deferred to Phase 3.
+- Read prisma/scripts/ → 6 files (postgres-migration.sql, seed-postgres.sql, create-roles.sql, tamper-test-function.sql, revoke-worm.sql, tamper-test.sh). **NONE is a DR restore script.** tamper-test.sh is for DEV-001/P0-22 WORM boundary verification, not DR restore.
+- Confirmed: NO post-restore business-state reconciliation code anywhere. No gateway-payment re-sync logic. No "captured-but-DB-pending" detection.
+- Read IMPLEMENTATION_ORDER.md §3.1 + §4 — confirmed Wave-1 contains 6 P0s (P0-25, P0-17, P0-26, P0-28, P0-10, P0-11). Within-wave priority: P0-25 (Tier 2, on critical path) first.
+- Read P0_DEPENDENCY_GRAPH.md §3 + §4 — confirmed dependencies:
+  - P0-17 --B[blocking]--> P0-15 (idempotency-key store schema; needs migration)
+  - P0-25 --B[blocking]--> P0-15 (version fields; needs migration)
+  - P0-26 --B[blocking]--> P0-16 (DR restores from backup; backup is P0-16 root)
+  - P0-24 --B[blocking]--> P0-25 AND P0-15 (P0-24 is Wave-2, depends on Wave-1's P0-25)
+  - P0-08 --B[blocking]--> P0-24 AND P0-25 (P0-08 is Wave-3)
+- Verified READ-ONLY compliance: no files modified, no deployments, no migrations, no production touched.
+
+Stage Summary:
+
+# Wave-1 Code-Level Current-State Assessment
+
+**Scope:** P0-17 (Idempotency on critical writes), P0-25 (Concurrency + duplicate-execution control — Cases A/B/C), P0-26 (Disaster recovery). READ-ONLY evidence extraction at FILE:LINE precision.
+
+**Verdict (top-line):**
+- 🔴 **P0-17**: ZERO idempotency infrastructure. No idempotency library, no schema field, no API route accepts/rejects idempotency keys, no Payment surface yet (so no payment-dedup surface yet).
+- 🔴 **P0-25 Case A (inventory race)**: ZERO concurrency control. No `version` field on MenuItem, no transaction, no row lock on order-create.
+- 🔴 **P0-25 Case B (state-transition race)**: ZERO concurrency control. No `version` field on Order, no transaction, no conditional UPDATE; last-writer-wins.
+- 🔴 **P0-25 Case C (payment duplicate)**: ZERO concurrency control AND ZERO payment surface — no `/api/payments/` route, no Payment model, no Razorpay integration. Case C cannot be tested until P0-01 (Wave-3) lands.
+- 🔴 **P0-26 (DR)**: ZERO DR infrastructure. No restore script, no DR drill workflow, no post-restore reconciliation, no `dr-drill-mode` flag wired (feature flag exists but is dead code). Only artifact: a planning doc (docs/BACKUP_REPLACEMENT_PLAN.md §3.6 pseudocode + §5.6 7-step restore runbook) and a hardcoded `dr_drill_pass=1` in alert rules (always passes, never actually drills).
+
+---
+
+## P0-17 — Idempotency on Critical Writes (CODE-LEVEL)
+
+### What exists
+
+| Artifact | File:Line | Status |
+|----------|-----------|--------|
+| Idempotency library (e.g., `src/lib/idempotency.ts`) | — | ❌ DOES NOT EXIST |
+| Idempotency-key store schema field | — | ❌ NONE on any model in `prisma/schema.prisma` |
+| Idempotency-Key HTTP header handling | — | ❌ ZERO references to `idempotency-key` or `x-idempotency-key` in src/ |
+| Zod schema accepting `idempotencyKey` | `src/lib/validation.ts:58–111` | ❌ NONE of `createOrderBodySchema`, `statusUpdateBodySchema`, `menuAvailabilityBodySchema`, `killSwitchToggleBodySchema`, `otpSendBodySchema`, `otpVerifyBodySchema` accepts an idempotency key |
+| Critical-write API routes accepting idempotency key | `src/app/api/orders/route.ts:62`, `src/app/api/orders/[id]/status/route.ts:10`, `src/app/api/kill-switches/[key]/route.ts:8`, `src/app/api/menu/[id]/route.ts:7`, `src/app/api/backup/route.ts:14`, `src/app/api/auth/otp/send/route.ts:6`, `src/app/api/auth/otp/verify/route.ts:8` | ❌ ZERO of 7 critical-write routes accept/reject an idempotency key |
+| Idempotency mention in src/ | — | ❌ ZERO matches for `idempot` (case-insensitive) in src/ |
+
+### What is missing (gap)
+
+1. **No idempotency-key store** — neither DB-backed (no `IdempotencyKey` model in `prisma/schema.prisma`) nor Redis-backed (no Redis client in `src/lib/`). P0_DEPENDENCY_GRAPH.md §3 line 105 specifies "Idempotency-key store | DB or Redis" as the technical dependency — UNFULFILLED.
+2. **No idempotency library** — no `src/lib/idempotency.ts`. The 5 Control/Enabler libraries defined in Wave-0 (rate-limit, csrf, backup, alerting, deployment) all exist; P0-17 has NO library file at all.
+3. **No schema migration** — adding an `IdempotencyKey` model requires a new Prisma migration. P0-17 depends on P0-15 (migrations) per P0_DEPENDENCY_GRAPH.md §4.3 line 188: "P0-17 --B[blocking]--> P0-15 (Idempotency store needs schema)". P0-15 is closed (Wave-0), so the schema path is open — but no migration has been authored.
+4. **No API contract change** — none of the 7 critical-write routes accept `Idempotency-Key` header or body field. Frontend `csrfFetch()` helper (`src/lib/csrf-client.ts`) doesn't inject one either.
+5. **No Payment surface** — `src/app/api/payments/` does not exist. P0-17 acceptance criteria (per matrix §7.1 line 226: "Idempotency key on orders, payments, refunds, status updates") cannot be fully satisfied until P0-01 (Wave-3) creates the payment surface. P0-17 IS implementable for orders, status updates, kill-switches, menu, backup, OTP — but NOT for payments/refunds yet.
+
+### Blast radius if implemented wrong
+
+- **HIGH** — adding the `IdempotencyKey` model + indexing requires a Prisma migration (Class-2 expand-migrate-contract per `src/lib/deployment.ts:76`).
+- If the key-store uses the SAME database as the business write, both must commit in the same transaction (P0-24 dependency — out of Wave-1 scope, so P0-17 will likely use a separate transaction or a "check-then-write" pattern with known race window).
+- If the key-store uses Redis, a new infra dependency is introduced (P0-13 also wants Redis for distributed rate-limiting; P0-11 for OTP). Three P0s competing for Redis could share one cluster — co-provisioning opportunity.
+
+---
+
+## P0-25 — Concurrency + Duplicate-Execution Control (CODE-LEVEL, Cases A/B/C)
+
+### What exists
+
+| Artifact | File:Line | Status |
+|----------|-----------|--------|
+| Feature flag `concurrencyControl` | `src/lib/deployment.ts:39` | ⚠️ Defined but **NEVER imported/consumed** anywhere (grep `isFeatureEnabled\|FEATURE_FLAGS` in src/ returns 0 references outside deployment.ts). Dead code. |
+| `version` field on `Order` model | `prisma/schema.prisma:103–120` | ❌ ABSENT — Order has `id, userId, restaurantId, status, totalAmount, pickupOtp, isCatering, headcount, itemsCount, note, createdAt, updatedAt, orderItems, statusHistory`. No `version Int @default(0)`. |
+| `version` field on `MenuItem` model | `prisma/schema.prisma:84–98` | ❌ ABSENT — MenuItem has `id, restaurantId, name, description, price, image, spiceLevel, isVeg, isAvailable, category, createdAt, orderItems`. No `version` field. |
+| `version` field on `KillSwitch` model | `prisma/schema.prisma:153–161` | ❌ ABSENT. |
+| DB transaction helper | `src/lib/db.ts` (13 lines) | ❌ ABSENT — only `PrismaClient` singleton; no `withTransaction()` wrapper; no exported `$transaction` helper. |
+| Row-level locks (`SELECT … FOR UPDATE`) | — | ❌ ZERO matches in src/ (only `$queryRaw\`SELECT 1\`` at `src/app/api/health/route.ts:20` and `src/app/api/alerts/evaluate/route.ts:21`). |
+| Atomic decrement pattern | — | ❌ ZERO matches in src/ (`atomic` returns 0 hits in src/). |
+| Conditional UPDATE (`WHERE status = X`) | — | ❌ `src/app/api/orders/[id]/status/route.ts:42–46` does `db.order.update({ where: { id }, data: {...} })` — no `where: { id, status: <original> }` guard. Last-writer-wins. |
+| Payment model / route | — | ❌ ABSENT — no `prisma/schema.prisma` Payment model; no `src/app/api/payments/` directory. (P0-25 Case C is not even theoretically exercisable yet.) |
+
+### Per-case analysis
+
+#### Case A — Inventory / availability race
+
+**Matrix §P0-25 line 520:** "Two users checkout the last available item simultaneously. Both pass cart validation, but the order-create transaction holds a row-level lock and decrements atomically. One wins; the other's transaction sees zero availability and returns 409."
+
+**Code reality (`src/app/api/orders/route.ts:62–160`):**
+- Line 84–87: `restaurant.findUnique` — no lock on restaurant.
+- Line 89: `body.items.reduce` — computes total from the request body's items array (NOT from DB lookup of current MenuItem.price). No validation that the menu item is still available.
+- Line 94–117: `db.order.create({ data: {...}, include: { orderItems: { create: body.items.map(...) } } })` — single Prisma write. No `$transaction`. No row-level lock on MenuItem. No atomic availability check.
+- Line 119–126: `db.auditLog.create` — separate write, NOT in same transaction as order.create. If order.create succeeds but auditLog.create fails, order exists without audit entry (P0-22 integrity gap, also a P0-25 atomicity gap).
+
+**Gap (Case A):** 100% missing. No transaction, no row lock, no atomic availability decrement. MenuItem.isAvailable is a boolean (line 94 of schema) — NOT a count. Even if P0-25 Case A were attempted, the schema doesn't model "remaining quantity" — only "is it on/off". The matrix's "last available item" scenario assumes a count field that **does not exist in the current schema**. Implementing Case A therefore requires BOTH a schema change (add `availableCount` to MenuItem) AND concurrency-control logic.
+
+#### Case B — State-transition race
+
+**Matrix §P0-25 line 521:** "Vendor sends `ACCEPT → CANCEL` while admin sends `CANCEL → OVERRIDE`. Optimistic locking (version field) rejects the loser with a 409 + retry guidance."
+
+**Code reality (`src/app/api/orders/[id]/status/route.ts:10–78`):**
+- Line 17: `db.order.findUnique` — read order (no lock).
+- Line 20–21: `const allowed = NEXT_STATUS[order.status]; if (desired !== 'CANCELLED' && desired !== allowed) return 409` — state-machine validation against the read snapshot.
+- Line 42–46: `db.order.update({ where: { id }, data: {...} })` — NO `status: order.status` in the WHERE clause. No version check.
+
+**Race scenario:** Two concurrent PATCH calls (vendor ACCEPT→PREPARING + admin CANCEL) both read order.status='CONFIRMED' at line 17. Both validate against 'CONFIRMED' (PREPARING is the allowed next; CANCELLED is always allowed). Both call `db.order.update`. Prisma/Postgres resolves by last-writer-wins; the order ends in either PREPARING or CANCELLED depending on commit order — but `statusHistory` (line 39–40) will contain BOTH transitions appended in arbitrary order, producing a history like `[{CONFIRMED}, {PREPARING}, {CANCELLED}]` even though the final `status` field is whatever the last writer set. This is silent corruption of the state machine.
+
+**Gap (Case B):** 100% missing. No `version` field, no conditional UPDATE, no transaction. Schema change required (add `version Int @default(0)` to Order). API change required (return 409 on version mismatch + retry guidance).
+
+#### Case C — Payment duplicate execution
+
+**Matrix §P0-25 line 522:** "User double-clicks Pay, or frontend retries. Idempotency key on the payment-create request dedupes; the second request returns the same Payment row, no second capture."
+
+**Code reality:**
+- No Payment model in `prisma/schema.prisma`. No `/api/payments/` route in `src/app/api/`. No Razorpay SDK in package.json (verified — `package.json` deps: next, react, prisma, @prisma/client, zod, socket.io, socket.io-client, supabase-js, jose, firebase-admin, firebase; no razorpay).
+- Feature flag `realPayments` (`src/lib/deployment.ts:27`) defaults OFF and is never imported.
+
+**Gap (Case C):** Cannot be implemented until P0-01 (Wave-3) lands the Payment model + Razorpay integration. P0-17 idempotency infrastructure (Case C's technical mechanism) is the prerequisite — Case C is functionally P0-01 + P0-17 combined. From a Wave-1 perspective: **no Wave-1 action can fully close Case C** — only the idempotency-key infrastructure (P0-17) can be prepared in Wave-1, leaving the actual payment dedup to Wave-3.
+
+### Blast radius if implemented wrong
+
+- **CRITICAL** — adding `version` field to Order requires a Prisma migration (Class-2). Updating the PATCH route to reject on version mismatch will cause all in-flight vendor/admin UI calls to start returning 409 until the frontend is updated to handle retries (frontend `src/components/snak/vendor-view.tsx` and `admin-view.tsx` need optimistic-lock retry logic — currently neither has any retry handling).
+- Adding `availableCount` to MenuItem requires schema change + admin UI to manage inventory counts.
+- Once P0-25 is implemented, the existing order-create flow (`src/app/api/orders/route.ts:94–126`) MUST be wrapped in `db.$transaction([order.create, auditLog.create])` or risk partial commits (the current 2-write sequence is already a P0-24/P0-22 hazard).
+
+---
+
+## P0-26 — Disaster Recovery (CODE-LEVEL)
+
+### What exists
+
+| Artifact | File:Line | Status |
+|----------|-----------|--------|
+| Feature flag `drDrillMode` | `src/lib/deployment.ts:33` | ⚠️ Defined but **NEVER imported/consumed** anywhere. Dead code. |
+| DR drill alert rule | `src/lib/alerting.ts:66–74` | ⚠️ Rule exists (`dr-drill-failed`, metric `dr_drill_pass`, threshold=1, comparison='lt'). But: |
+| Alert evaluator hardcodes `dr_drill_pass=1` | `src/app/api/alerts/evaluate/route.ts:68` + `mini-services/alert-evaluator/index.ts:148` | ⚠️ Hardcoded to "passing" — comment says "no drill run yet, but not failed". The alert will NEVER fire because the metric is faked to passing. No actual drill execution. |
+| DR restore script | — | ❌ ABSENT — `scripts/` contains only `smoke-test.sh`. `prisma/scripts/` contains 6 SQL/bash files (postgres-migration, seed-postgres, create-roles, tamper-test-function, revoke-worm, tamper-test.sh) — NONE is a DR restore script. (tamper-test.sh is for P0-22 WORM boundary verification.) |
+| DR drill GitHub workflow | — | ❌ ABSENT — `.github/workflows/` has 12 workflows; ZERO matches for `dr-drill|disaster|restore-drill|P0-26`. `staging-rollback-drill.yml` is for P0-27 (deployment rollback), NOT P0-26 (DR). |
+| DR runbook | `docs/BACKUP_REPLACEMENT_PLAN.md` §3.6 (lines 227–263) + §5.6 (lines 320–323) | ⚠️ Pseudocode/plan only — NOT implemented. Documents a 7-step restore: provision fresh Supabase → apply migration → apply roles + revoke-worm → download backup object → `pg_restore --jobs=4 --clean --if-exists` → verify counts + tamper-test → switch DATABASE_URL + redeploy. Estimated RTO <30 min. |
+| Post-restore business-state reconciliation | — | ❌ ABSENT — ZERO code in src/ for fetching gateway transaction list since backup point, re-syncing captured-but-DB-pending payments, or refunding orders absent from restored DB. The matrix's critical v1.2 addition (line 534): "Restore leaves money state inconsistent" is unaddressed at the implementation level. |
+| Money-state reconciliation alert | `src/lib/alerting.ts:35–44` (`reconciliation-mismatch` rule) | ⚠️ Rule exists but `src/app/api/alerts/evaluate/route.ts:44` hardcodes the metric to `0` (no mismatch) with comment "P0-03 not yet implemented". No actual reconciliation logic. |
+| Backup library (P0-26's prerequisite) | `src/lib/backup.ts` (90 lines) | ⚠️ Exists but SQLite-only — hardcodes `DB_PATH = join(cwd, 'db', 'custom.db')` (line 14). PostgreSQL replacement (`pg_dump` → Supabase Storage) is a Phase 3 follow-up per `docs/BACKUP_REPLACEMENT_PLAN.md`. On Vercel serverless, `db/custom.db` does not exist, so `POST /api/backup` returns 500. P0-16 (Wave-0) was accepted as PARTIAL for Wave-0 — but P0-26's restore drill CANNOT run until P0-16's pg_dump rewrite lands. |
+| RPO ≤ 24h / RTO ≤ 4h enforcement | — | ❌ ABSENT — no code or config enforces these. The runbook estimates RTO <30 min (better than 4h budget) but only on the assumption of a "warm standby" Supabase project — which is NOT provisioned (current Supabase project `zmzqqcyapcezmaqvuzzd` is shared staging+prod per `docs/STAGING_ARCHITECTURE.md`). |
+
+### What is missing (gap)
+
+1. **No actual DR drill has ever been executed.** The `dr_drill_pass=1` hardcode at `src/app/api/alerts/evaluate/route.ts:68` and `mini-services/alert-evaluator/index.ts:148` is a placeholder.
+2. **No DR restore script.** The 7-step runbook is documentation; nothing automates `pg_restore --jobs=4 --clean --if-exists`.
+3. **No DR drill workflow.** No `workflow_dispatch` GitHub Action to trigger a periodic (monthly per matrix §7.1 line 529) restore drill.
+4. **No post-restore reconciliation.** The matrix §7.1 line 534 v1.2 addition (the most critical DR requirement): "Restore leaves money state inconsistent" — completely unaddressed. There is no Razorpay SDK, no Payment model, no gateway-fetch logic. Until P0-01 lands (Wave-3), the post-restore reconciliation is technically unimplementable — but P0-26 cannot reach Production-ready without it.
+5. **No backup-target provisioning.** Supabase Storage bucket `snakzap-backups` does NOT exist; AWS S3 bucket not provisioned. `vercel.json:45` `crons: []` — no Vercel Cron configured for daily backup.
+6. **No "warm standby" Supabase project.** `docs/STAGING_ARCHITECTURE.md` documents Phase-2 decision: shared staging+prod on `zmzqqcyapcezmaqvuzzd`. The DR runbook assumes a fresh project can be provisioned — current Supabase project is single-region; no replica.
+7. **No DR mode in health endpoint.** `src/app/api/health/route.ts` (61 lines) has no "dr-drill-mode" status indicator. The `drDrillMode` feature flag is never read by health.
+
+### Blast radius if implemented wrong
+
+- **CRITICAL** — the matrix §14.1 launch-gate condition 4 (line 814): "DR drill passed (including post-restore business-state reconciliation)". P0-26 cannot be closed without an actual drill passing. If the drill is performed against a stale or partial backup, money-state reconciliation will surface mismatches that may be hard to triage.
+- **Cascading** — P0-26 depends on P0-16 (backup), which is currently PARTIAL (Wave-0). Until P0-16's `pg_dump` rewrite is done, no DR drill can even start.
+- **NO-GO condition** (matrix line 538): "NO-GO if any money state unresolved post-restore." Without a Payment model + Razorpay integration, money-state reconciliation cannot be performed — so P0-26 cannot reach Production-ready until P0-01 (Wave-3) is also done.
+
+---
+
+## Cross-cutting: Wave-1 dependency graph (P0-17 / P0-25 / P0-26)
+
+Per `P0_DEPENDENCY_GRAPH.md` §3 + §4 + `IMPLEMENTATION_ORDER.md` §3.1:
+
+```
+P0-15 (migrations, Wave-0 ✅ CLOSED)
+  ├── B[blocking]──> P0-17 (idempotency, Wave-1)
+  └── B[blocking]──> P0-25 (concurrency, Wave-1)
+                       └── B[blocking]──> P0-24 (transactional, Wave-2)
+                                            ├── B[blocking]──> P0-01 (capture, Wave-3) ── B[blocking] ──> P0-17
+                                            └── B[blocking]──> P0-08 (order idempotency, Wave-3)
+
+P0-16 (backup, Wave-0 🟡 PARTIAL — SQLite-only)
+  └── B[blocking]──> P0-26 (DR, Wave-1)
+                       └── (downstream)──> §14.1 launch-gate condition 4 (DR drill passed)
+```
+
+### Direct dependencies among Wave-1 P0s
+
+| From | To | Type | Edge metadata | Code-level consequence |
+|------|-----|------|----------------|------------------------|
+| P0-17 | P0-15 | B-blocking | Idempotency store needs schema migration | P0-15 is CLOSED — schema path is open. P0-17 can start. |
+| P0-25 | P0-15 | B-blocking | Version fields need schema migration | Same — open. |
+| P0-26 | P0-16 | B-blocking | DR restores from backup | P0-16 is PARTIAL (SQLite-only, no scheduler running). P0-26 is **gated on P0-16's pg_dump rewrite** which is Phase 3. |
+
+### Shared prerequisites (cross-P0 infrastructure)
+
+| Shared infra | P0s that need it (Wave-1) | Current state | Action |
+|--------------|---------------------------|---------------|--------|
+| Prisma migration (schema change) | P0-17 (IdempotencyKey model), P0-25 (version field on Order + MenuItem) | ✅ Migration framework exists (P0-15 closed). Migrations folder `prisma/migrations/` has 2 migrations. | Each Wave-1 P0 will author its own migration; coordinate to avoid migration-order conflicts. |
+| `db.$transaction` helper | P0-17 (key-store + business write in same txn), P0-25 (atomic check-then-write) | ❌ No transaction helper in `src/lib/db.ts`. | **HIGH-PRIORITY shared prerequisite.** Both P0-17 and P0-25 will need a `withTransaction()` wrapper. Author this FIRST as a shared utility. |
+| Redis (optional) | P0-17 (idempotency cache, matrix §3 line 120 lists "Redis: P0-11, 13, 17"), P0-25 (could use distributed locks) | ❌ No Redis client in src/. P0-13 (rate-limit) currently uses in-memory Map (per Edge instance). | If Redis is introduced, it can serve P0-13 + P0-17 + P0-11 (OTP) — co-provisioning opportunity. Until then, P0-17 must use DB-backed idempotency-key store. |
+| Payment model | P0-25 Case C (payment duplicate), P0-26 (post-restore money-state reconciliation) | ❌ ABSENT — no Payment model, no /api/payments/ route, no Razorpay SDK. | **Wave-3 dependency.** P0-25 Case C + P0-26 reconciliation are not fully closeable in Wave-1. |
+
+### Indirect dependencies through P0-24 / P0-01
+
+- P0-24 (Wave-2) needs BOTH P0-15 (Wave-0, closed) AND P0-25 (Wave-1, locked). Once P0-25 lands, P0-24's path opens. P0-24 in turn uses idempotency keys (matrix §7.1 line 509: "idempotency key on consumer side ensures no double-application"). So **P0-17 is a soft prerequisite for P0-24's consumer-side idempotency** — but P0-17 only needs the IdempotencyKey model + helper to exist; P0-24 wires it into the outbox consumer.
+- P0-01 (Wave-3) needs P0-09 (Wave-0, closed), P0-17 (Wave-1), P0-24 (Wave-2), P0-23 (Wave-0, closed). It is the most convergence-heavy node (IMPLEMENTATION_ORDER.md §3.3 line 125). P0-17 must be `Dependency-ready` before P0-01 starts.
+
+---
+
+## Cross-cutting: Wave-1 → production impact
+
+For each Wave-1 P0 item:
+
+| P0 | Requires DB schema change? | New env vars? | New infra? | Blast radius if wrong |
+|----|---------------------------|---------------|------------|-----------------------|
+| **P0-17** | ✅ YES — add `IdempotencyKey` model (id, key, resourceType, resourceId, createdAt, expiresAt, responsePayload) with `@unique` on key. Migration is Class-2 (expand-migrate-contract). | Optional — `IDEMPOTENCY_KEY_TTL_HOURS` (default 24h). If Redis chosen: `REDIS_URL`. | Optional — Redis if distributed; DB-only is acceptable for Phase 2 staging. | HIGH — if idempotency check + business write are NOT in the same transaction, a crash between them creates a "phantom block" (key consumed but write failed) → user cannot retry. |
+| **P0-25 Case A** | ✅ YES — add `availableCount Int @default(0)` to MenuItem (currently only `isAvailable Boolean`). Add `version Int @default(0)` to MenuItem. | None. | None (Postgres native row locks via `$transaction`). | CRITICAL — last-item race is a money/trust hazard. Wrong locking = either oversell (vendor can't fulfil → refund + trust loss) or false 409 (lost sale). |
+| **P0-25 Case B** | ✅ YES — add `version Int @default(0)` to Order + KillSwitch. | None. | None. | CRITICAL — last-writer-wins on state transitions creates silent state-machine corruption. statusHistory array (line 119 of schema) will accumulate conflicting transitions. Frontend must learn to retry on 409 (vendor-view.tsx + admin-view.tsx currently have no retry). |
+| **P0-25 Case C** | ✅ YES — needs Payment model (out of Wave-1 scope; Wave-3). | Razorpay env vars (out of Wave-1). | Razorpay SDK (out of Wave-1). | N/A in Wave-1 — but P0-17 idempotency infrastructure must be in place so P0-01 (Wave-3) can wire it in. |
+| **P0-26** | Optional — could add a `DrDrillResult` model to record monthly drill outcomes. The matrix §14.1 condition 4 requires a "restore-drill report" — this would be the storage for it. | ✅ YES — 8 env vars per `docs/BACKUP_REPLACEMENT_PLAN.md` §4 (BACKUP_STORAGE_PROVIDER, BACKUP_SUPABASE_BUCKET, BACKUP_S3_BUCKET/REGION/ACCESS_KEY_ID/SECRET_ACCESS_KEY, BACKUP_RETENTION_DAYS, BACKUP_AUDIT_ROLE_DATABASE_URL). | ✅ YES — Supabase Storage bucket OR AWS S3 bucket; warm-standby Supabase project; monthly GitHub Actions workflow_dispatch. | CRITICAL — drill against stale/partial backup = NO-GO. Post-restore reconciliation cannot be implemented until P0-01 (Wave-3) lands Payment model + Razorpay SDK. So **P0-26 cannot reach Production-ready in Wave-1 alone** — needs Wave-3. |
+
+---
+
+## Constraint Compliance Verification
+
+| Constraint | Status |
+|-----------|--------|
+| READ-ONLY Wave-1 Gate Review (no code changes) | ✅ No files modified (only worklog.md append, which is the task's required output) |
+| No deployments | ✅ |
+| No migrations | ✅ |
+| No production modifications | ✅ |
+| No Wave-1 unlock declaration (this is an evidence report, not a Wave-1 closure) | ✅ |
+| No DEV-001 / P0-22 file changes | ✅ |
+| No governance file changes | ✅ |
+
+---
+
+## Recommendation to Orchestrator (informational, not a closure decision)
+
+1. **P0-25 Case A + B should be sequenced FIRST within Wave-1** (per IMPLEMENTATION_ORDER.md §3.1 within-wave priority: "P0-25 Tier 2 HIGH gets earliest attention"). Both require schema changes — coordinate so a single migration adds `version` to Order + KillSwitch (Case B) and `availableCount` + `version` to MenuItem (Case A).
+2. **P0-17 should be authored in parallel with P0-25** (Tier 4, parallelizable per IMPLEMENTATION_ORDER.md §2.2). Both depend only on P0-15 (closed). P0-17 needs its own migration to add the `IdempotencyKey` model — coordinate migration order with P0-25's migration.
+3. **Shared `withTransaction()` helper in `src/lib/db.ts` is a HIGH-PRIORITY shared prerequisite** — both P0-17 (key-store + business write in same txn) and P0-25 (atomic check-then-write) will need it. Author this first as a foundational utility before either P0 lands.
+4. **P0-25 Case C and P0-26 post-restore reconciliation are NOT fully closeable in Wave-1** — they require Payment model + Razorpay SDK (Wave-3, P0-01). P0-17 idempotency infrastructure CAN be prepared in Wave-1 (so P0-01 has something to wire into), but full Case C verification + post-restore money-state reconciliation must wait for Wave-3.
+5. **P0-26 DR drill execution requires P0-16's pg_dump rewrite** (currently a Phase 3 deferral per `docs/BACKUP_REPLACEMENT_PLAN.md` §5.2). P0-26 is therefore **gated on a Phase 3 dependency** — even though it's nominally a Wave-1 P0, the DR drill cannot run until P0-16 lands pg_dump. The Orchestrator may need to either (a) bring P0-16's pg_dump rewrite forward into Wave-1, or (b) split P0-26 into "design + runbook" (Wave-1 closeable) vs "drill execution + reconciliation" (Phase 3 / post-P0-01).
+
+**STOP. This is a READ-ONLY evidence report. Awaiting Orchestrator decision on Wave-1 execution plan + authorization boundaries.**
+
+
+---
+Task ID: WAVE1-1
+Agent: Explore (research, READ-ONLY)
+Task: Wave-1 scope inventory — P0/P1 items, dependencies, acceptance criteria, current state
+
+Work Log:
+- Read worklog.md in full (2716 lines); focused on Tasks 55–63 (Wave-0 closure + Wave-1 unlock) — specifically Task 59 (Wave-0 Gate Review Report, line 2668+), Task 60 (Wave-0 Governance Decision Memo), Task 61 (P0-14 CSRF remediation), Task 62 (governance acknowledgment), Task 63 (Wave-0 Closure Declared + Wave-1 Gate Review Commenced, line 2668–2716).
+- Read in full: PRODUCTION_READINESS_MATRIX.md v1.4 (1024 lines) — §3 Priority Definitions (lines 64–90), §7.1 P0 rows (lines 196–237), §7.2 P1 rows (lines 239–265), §8 detailed breakdowns (lines 291–570, esp. P0-10 line 391, P0-11 line 399, P0-17 line 447, P0-25 line 516, P0-26 line 527, P0-28 line 558), §9 Invariants I-01..I-14 (lines 604–626), §11 Capability Lifecycle (lines 660–707), §13 Decision Log (lines 745–775, esp. Q7/Q12/Q15/Q16/Q18), §14.1 Launch Gate 7 AND-conditions (lines 805–821), §18.2 Capability→Invariant coverage (lines 926–947).
+- Read in full: P0_DEPENDENCY_GRAPH.md (407 lines) — §1 edge types (lines 25–43), §2 node catalog (lines 46–79), §3 T-edges (lines 83–124), §4 B-edges incl. §4.3 full table (lines 128–202), §5 F-nodes (lines 206–221), §6 P-edges (lines 225–246), §8 graph integrity + roots/leaves (lines 280–336).
+- Read in full: SPRINT_PLAN.md (415 lines) — §1.2 capacity model (lines 32–51), §2 Wave-to-Sprint mapping Sprint 1 + Sprint 2 (lines 95–131, esp. Sprint 2 = Wave 1 table lines 121–129 + Sprint 2 exit criteria line 131), §3 Sprint 3 (lines 133–144), §5 Ownership Assignment (lines 287–328), §7 Risk Register (lines 350–363).
+- Read in full: P0_TRACEABILITY_MAP.md (191 lines) — §1 traceability table rows for all 28 P0s (lines 36–65), §2 invariant coverage (lines 73–88), §3 Coverage Queries A–H (lines 92–117), §6 sign-off (lines 139–146).
+- Read in full: CRITICAL_PATH.md (407 lines) — §2 topological layering L0..L7 (lines 47–68), §2.A mechanical depth verification (lines 72–124), §3.1 critical path P0-15→P0-25→P0-24→P0-01→P0-02→P0-04→P0-06→P0-07 (lines 132–144), §3.2 shorter branches incl. P0-26 path (line 164), §5 slack branches (lines 246–257), §8.B Risk-Critical Surface (lines 320–334).
+- Read in full: IMPLEMENTATION_LOG.md (120 lines) — Sprint 1 Wave 0 P0 tracker (lines 50–64), confirmed NO Wave-1 / Sprint 2 entries exist.
+- Read in full: WAVE0_EVIDENCE.md (516 lines) — line 5 Wave-0 closure criteria; line 60 "P0-15 gates P0-25 (Wave 1)"; lines 480–513 Wave-0 lock state + corrected P0 classification + execution order.
+- Read in full: STRATEGIC_FEATURE_MAPPING.md (242 lines) — confirmed 0 Wave-1 P0-specific entries (mapping is feature→P0, not wave→P0); feature interactions referencing P0-17/P0-25 (lines 83, 91, 96, 105, 115, 146, 150).
+- Read in full: IMPLEMENTATION_ORDER.md (referenced via Grep + targeted Read lines 69–198) — §3 Wave 0..7 assignment table (lines 71–175), §4 full summary table (lines 179–192), §5 convergence gates (lines 196–213), §6 risk-critical surface (lines 214–223), §7 parallelization (lines 229–242). Confirmed Wave 1 = 6 P0s (P0-25, P0-17, P0-26, P0-28, P0-10, P0-11) per lines 99–104 + line 184.
+- Read in full: WAVE0_GATE_REVIEW.md (444 lines) — §3.1 P0 Status Rollup (lines 56–62): classified only 4 NOT-STARTED P0s (P0-17, P0-24, P0-25, P0-26) within P0-13..P0-27 review window. This is the source of the user's "3 Wave-1 P0s" framing — but the review window excluded P0-28 (numbered above P0-27) and P0-10/P0-11 (auth chain, below P0-13). Authoritative Wave-1 = 6 P0s per IMPLEMENTATION_ORDER + SPRINT_PLAN.
+- Codebase audit for Wave-1 P0 partial implementation:
+  - prisma/schema.prisma (162 lines) — confirmed NO IdempotencyKey model, NO Outbox model, NO @version field on Order/OrderItem, NO ExceptionQueue/FreezeState model, NO attemptCount/sendCount/lockoutUntil on OtpRequest, NO revokedAt/lastSeenAt/ipHash on Session.
+  - src/app/api/orders/route.ts (161 lines) — confirmed POST uses db.order.create() directly, NOT wrapped in $transaction, NO idempotency-key check.
+  - src/app/api/orders/[id]/status/route.ts (79 lines) — confirmed PATCH uses findUnique→update with NO WHERE version=X optimistic-lock check (state-transition race possible per P0-25 case B).
+  - src/lib/session.ts (92 lines) — confirmed createSession/setSessionCookie/getSessionUser/destroySession exist; NO revokeSession(token), NO revokeAllSessionsForUser, NO listActiveSessions, NO session-anomaly metric.
+  - src/lib/otp-service.ts (71 lines) — confirmed createOtp/verifyOtp exist; NO per-target attempt counter, NO per-target send counter, NO 10-min lockout enforcement.
+  - src/lib/backup.ts (90 lines) — confirmed createBackup/verifyBackup/listBackups (stub) exist; NO restoreFromBackup, NO runRestoreDrill, NO postRestoreReconcile.
+  - src/lib/deployment.ts (90 lines) — confirmed feature flags real-payments, pickup-attribution-enforcement, dr-drill-mode, outbox-publisher, concurrency-control all default OFF and NEVER imported by any runtime path (per prior WAVE0-GOV-1 finding).
+  - src/lib/alerting.ts (~142 lines per WAVE0-GOV-1 line 2141) — confirmed alert rule `dr-drill-failed` + `unknown-state-detected` exist structurally but their watched metrics (dr_drill_pass, unknown_state_count) are NEVER produced by any code path.
+  - Grep for `idempotency|optimisticLock|@version|FOR UPDATE|restore.*drill|outbox` across src/ + mini-services/ source: only matches in comments in src/lib/deployment.ts (lines 32, 35, 38 — feature flag descriptions noting "P0-XX not yet implemented"). No actual implementation code.
+
+Stage Summary:
+- Wave-1 scope = 6 P0s (NOT 3): P0-25 (Concurrency, Tier 2, on critical path), P0-17 (Idempotency, Tier 4), P0-26 (DR, Tier 3, dual launch-gate obligation), P0-28 (Unknown-exception, Tier 3), P0-10 (Session integrity, Tier 4), P0-11 (OTP retry limits, Tier 4). Authoritative source: IMPLEMENTATION_ORDER.md §3 Wave 1 lines 99–104 + SPRINT_PLAN.md §2 Sprint 2 lines 121–129.
+- User's stated 3 Wave-1 P0s (P0-17, P0-25, P0-26) CONFIRMED; user's "P0-24 is Wave-2" CONFIRMED. User MISSED P0-28, P0-10, P0-11 (the "3 LOCKED" framing came from WAVE0_GATE_REVIEW.md §3.1's P0-13..P0-27 review window, which excluded P0-28 and the auth-chain P0-10/P0-11).
+- 0 P1 items are in Wave-1 (P1 capabilities are explicitly post-launch per matrix §7.2; waves 0–7 assign only P0s).
+- All 6 Wave-1 P0s are at topological Layer L1 (depth 1) per CRITICAL_PATH.md §2; only P0-25 is ON the critical path; the other 5 are slack branches but launch-mandatory.
+- All 6 Wave-1 P0s have: matrix §7.1 row, matrix §8 detailed breakdown, P0_TRACEABILITY_MAP.md row, named owner + reviewer + approver (Coverage Query G RESOLVED per SPRINT_PLAN.md §5). 0 of 6 have test evidence (Coverage Query H FAIL — expected-empty-pending-implementation).
+- Dependencies: P0-25 BLOCKS P0-24 (Wave 2) + P0-08 (Wave 3); P0-17 BLOCKS P0-01 (Wave 3); P0-26/P0-28/P0-10/P0-11 are LEAF nodes (nothing depends on them; still launch-mandatory).
+- Acceptance criteria fully documented per matrix §7.1 + §8 for all 6 Wave-1 P0s. Architectural Laws: P0-26 enforces Law 1 (Business Recovery Coherence); P0-28 enforces Law 3 (Freeze Precision); P0-17 co-enforces Law 2 (Idempotent Business Effect) with P0-24.
+- NO documented Wave-1 closure gate exists (parallel to WAVE0_EVIDENCE.md line 5). Closest criteria: SPRINT_PLAN.md §2 Sprint 2 exit (P0-25 Tested + P0-15 Production-ready) + IMPLEMENTATION_ORDER.md §3 Wave 2 convergence gate (P0-24 requires P0-15 + P0-25 at Dependency-ready). RECOMMENDATION: governance documentation gap — Orchestrator should authorize creation of WAVE1_EVIDENCE.md before Wave-1 execution begins.
+- Current implementation state per codebase audit:
+  - P0-17 (Idempotency): GREENFIELD. No IdempotencyKey model, no idempotency-key code in any critical-write endpoint.
+  - P0-25 (Concurrency): GREENFIELD. No @version fields; orders POST not in $transaction; orders PATCH no optimistic-lock check. Feature flag `concurrencyControl` exists but defaults OFF and is never imported (dead code).
+  - P0-26 (DR): MIXED. P0-16 backup half exists (createBackup + verifyBackup); restore-drill + post-restore reconciliation + runbook = GREENFIELD. Alert rule `dr-drill-failed` structural only; metric `dr_drill_pass` never produced.
+  - P0-28 (Unknown-exception): GREENFIELD. `[P0-EXCEPTION]` log tag exists in logger.ts; `unknown-state-detected` alert rule structural; but no invariant-checker, no freeze implementation, no exception-queue model, no freeze-precision test.
+  - P0-10 (Session integrity): PARTIALLY-EXISTING. Basic session create/get/destroy works; revokeSession-by-ID, active-sessions-list, refresh rotation, session-anomaly metric = GREENFIELD.
+  - P0-11 (OTP retry limits): PARTIALLY-EXISTING. OTP create/verify + phone E.164 Zod validation + per-IP rate limit (via P0-13 middleware) work; per-target attempt counter (max 5/10min), per-target send counter (max 3/10min), 10-min lockout, OTP-attempt metric, brute-force alert = GREENFIELD.
+- IMPLEMENTATION_LOG.md contains entries ONLY for Sprint 1 (Wave-0); no Sprint 2 / Wave-1 section exists. No Wave-1 P0 has reached lifecycle state S4 (Implemented).
+- Constraints respected: READ-ONLY (no file modifications except worklog append), no deployments, no migrations, no Wave-1 execution, no Wave-1 closure declaration, no governance file changes.
+
+STOP. Awaiting Orchestrator's Wave-1 Gate Review decision.
+
+---
+Task ID: 64 — Wave-1 Gate Review (READ-ONLY, Orchestrator-Authorized)
+Agent: main (IDE)
+Date: 2026-08-14
+Task: Execute READ-ONLY Wave-1 Gate Review. Answer 9 governance questions. Produce Wave-1 Gate Review Report. NO code changes, NO deployments, NO migrations, NO production modifications.
+
+## Authorization
+- **Scope**: READ-ONLY Wave-1 Gate Review ONLY
+- **Forbidden**: Code changes, deployments, provisioning, migrations, production modifications, Wave-1 execution, Wave-1 closure declaration, Wave-2 unlock
+
+## Method
+1. Launched 2 parallel Explore subagents (WAVE1-1 + WAVE1-2) to gather Wave-1 scope + code-level current state.
+2. Synthesized findings into the Wave-1 Gate Review Report.
+
+## Critical Findings
+
+### Finding 1: Wave-1 has 6 P0s, not 3
+The user's framing (P0-17, P0-25, P0-26) missed 3 Wave-1 P0s:
+- P0-28 (Unknown-exception handling)
+- P0-10 (Session integrity)
+- P0-11 (OTP retry limits)
+Confirmed via `IMPLEMENTATION_ORDER.md` §3 Wave 1, `SPRINT_PLAN.md` §2 Sprint 2, `worklog.md` lines 537 + 667.
+
+### Finding 2: Current State — 3 GREENFIELD, 1 MIXED, 2 PARTIALLY-EXISTING
+- GREENFIELD: P0-17 (zero idempotency infra), P0-25 (zero concurrency control, dead feature flag), P0-28 (structural scaffolding only)
+- MIXED: P0-26 (backup lib exists but SQLite-only; DR drill + reconciliation greenfield)
+- PARTIALLY-EXISTING: P0-10 (session skeleton from Wave-0), P0-11 (OTP skeleton from Wave-0)
+
+### Finding 3: Governance Documentation Gap — No WAVE1_EVIDENCE.md
+Wave-0 had explicit closure gate in `WAVE0_EVIDENCE.md` line 5. No equivalent for Wave-1. Orchestrator must authorize creation of `WAVE1_EVIDENCE.md` before Wave-1 execution.
+
+### Finding 4: P0-26 Dual Obligation
+P0-26 is BOTH a Wave-1 P0 AND §14.1 launch-gate condition 4. Stricter closure criteria than other 5 Wave-1 P0s. Orchestrator must decide: is DR drill execution a Wave-1 closure prerequisite or a production-launch prerequisite?
+
+### Finding 5: P0-25 Case C + P0-26 Reconciliation Cannot Close in Wave-1
+Both require Wave-3 Payment model (P0-01). Wave-1 can prepare infrastructure (P0-17 idempotency library) but full verification deferred to Wave-3.
+
+### Finding 6: P0-26 Gated on P0-16 pg_dump Rewrite
+P0-16's backup is SQLite-coupled, returns 500 on Vercel serverless. DR drill cannot execute without restorable backup. Orchestrator must choose: (a) bring pg_dump rewrite forward into Wave-1, OR (b) split P0-26 into design (Wave-1) vs drill (Phase 3).
+
+### Finding 7: Shared Prerequisite — `withTransaction()` Helper
+Both P0-17 (key + write atomic) and P0-25 (check-then-write atomic) need a `withTransaction()` helper in `src/lib/db.ts`. Currently ABSENT. Must be authored FIRST as a foundational utility.
+
+### Finding 8: Sub-Wave Execution Strategy Recommended
+3 sub-waves:
+- **1a**: shared helper + P0-25 (Cases A+B) + P0-17 — unblocks Wave-2 (P0-24 needs P0-25)
+- **1b**: P0-28 + P0-10 + P0-11 — hardening, parallelizable with 1a
+- **1c**: P0-26 design only — drill deferred (requires Orchestrator split decision)
+
+## Work Log
+- Gathered Wave-1 scope from 8 governance documents
+- Conducted code-level audit of all 6 Wave-1 P0s (grep + targeted reads)
+- Identified governance gap (no WAVE1_EVIDENCE.md)
+- Identified P0-26 dual obligation + P0-16 pg_dump gate
+- Designed sub-wave execution strategy
+- Authored per-task Do/Don't/Evidence/Exit Criteria matrix
+- Wrote `/home/z/my-project/WAVE1_GATE_REVIEW.md` (~9-section report)
+
+## Stage Summary
+
+### Wave-1 Gate Review Verdict
+🟡 **WAVE-1 READY FOR EXECUTION PLANNING — ORCHESTRATOR DECISION REQUIRED**
+
+- ✅ Wave-1 scope identified (6 P0s)
+- ✅ Current state assessed (code-level)
+- ✅ Dependencies mapped (all Wave-0 preds closed; shared helper prerequisite identified)
+- ✅ Production-impacting tasks identified (P0-26 dual obligation; P0-25 CRITICAL blast radius)
+- ✅ Authorization boundaries defined (5 boundaries)
+- ✅ Sub-wave strategy recommended (3 sub-waves)
+- ✅ Per-task Do/Don't/Evidence/Exit Criteria matrix authored
+- 🟡 Governance gap: WAVE1_EVIDENCE.md needs creation
+- 🟡 P0-26 split decision required (Orchestrator)
+- 🟡 P0-16 pg_dump rewrite gate decision required (Orchestrator)
+
+### Orchestrator Decisions Required
+1. Acknowledge Wave-1 scope = 6 P0s (not 3)
+2. Authorize creation of WAVE1_EVIDENCE.md (governance documentation task)
+3. Decide P0-26 split: (a) bring pg_dump forward, OR (b) split design vs drill
+4. Authorize Sub-Wave 1a first (shared helper + P0-25 + P0-17) — unblocks Wave-2
+5. Do NOT authorize production migration until production DATABASE_URL fixed to snakzap_app
+
+### Files Written
+- `/home/z/my-project/WAVE1_GATE_REVIEW.md` (~9-section report, ~500 lines)
+
+### Constraint Compliance
+- ✅ READ-ONLY — no code changes, no deployments, no migrations, no production modifications
+- ✅ No Wave-1 execution (report only)
+- ✅ No Wave-1 closure declaration (Orchestrator retains decision)
+- ✅ No Wave-2 unlock
+- ✅ No DEV-001 / P0-22 file changes
+- ✅ No governance file changes
+
+### Current Governance State
+```
+DEV-001 / P0-22          ✅ CLOSED
+P0-27 Phase 1            ✅ COMPLETE
+P0-27 Phase 2            ✅ COMPLETE
+Rollback Drill           ✅ VERIFIED
+P0-14                    ✅ REMEDIATED
+Wave-0                   ✅ CLOSED
+Wave-1                   🔓 UNLOCKED
+Wave-1 Gate Review       ✅ COMPLETE (this report)
+Wave-1 Execution         🟡 AWAITING ORCHESTRATOR PLAN + AUTHORIZATION
+Wave-2                   🔒 LOCKED (gated on Wave-1 Sub-Wave 1a — P0-25)
+Production               🚫 NOT AUTHORIZED
+```
+
+### Recommendation to Orchestrator
+Wave-1 is ready for execution planning. The 6 P0s are well-scoped, dependencies are clear, and the sub-wave strategy minimizes risk. The 3 key decisions required are:
+1. P0-26 split (design vs drill)
+2. P0-16 pg_dump rewrite timing (Wave-1 or Phase 3)
+3. WAVE1_EVIDENCE.md creation (governance gate documentation)
+
+Once these are decided, Sub-Wave 1a (shared helper + P0-25 + P0-17) can begin. This unblocks Wave-2 (P0-24).
+
+**STOP.** Awaiting Orchestrator's Wave-1 execution plan + explicit task authorization.
