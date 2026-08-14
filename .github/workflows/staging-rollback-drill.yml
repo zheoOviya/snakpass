@@ -194,22 +194,20 @@ jobs:
             WITHIN_BUDGET="false"
           fi
           
-          # Write timing.env for evidence
-          cat > timing.env <<EOF
-T0_ISO=${{ steps.t0.outputs.t0_iso }}
-T1_ISO=${{ steps.t1.outputs.t1_iso }}
-T2_ISO=${{ steps.t2.outputs.t2_iso }}
-T0_EPOCH=$T0
-T1_EPOCH=$T1
-T2_EPOCH=$T2
-PROMOTE_SECS=$PROMOTE_SECS
-VERIFY_SECS=$VERIFY_SECS
-TOTAL_SECS=$TOTAL_SECS
-BUDGET_SECS=$BUDGET_SECS
-WITHIN_BUDGET=$WITHIN_BUDGET
-KNOWN_GOOD_SHA=${{ inputs.known_good_sha }}
-ROLLED_BACK_URL=${{ steps.rollback.outputs.new_url }}
-EOF
+          # Write timing.env for evidence (using echo to avoid YAML heredoc indentation issues)
+          echo "T0_ISO=${{ steps.t0.outputs.t0_iso }}" > timing.env
+          echo "T1_ISO=${{ steps.t1.outputs.t1_iso }}" >> timing.env
+          echo "T2_ISO=${{ steps.t2.outputs.t2_iso }}" >> timing.env
+          echo "T0_EPOCH=$T0" >> timing.env
+          echo "T1_EPOCH=$T1" >> timing.env
+          echo "T2_EPOCH=$T2" >> timing.env
+          echo "PROMOTE_SECS=$PROMOTE_SECS" >> timing.env
+          echo "VERIFY_SECS=$VERIFY_SECS" >> timing.env
+          echo "TOTAL_SECS=$TOTAL_SECS" >> timing.env
+          echo "BUDGET_SECS=$BUDGET_SECS" >> timing.env
+          echo "WITHIN_BUDGET=$WITHIN_BUDGET" >> timing.env
+          echo "KNOWN_GOOD_SHA=${{ inputs.known_good_sha }}" >> timing.env
+          echo "ROLLED_BACK_URL=${{ steps.rollback.outputs.new_url }}" >> timing.env
           
           echo ""
           echo "═══════════════════════════════════════════════════════════════"
