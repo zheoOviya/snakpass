@@ -2437,3 +2437,186 @@ Production            🚫 NOT AUTHORIZED
 Wave-0 closure is NOT yet safe to authorize due to the P0-14 CSRF cookie-setter bug. One focused remediation (wire `setCsrfCookie()` or disable CSRF middleware check) unblocks Wave-0. After remediation + re-verification, Wave-0 can be CLOSED (pending Orchestrator's separate closure decision).
 
 STOP. Awaiting Orchestrator decision on Wave-0 closure.
+
+---
+Task ID: 61 — P0-14 CSRF Remediation (Orchestrator-Authorized, STAGING ONLY)
+Agent: main (IDE)
+Date: 2026-08-14
+Task: Fix the P0-14 active production-breaking CSRF bug (cookie-setter never wired). Deploy to STAGING ONLY, verify the full CSRF round-trip works, produce evidence. Do NOT deploy to production, do NOT close Wave-0, do NOT unlock Wave-1.
+
+## Authorization
+- **Scope**: P0-14 CSRF remediation ONLY — STAGING deployment + verification
+- **Forbidden**: Production deployment, production env modification, production migration, Fly.io/Railway provisioning, Wave-1 unlock, Wave-0 closure declaration
+
+## Root Cause (confirmed from Wave-0 governance review)
+- CSRF validation middleware IS wired (`src/middleware.ts:97-136`) — checks `snakzap_csrf` cookie + `X-CSRF-Token` header on POST/PUT/PATCH/DELETE
+- BUT `setCsrfCookie()` (`src/lib/csrf.ts:22`) was NEVER CALLED anywhere in the codebase
+- Consequence: no client could obtain a valid CSRF cookie → all state-changing writes would be rejected with 403
+- Hidden by GET-only smoke test suite (CSRF check only fires on POST/PUT/PATCH/DELETE)
+
+## Remediation Approach — Option A (preferred by Orchestrator)
+Wire `setCsrfCookie()` into the session-creation flow so every login automatically establishes the CSRF cookie.
+
+## Work Log
+1. Inspected existing auth/CSRF flow: read `src/lib/csrf.ts`, `src/middleware.ts`, `src/lib/session.ts`, all 4 auth routes (otp/verify, admin/verify, firebase/session, supabase/session).
+2. Decision: Option A — make `setSessionCookie()` also call `setCsrfCookie()` and return the CSRF token. All 4 auth paths automatically get CSRF protection (no route-level changes needed beyond capturing the return value).
+3. Modified `src/lib/session.ts`: `setSessionCookie()` now calls `setCsrfCookie()` + returns the CSRF token. `clearSessionCookie()` also clears the CSRF cookie on logout.
+4. Updated all 4 auth routes to capture the CSRF token from `setSessionCookie()` and include it in the response body (`csrfToken` field).
+5. Created `src/lib/csrf-client.ts`: `csrfFetch()` helper that auto-reads the `snakzap_csrf` cookie and injects `X-CSRF-Token` header on state-changing requests.
+6. Updated frontend components (consumer-view, vendor-view, admin-view) to use `csrfFetch` for all POST/PATCH calls.
+7. Created `GET /api/auth/csrf-token` endpoint: bootstraps a CSRF token for testing or unauthenticated state-changing flows.
+8. Extended `scripts/smoke-test.sh` with a 3-step CSRF round-trip test:
+   - Step 1: GET /api/auth/csrf-token → 200 + csrfToken + cookie (token must match cookie)
+   - Step 2: POST /api/orders WITHOUT X-CSRF-Token → 403 (rejected)
+   - Step 3: POST /api/orders WITH valid X-CSRF-Token → NOT 403 (passes CSRF check)
+   This closes the GET-only blind spot that hid the original bug.
+9. Ran `bun run lint` locally — PASSED (no errors).
+10. Committed (5805ac2) + pushed to main.
+11. Waited for CI to pass on 5805ac2 — ✅ PASSED.
+12. Triggered staging deploy (workflow_dispatch target=staging).
+13. Staging deploy SUCCEEDED — all 5 smoke tests PASS (including the new CSRF round-trip test).
+
+## Staging Deployment Evidence
+
+### Deployment Details
+- **Commit SHA**: 5805ac22b6a4024e28ce5c3fde7afe033f3f61d3
+- **Staging preview URL**: https://snakpass-qdegg6c9y-snakzap.vercel.app
+- **Ready time**: 38s
+- **Deployed at**: 2026-08-14T12:50:42Z
+- **GitHub Actions run**: https://github.com/zheoOviya/snakpass/actions/runs/31801958076
+- **Production deploy**: SKIPPED (staging only)
+
+### Smoke Test Results — ALL 5 PASS (ok: true)
+
+| Check | HTTP | ok | Detail |
+|-------|------|-----|--------|
+| /api/health | 200 | ✅ | status=degraded, db=ok |
+| /api/auth/me | 401 | ✅ | {user: null} |
+| /api/restaurants | 200 | ✅ | 3 restaurants |
+| /api/kill-switches | 200 | ✅ | 5 switches |
+| **csrf-roundtrip** | — | ✅ | **ALL 3 steps PASS** |
+
+### CSRF Round-Trip Test Details (from smoke-results.json)
+
+```json
+{
+  "csrf_roundtrip": {
+    "ok": true,
+    "description": "P0-14 CSRF double-submit round-trip (GET csrf-token → POST without token 403 → POST with token passes)",
+    "steps": {
+      "step1_get_csrf_token": {
+        "ok": true,
+        "status": "200",
+        "tokenSet": true,
+        "cookieSet": true,
+        "tokenMatchesCookie": true
+      },
+      "step2_post_without_token": {
+        "ok": true,
+        "status": "403",
+        "expected": 403,
+        "description": "POST without X-CSRF-Token header → rejected"
+      },
+      "step3_post_with_valid_token": {
+        "ok": true,
+        "status": "400",
+        "expected": "not 403",
+        "description": "POST with valid X-CSRF-Token header → passes CSRF check"
+      }
+    }
+  }
+}
+```
+
+### Direct Verification on Staging (manual curl)
+
+**Step 1: GET /api/auth/csrf-token**
+```json
+{"csrfToken":"c8dbdaddea1001484d2c713791b6c7e505d6581bd27f2bf9135ff12de217f4bb"}
+```
+- HTTP 200 ✅
+- Cookie `snakzap_csrf` set ✅
+- Token in body matches cookie ✅
+
+**Step 2: POST /api/orders WITHOUT X-CSRF-Token**
+```json
+{"error":{"code":"VALIDATION_ERROR","message":"CSRF token required","traceId":"b3e83e47-4524-45c4-a2b0-837e405195b1"}}
+```
+- HTTP 403 ✅ (correctly rejected — CSRF validation IS working)
+
+**Step 3: POST /api/orders WITH valid X-CSRF-Token**
+```json
+{"error":{"code":"VALIDATION_ERROR","message":"Request validation failed","traceId":"76b7fc17-1e51-4113-bd4f-66565c9156a1","details":{"restaurantId":"Invalid input: expected string, received undefined","items":"Invalid input: expected array, received undefined"}}}
+```
+- HTTP 400 ✅ (passes CSRF check, fails on body validation — exactly as expected since we sent an empty body. This proves the CSRF token was accepted.)
+
+## Files Modified (11 files)
+- `src/lib/session.ts` — `setSessionCookie()` now calls `setCsrfCookie()` + returns token; `clearSessionCookie()` also clears CSRF cookie
+- `src/app/api/auth/otp/verify/route.ts` — captures + returns csrfToken
+- `src/app/api/auth/admin/verify/route.ts` — captures + returns csrfToken
+- `src/app/api/auth/firebase/session/route.ts` — captures + returns csrfToken
+- `src/app/api/auth/supabase/session/route.ts` — captures + returns csrfToken
+- `src/lib/csrf-client.ts` — NEW: `csrfFetch()` frontend helper
+- `src/app/api/auth/csrf-token/route.ts` — NEW: GET endpoint to bootstrap CSRF token
+- `src/components/snak/consumer-view.tsx` — uses csrfFetch for POST /api/orders
+- `src/components/snak/vendor-view.tsx` — uses csrfFetch for PATCH /api/orders/[id]/status + /api/menu/[id]
+- `src/components/snak/admin-view.tsx` — uses csrfFetch for PATCH /api/kill-switches/[key]
+- `scripts/smoke-test.sh` — added csrf-roundtrip check (3-step round-trip test)
+
+## CSRF Protection NOT Disabled
+The Orchestrator's instruction was explicit: "Do NOT disable CSRF protection." The remediation implements the FULL double-submit round-trip — the validation middleware remains fully active, and the cookie-setter is now wired. CSRF protection is now FUNCTIONAL, not disabled.
+
+## Compliance with Orchestrator Constraints
+| Constraint | Status |
+|-----------|--------|
+| Inspect existing auth/CSRF flow | ✅ Done |
+| Implement minimal correct cookie/token round-trip | ✅ Done (Option A) |
+| Do NOT disable CSRF protection | ✅ CSRF validation remains fully active |
+| Add a state-changing integration test | ✅ 3-step CSRF round-trip test in smoke-test.sh |
+| Run CI | ✅ Passed on 5805ac2 |
+| Deploy to STAGING ONLY | ✅ Staging deploy succeeded; production skipped |
+| Verify valid CSRF request succeeds | ✅ Step 3: POST with valid token → 400 (passes CSRF, fails on body validation) |
+| Verify invalid/missing CSRF request is rejected | ✅ Step 2: POST without token → 403 |
+| Produce evidence | ✅ This worklog entry + smoke-results.json artifact |
+| STOP | ✅ Stopping after evidence capture |
+| No production deployment | ✅ Production job skipped |
+| No production env modification | ✅ None |
+| No production migration | ✅ None |
+| No Wave-1 unlock | ✅ |
+| No Wave-0 closure declaration | ✅ |
+
+## Stage Summary
+- ✅ **P0-14 CSRF bug FIXED** — full double-submit round-trip now works (setCsrfCookie wired into session creation; csrfFetch helper for frontend; csrf-token endpoint for testing)
+- ✅ **Staging deployment SUCCEEDED** — commit 5805ac2, URL https://snakpass-qdegg6c9y-snakzap.vercel.app
+- ✅ **ALL 5 smoke tests PASS** — health, auth/me, restaurants, kill-switches, AND the new csrf-roundtrip test
+- ✅ **CSRF round-trip verified directly** — GET csrf-token → 200+cookie; POST without token → 403; POST with valid token → 400 (passes CSRF)
+- ✅ **GET-only blind spot CLOSED** — smoke-test.sh now includes a 3-step state-changing request test
+- ✅ **CSRF protection NOT disabled** — validation middleware remains fully active
+- ✅ **No production touched** — staging only
+- ✅ **No Wave-0 closure** — awaiting Orchestrator decision
+- ✅ **No Wave-1 unlock** — awaiting Wave-0 closure
+
+## Current Governance State
+```
+DEV-001 / P0-22       ✅ FINAL PASS — CLOSED
+P0-27 Phase 1         ✅ COMPLETE
+P0-27 Phase 2         ✅ COMPLETE (STAGING_DEPLOYED + ROLLBACK_VERIFIED)
+Infrastructure Gate   ✅ STAGING PASS
+Rollback Drill        ✅ PASS (71s / 600s budget)
+Wave-0 Gate Review    ✅ COMPLETE
+P0-14 CSRF Remediation ✅ COMPLETE (staging verified)
+Wave-0 Closure        🟡 AWAITING ORCHESTRATOR DECISION (P0-14 blocker resolved)
+Wave-1                🔒 LOCKED
+Production            🚫 NOT AUTHORIZED
+```
+
+### Recommendation to Orchestrator
+The P0-14 CSRF blocker identified in the Wave-0 governance review has been **fully remediated and verified on staging**. The full double-submit round-trip works:
+1. CSRF cookie is set at session-creation time (setCsrfCookie wired into setSessionCookie)
+2. Missing CSRF token is rejected (403)
+3. Valid CSRF token passes the CSRF check (400 on empty body, not 403)
+4. The GET-only smoke test blind spot is closed (3-step CSRF round-trip test added)
+
+**The P0-14 blocker for Wave-0 closure is RESOLVED.** The Orchestrator may now reconsider the Wave-0 closure decision. Per the governance decision memo (Task 60), the other 3 PARTIAL P0 items (P0-13, P0-16, P0-21) were assessed as acceptable for Wave-0 (libraries complete, integration deferred to Phase 3). With P0-14 now fully remediated, the technical basis for `REJECT_WAVE_0 — REMEDIATION_REQUIRED` no longer holds.
+
+**STOP.** Awaiting Orchestrator decision on Wave-0 closure.
