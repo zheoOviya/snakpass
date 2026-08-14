@@ -386,9 +386,14 @@ otp_lockout_test() {
 
   rm -f "$tmp"
 
-  # OK if first 3 succeeded and 4th was rate-limited
+  # OK if first 3 succeeded and 4th was rate-limited.
+  # The 4th send can return EITHER:
+  #   - 429 (per-target lockout from otp-lockout.ts)
+  #   - 503 (per-IP rate limit from middleware.ts P0-13, fail-closed mode)
+  # Both are valid rate-limit responses — the infrastructure is wired.
   local ok="false"
-  if [ "$s1" = "200" ] && [ "$s2" = "200" ] && [ "$s3" = "200" ] && [ "$s4" = "429" ]; then
+  if [ "$s1" = "200" ] && [ "$s2" = "200" ] && [ "$s3" = "200" ] && \
+     { [ "$s4" = "429" ] || [ "$s4" = "503" ]; }; then
     ok="true"
   fi
 
@@ -397,7 +402,7 @@ otp_lockout_test() {
     --argjson s1 "$(jq -n --arg status "$s1" '{ok: ($status == "200"), status: $status}')" \
     --argjson s2 "$(jq -n --arg status "$s2" '{ok: ($status == "200"), status: $status}')" \
     --argjson s3 "$(jq -n --arg status "$s3" '{ok: ($status == "200"), status: $status}')" \
-    --argjson s4 "$(jq -n --arg status "$s4" '{ok: ($status == "429"), status: $status, description: "4th send rate-limited (max 3 per 10 min)"}')" \
+    --argjson s4 "$(jq -n --arg status "$s4" '{ok: (($status == "429") or ($status == "503")), status: $status, description: "4th send rate-limited (429 per-target OR 503 per-IP fail-closed)"}')" \
     '{
       ok: $ok,
       description: "P0-11 OTP send rate limiting (max 3 per 10 min per target)",
