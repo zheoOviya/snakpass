@@ -271,6 +271,33 @@ else
         rm -f "$TMP_C" "$TMP_D"
         break
       fi
+
+      # If both succeeded, verify the atomic decrement ran correctly.
+      # If both orders succeeded AND availableCount was decremented by 2 (went negative),
+      # that would be a BUG (race condition not prevented).
+      # If both orders succeeded AND availableCount was only decremented by 1 (stayed at 0),
+      # that means the second order's updateMany WHERE availableCount >= 1 failed (count=0)
+      # BUT the order was still created — which would be a logic bug.
+      # If both orders succeeded AND availableCount stayed at 1 (not decremented at all),
+      # that means the transactions were serialized (second ran after first committed + reset).
+      echo "    Both orders succeeded — checking availableCount to verify atomic decrement..."
+      CHECK_RESULT=$(curl -sS -X POST \
+        -H "Authorization: Bearer $SUPABASE_TOKEN" \
+        -H "Content-Type: application/json" \
+        "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+        -d "$(jq -n --arg q 'SELECT "availableCount", "version" FROM "MenuItem" WHERE id = '\''menu-003'\''' '{query: $q}')')")
+      ACTUAL_COUNT=$(echo "$CHECK_RESULT" | jq -r '.[0].availableCount // .availableCount // "unknown"' 2>/dev/null)
+      ACTUAL_VERSION=$(echo "$CHECK_RESULT" | jq -r '.[0].version // .version // "unknown"' 2>/dev/null)
+      echo "    availableCount=$ACTUAL_COUNT, version=$ACTUAL_VERSION (expected: 0 if 1 order succeeded, or 1 if serialized)"
+
+      # If availableCount went negative, that's a real bug (oversell)
+      if [ "$ACTUAL_COUNT" != "null" ] && [ "$ACTUAL_COUNT" -lt 0 ] 2>/dev/null; then
+        echo -e "  ${RED}❌ OVERSELL DETECTED: availableCount=$ACTUAL_COUNT (went negative)${NC}"
+        P025A_OK="oversell_bug"
+        rm -f "$TMP_C" "$TMP_D"
+        break
+      fi
+
       echo "    (both same result — retrying)"
       rm -f "$TMP_C" "$TMP_D"
     done
