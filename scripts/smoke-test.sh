@@ -347,6 +347,69 @@ idempotency_test() {
 
 idempotency_json="$(idempotency_test)"
 
+# ---- P0-11 OTP lockout test -------------------------------------------------
+# Verifies that per-target OTP send rate limiting works:
+#   - 1st + 2nd + 3rd OTP send → 200 (allowed)
+#   - 4th OTP send → 429 (rate limited, target locked)
+#
+# This is a lightweight test — it only checks the rate limiting infrastructure
+# is wired. Full brute-force testing (5 failed verifies → lockout) is done
+# in the evidence-gathering phase (Track B), not in the smoke test, because
+# it would pollute the lockout state for the test phone number.
+
+otp_lockout_test() {
+  local test_phone="+919999900001"
+  local tmp http_code body
+  tmp="$(mktemp)"
+
+  # Send 3 OTPs (should all succeed — max 3 per 10 min)
+  local s1 s2 s3 s4
+  s1="$(curl -sS -m 15 -o "$tmp" -w '%{http_code}' \
+    -X POST "${BASE_URL}/api/auth/otp/send" \
+    -H 'content-type: application/json' \
+    -d "{\"phone\":\"$test_phone\",\"purpose\":\"consumer_login\"}" 2>/dev/null)"
+  s2="$(curl -sS -m 15 -o "$tmp" -w '%{http_code}' \
+    -X POST "${BASE_URL}/api/auth/otp/send" \
+    -H 'content-type: application/json' \
+    -d "{\"phone\":\"$test_phone\",\"purpose\":\"consumer_login\"}" 2>/dev/null)"
+  s3="$(curl -sS -m 15 -o "$tmp" -w '%{http_code}' \
+    -X POST "${BASE_URL}/api/auth/otp/send" \
+    -H 'content-type: application/json' \
+    -d "{\"phone\":\"$test_phone\",\"purpose\":\"consumer_login\"}" 2>/dev/null)"
+  # 4th send should be rate-limited
+  s4="$(curl -sS -m 15 -o "$tmp" -w '%{http_code}' \
+    -X POST "${BASE_URL}/api/auth/otp/send" \
+    -H 'content-type: application/json' \
+    -d "{\"phone\":\"$test_phone\",\"purpose\":\"consumer_login\"}" 2>/dev/null)"
+
+  rm -f "$tmp"
+
+  # OK if first 3 succeeded and 4th was rate-limited
+  local ok="false"
+  if [ "$s1" = "200" ] && [ "$s2" = "200" ] && [ "$s3" = "200" ] && [ "$s4" = "429" ]; then
+    ok="true"
+  fi
+
+  jq -n \
+    --argjson ok "$ok" \
+    --argjson s1 "$(jq -n --arg status "$s1" '{ok: ($status == "200"), status: $status}')' \
+    --argjson s2 "$(jq -n --arg status "$s2" '{ok: ($status == "200"), status: $status}')" \
+    --argjson s3 "$(jq -n --arg status "$s3" '{ok: ($status == "200"), status: $status}')" \
+    --argjson s4 "$(jq -n --arg status "$s4" '{ok: ($status == "429"), status: $status, description: "4th send rate-limited (max 3 per 10 min)"}')" \
+    '{
+      ok: $ok,
+      description: "P0-11 OTP send rate limiting (max 3 per 10 min per target)",
+      steps: {
+        send_1: $s1,
+        send_2: $s2,
+        send_3: $s3,
+        send_4_rate_limited: $s4
+      }
+    }'
+}
+
+otp_lockout_json="$(otp_lockout_test)"
+
 # ---- Aggregate -------------------------------------------------------------
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 started_epoch="$(date -u +%s%3N)"
@@ -371,12 +434,13 @@ final_json="$(jq -n \
   --argjson ks "$killswitch_json" \
   --argjson csrf "$csrf_json" \
   --argjson idem "$idempotency_json" \
+  --argjson otp "$otp_lockout_json" \
   --arg baseUrl "$BASE_URL" \
   --arg startedAt "$started_at" \
   --arg finishedAt "$finished_at" \
   --argjson elapsedMs "$elapsed_ms" \
   '{
-    ok: ($health.ok and $auth.ok and $rest.ok and $ks.ok and $csrf.ok and $idem.ok),
+    ok: ($health.ok and $auth.ok and $rest.ok and $ks.ok and $csrf.ok and $idem.ok and $otp.ok),
     baseUrl: $baseUrl,
     startedAt: $startedAt,
     finishedAt: $finishedAt,
@@ -387,7 +451,8 @@ final_json="$(jq -n \
       "restaurants":  $rest,
       "kill-switches": $ks,
       "csrf-roundtrip": $csrf,
-      "idempotency": $idem
+      "idempotency": $idem,
+      "otp-lockout": $otp
     }
   }')"
 

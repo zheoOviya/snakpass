@@ -89,3 +89,130 @@ export async function destroySession(): Promise<void> {
     /* ignore */
   }
 }
+
+// ----------------------------------------
+// P0-10 — Session integrity (refresh, revoke, active sessions)
+// ----------------------------------------
+
+/**
+ * Revoke a specific session by token (not just the current one).
+ * Used by admin to force-logout a specific session.
+ * Returns true if a session was revoked, false if it didn't exist.
+ */
+export async function revokeSession(token: string): Promise<boolean> {
+  try {
+    await db.session.delete({ where: { token } })
+    return true
+  } catch {
+    return false // session didn't exist (already expired or already revoked)
+  }
+}
+
+/**
+ * Revoke ALL sessions for a user (e.g., on password change, security incident).
+ * Returns the count of revoked sessions.
+ */
+export async function revokeAllSessionsForUser(userId: string): Promise<number> {
+  const result = await db.session.deleteMany({ where: { userId } })
+  return result.count
+}
+
+/**
+ * List all active (non-expired) sessions for a user.
+ * Used by the active-sessions dashboard.
+ */
+export async function listActiveSessions(userId: string): Promise<{
+  token: string
+  createdAt: Date
+  lastActivityAt: Date
+  lastIp: string | null
+  isCurrent: boolean
+}[]> {
+  const now = new Date()
+  const sessions = await db.session.findMany({
+    where: {
+      userId,
+      expiresAt: { gt: now },
+    },
+    orderBy: { lastActivityAt: 'desc' },
+    select: {
+      token: true,
+      createdAt: true,
+      lastActivityAt: true,
+      lastIp: true,
+    },
+  })
+
+  // Determine which is the current session (by matching the cookie token)
+  const store = await cookies()
+  const currentToken = store.get(SESSION_COOKIE)?.value
+
+  return sessions.map((s) => ({
+    ...s,
+    // Don't expose the full token — only a prefix for identification
+    token: s.token.slice(0, 8) + '...',
+    isCurrent: s.token === currentToken,
+  }))
+}
+
+/**
+ * Sliding refresh: extend the session expiry on each authenticated request.
+ * Only extends if the session is within the "refresh window" (last 25% of TTL).
+ * This prevents excessive DB writes on every request while keeping active
+ * users logged in.
+ *
+ * Also updates lastActivityAt + lastIp for anomaly detection.
+ */
+export async function refreshSession(token: string, ip?: string): Promise<void> {
+  try {
+    const session = await db.session.findUnique({ where: { token } })
+    if (!session) return
+
+    const now = Date.now()
+    const expiry = session.expiresAt.getTime()
+    const refreshThreshold = expiry - (SESSION_TTL_DAYS * 24 * 60 * 60 * 1000 * 0.25) // refresh in last 25% of TTL
+
+    const updates: { lastActivityAt: Date; lastIp?: string; expiresAt?: Date } = {
+      lastActivityAt: new Date(now),
+    }
+
+    if (ip) {
+      updates.lastIp = ip
+    }
+
+    // Only extend expiry if within the refresh window
+    if (now > refreshThreshold) {
+      updates.expiresAt = new Date(now + SESSION_TTL_DAYS * 24 * 60 * 60 * 1000)
+    }
+
+    await db.session.update({ where: { token }, data: updates })
+  } catch {
+    // Session may have been revoked between read + write; ignore
+  }
+}
+
+/**
+ * Get the client IP from a request (for session anomaly detection).
+ */
+export function getClientIp(req: Request): string | null {
+  const forwarded = req.headers.get('x-forwarded-for')
+  if (forwarded) return forwarded.split(',')[0].trim()
+  const realIp = req.headers.get('x-real-ip')
+  if (realIp) return realIp
+  return null
+}
+
+/**
+ * Detect session anomaly (IP change between requests).
+ * Returns true if the IP changed significantly (different /24 subnet).
+ * Used for logging + alerting (not for blocking — too many false positives
+ * from mobile networks).
+ */
+export function detectIpChange(prevIp: string | null, currentIp: string | null): boolean {
+  if (!prevIp || !currentIp) return false // can't compare
+  if (prevIp === currentIp) return false
+  // Compare first 3 octets (same /24 subnet = same network)
+  const prevPrefix = prevIp.split('.').slice(0, 3).join('.')
+  const currentPrefix = currentIp.split('.').slice(0, 3).join('.')
+  return prevPrefix !== currentPrefix
+}

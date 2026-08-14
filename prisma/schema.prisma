@@ -45,6 +45,9 @@ model OtpRequest {
   consumed  Boolean  @default(false)
   expiresAt DateTime
   createdAt DateTime @default(now())
+  // P0-11: Track failed verify attempts per OTP record.
+  // Max 5 failed attempts before the OTP is locked (must request a new one).
+  attemptCount Int @default(0)
 
   @@index([target, purpose])
 }
@@ -56,7 +59,28 @@ model Session {
   role      String
   expiresAt DateTime
   createdAt DateTime @default(now())
+  // P0-10: Track last-known IP for session-anomaly detection (geo/IP change).
+  lastIp    String?
+  // P0-10: Last activity timestamp for sliding refresh + idle timeout.
+  lastActivityAt DateTime @default(now())
   @@index([userId])
+}
+
+// ----------------------------------------
+// P0-11 — OTP lockout store (per-target send/attempt counters)
+// ----------------------------------------
+// Tracks per-target (phone/email) OTP attempt + send counts within a rolling
+// 10-minute window. When limits are exceeded, the target is locked out until
+// the window expires.
+model OtpLockout {
+  id              String   @id @default(cuid())
+  target          String   @unique // phone number or email
+  // Rolling window counters (reset when lockoutExpiresAt passes)
+  sendCount       Int      @default(0)     // OTP sends in current window (max 3)
+  verifyFailCount Int      @default(0)     // failed verify attempts in current window (max 5)
+  // Lockout: when set, OTP send/verify is rejected until this time passes
+  lockedUntil     DateTime?
+  updatedAt       DateTime @updatedAt
 }
 
 // ----------------------------------------
@@ -198,4 +222,43 @@ model IdempotencyKey {
   expiresAt       DateTime // TTL (default 24h); old keys are safe to delete
 
   @@index([resourceType, resourceId])
+}
+
+// ----------------------------------------
+// P0-28 — Unknown-exception handling (exception queue + freeze state)
+// ----------------------------------------
+// When an invariant violation is detected (e.g., order in unknown state,
+// payment amount mismatch, audit hash-chain break), the system:
+//   1. Preserves evidence (full state snapshot + trace + invariant name)
+//   2. Creates an ExceptionQueue entry
+//   3. Applies the smallest sufficient freeze (Level 1/2/3)
+//   4. Alerts
+//
+// Freeze levels:
+//   Level 1 (TRANSACTION): freeze a single order/payment (set frozen=true)
+//   Level 2 (ENTITY): quarantine a whole Restaurant/User (set quarantined=true)
+//   Level 3 (SYSTEM): activate system kill switch (links to P0-23 KillSwitch)
+model ExceptionQueue {
+  id              String   @id @default(cuid())
+  // What was violated (e.g., "I-02 Order Integrity", "UNKNOWN_STATE")
+  invariant       String
+  // The resource that triggered the exception
+  entityType      String   // "Order" | "Payment" | "User" | "Restaurant" | "System"
+  entityId        String   // the id of the affected resource
+  // Freeze level applied: 1 (transaction) | 2 (entity) | 3 (system)
+  freezeLevel     Int      @default(1)
+  // Full state snapshot at time of detection (JSON: the resource state + context)
+  stateSnapshot   String   // JSON
+  // Trace ID for correlation with logs
+  traceId         String?
+  // Human-readable description of what went wrong
+  description     String
+  // Resolution tracking
+  resolvedAt      DateTime?
+  resolvedBy      String?  // admin user id who resolved it
+  resolutionNote  String?  // what was done to resolve
+  createdAt       DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([freezeLevel, resolvedAt])
 }

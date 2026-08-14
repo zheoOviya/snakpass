@@ -102,6 +102,16 @@ export const ALERT_RULES: AlertRule[] = [
     comparison: 'gt',
     cooldownMs: 5 * 60_000,
   },
+  {
+    id: 'otp-brute-force',
+    name: 'OTP Brute Force Detected',
+    description: 'A target has been locked out due to too many OTP attempts (P0-11)',
+    severity: 'warning',
+    metric: 'otp_lockout_count',
+    threshold: 0,
+    comparison: 'gt',
+    cooldownMs: 5 * 60_000,
+  },
 ]
 
 // Fire an alert. In dev: log to stderr. In production: send to PagerDuty/Opsgenie.

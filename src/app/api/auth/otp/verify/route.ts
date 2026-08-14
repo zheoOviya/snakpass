@@ -4,18 +4,37 @@ import { verifyOtp } from '@/lib/otp-service'
 import { createSession, setSessionCookie } from '@/lib/session'
 import { validateBody, otpVerifyBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
+import { checkOtpVerifyAllowed, recordOtpVerifyFailure, resetOtpCounters } from '@/lib/otp-lockout'
 
 // POST /api/auth/otp/verify  { otpId, code, phone, purpose }
+// P0-11: Per-target verify rate limiting (max 5 failed attempts per 10 min per phone).
 export const POST = (req: NextRequest) => withErrorHandler(async () => {
   const { otpId, code, phone, purpose } = await validateBody(req, otpVerifyBodySchema)
 
+  // P0-11: Check per-target lockout + verify fail count
+  const lockoutCheck = await checkOtpVerifyAllowed(phone)
+  if (!lockoutCheck.allowed) {
+    return apiError(
+      'RATE_LIMITED',
+      lockoutCheck.reason ?? 'Too many failed attempts. Please retry later.',
+      429,
+      { retryAfter: lockoutCheck.retryAfter, remaining: 0 },
+    )
+  }
+
   const result = await verifyOtp(otpId, code)
   if (!result.ok) {
+    // P0-11: Record the failed attempt
+    await recordOtpVerifyFailure(phone)
     return apiError('AUTHENTICATION_REQUIRED', 'Invalid or expired OTP', 401)
   }
   if (result.target !== phone) {
+    await recordOtpVerifyFailure(phone)
     return apiError('AUTHENTICATION_REQUIRED', 'OTP target mismatch', 401)
   }
+
+  // P0-11: Reset counters on successful verify (target is legitimate)
+  await resetOtpCounters(phone)
 
   const role = purpose === 'vendor_login' ? 'VENDOR_OWNER' : 'CONSUMER'
 
