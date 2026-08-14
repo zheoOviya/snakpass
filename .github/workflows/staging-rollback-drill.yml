@@ -6,24 +6,29 @@
 #   version within the 10-minute P0-27 budget.
 #
 # METHOD:
-#   1. T0 — record rollback initiation timestamp
-#   2. Execute `vercel redeploy <known_good_url>` — creates a new deployment
-#      using the same build output as the known-good deployment (fastest
-#      rollback method — no rebuild required)
-#   3. Wait for the new deployment to become READY
-#   4. T1 — record redeploy complete timestamp
-#   5. Run the 4-endpoint smoke test suite against the rolled-back deployment
-#   6. T2 — record smoke test pass timestamp
-#   7. Assert T2 - T0 ≤ 600 seconds (10-minute budget)
+#   1. Checkout the known-good commit SHA (d2646b6)
+#   2. `vercel pull` — get project config for preview environment
+#   3. T0 — record rollback initiation timestamp
+#   4. `vercel build` — build the known-good code
+#   5. `vercel deploy --prebuilt` — deploy the known-good build to staging
+#   6. Wait for the new deployment to become READY
+#   7. T1 — record deployment ready timestamp
+#   8. Run the 4-endpoint smoke test suite against the rolled-back deployment
+#   9. T2 — record smoke test pass timestamp
+#  10. Assert T2 - T0 ≤ 600 seconds (10-minute budget)
+#
+# WHY `vercel deploy` INSTEAD OF `vercel redeploy`:
+#   `vercel redeploy` was tried first (reuses existing build output — faster)
+#   but failed with exit code 1 (likely requires deployment ID, not URL, or
+#   has project-linking requirements that differ from `vercel deploy`).
+#   `vercel deploy --prebuilt` is the same proven approach used by deploy.yml.
 #
 # SCOPE:
 #   - STAGING ONLY — does NOT touch production
-#   - Uses `vercel redeploy` on a preview deployment URL
 #   - Does NOT modify env vars, database, or governance files
 #
 # REQUIRED INPUTS:
-#   known_good_url  — the Vercel preview URL of the known-good deployment
-#   known_good_sha  — the git commit SHA (for checkout of smoke-test.sh)
+#   known_good_sha  — the git commit SHA to rollback to (for checkout + build)
 # =============================================================================
 
 name: Staging Rollback Drill
@@ -31,11 +36,8 @@ name: Staging Rollback Drill
 on:
   workflow_dispatch:
     inputs:
-      known_good_url:
-        description: 'Known-good deployment URL (e.g. https://snakpass-xxx-snakzap.vercel.app)'
-        required: true
       known_good_sha:
-        description: 'Known-good commit SHA (for smoke-test.sh checkout)'
+        description: 'Known-good commit SHA (to checkout, build, and deploy)'
         required: true
 
 jobs:
@@ -49,7 +51,7 @@ jobs:
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
     steps:
-      - name: Checkout known-good SHA (for smoke-test.sh)
+      - name: Checkout known-good SHA
         uses: actions/checkout@v4
         with:
           ref: ${{ inputs.known_good_sha }}
@@ -70,6 +72,15 @@ jobs:
           [ -n "$VERCEL_ORG_ID" ] || { echo "❌ VERCEL_ORG_ID NOT_SET"; exit 1; }
           [ -n "$VERCEL_PROJECT_ID" ] || { echo "❌ VERCEL_PROJECT_ID NOT_SET"; exit 1; }
           echo "✅ Secrets present"
+          echo "Known-good SHA: ${{ inputs.known_good_sha }}"
+
+      - name: Link Vercel project + pull config
+        run: |
+          mkdir -p .vercel
+          echo "orgId=\"$VERCEL_ORG_ID\"" > .vercel/project.local
+          echo "projectId=\"$VERCEL_PROJECT_ID\"" >> .vercel/project.local
+          vercel pull --yes --environment=preview --token="$VERCEL_TOKEN"
+          echo "✅ Vercel project linked + config pulled"
 
       - name: T0 — Record rollback initiation
         id: t0
@@ -80,42 +91,38 @@ jobs:
           echo "t0_iso=$T0_ISO" >> $GITHUB_OUTPUT
           echo "═══════════════════════════════════════════════════════════════"
           echo "  ROLLBACK DRILL — T0: Rollback initiated at $T0_ISO"
-          echo "  Known-good URL: ${{ inputs.known_good_url }}"
           echo "  Known-good SHA: ${{ inputs.known_good_sha }}"
           echo "═══════════════════════════════════════════════════════════════"
 
-      - name: Link Vercel project
+      - name: Build known-good code
         run: |
-          mkdir -p .vercel
-          echo "orgId=\"$VERCEL_ORG_ID\"" > .vercel/project.local
-          echo "projectId=\"$VERCEL_PROJECT_ID\"" >> .vercel/project.local
+          echo "=== Building known-good code (SHA: ${{ inputs.known_good_sha }}) ==="
+          vercel build --token="$VERCEL_TOKEN" 2>&1 | tail -5
+          echo "✅ Build complete"
 
-      - name: Execute rollback (vercel redeploy known-good)
+      - name: Deploy known-good build to staging
         id: rollback
         run: |
-          KNOWN_GOOD_URL="${{ inputs.known_good_url }}"
-          echo "=== Executing: vercel redeploy $KNOWN_GOOD_URL ==="
-          
-          # Capture full output
-          REDEPLOY_OUTPUT=$(vercel redeploy "$KNOWN_GOOD_URL" --token="$VERCEL_TOKEN" --yes 2>&1)
-          echo "$REDEPLOY_OUTPUT"
+          echo "=== Deploying known-good build to staging ==="
+          DEPLOY_OUTPUT=$(vercel deploy --prebuilt --token="$VERCEL_TOKEN" \
+            --meta rollback_drill=true \
+            --meta known_good_sha="${{ inputs.known_good_sha }}" \
+            --meta stage=rollback-drill 2>&1)
+          echo "$DEPLOY_OUTPUT"
           
           # Parse the new deployment URL from output
-          # Vercel outputs: "Preview  https://snakpass-xxx-snakzap.vercel.app"
-          NEW_URL=$(echo "$REDEPLOY_OUTPUT" | grep -oE 'https://snakpass-[a-z0-9]+-snakzap\.vercel\.app' | tail -1)
+          NEW_URL=$(echo "$DEPLOY_OUTPUT" | grep -oE 'https://snakpass-[a-z0-9]+-snakzap\.vercel\.app' | tail -1)
           
           if [ -z "$NEW_URL" ]; then
-            echo "❌ Could not parse new deployment URL from vercel redeploy output"
-            echo "::error::Failed to parse redeploy URL"
+            echo "❌ Could not parse new deployment URL from vercel deploy output"
+            echo "::error::Failed to parse deploy URL"
             exit 1
           fi
           
-          echo "::add-mask::$NEW_URL"
           echo "new_url=$NEW_URL" >> $GITHUB_OUTPUT
           echo "✅ New deployment URL: $NEW_URL"
 
       - name: Wait for rolled-back deployment to be READY
-        id: wait
         env:
           NEW_URL: ${{ steps.rollback.outputs.new_url }}
         run: |
@@ -137,7 +144,7 @@ jobs:
             exit 1
           fi
 
-      - name: T1 — Record redeploy complete
+      - name: T1 — Record deployment ready
         id: t1
         run: |
           T1_EPOCH=$(date -u +%s)
@@ -189,20 +196,20 @@ jobs:
           
           # Write timing.env for evidence
           cat > timing.env <<EOF
-          T0_ISO=${{ steps.t0.outputs.t0_iso }}
-          T1_ISO=${{ steps.t1.outputs.t1_iso }}
-          T2_ISO=${{ steps.t2.outputs.t2_iso }}
-          T0_EPOCH=$T0
-          T1_EPOCH=$T1
-          T2_EPOCH=$T2
-          PROMOTE_SECS=$PROMOTE_SECS
-          VERIFY_SECS=$VERIFY_SECS
-          TOTAL_SECS=$TOTAL_SECS
-          BUDGET_SECS=$BUDGET_SECS
-          WITHIN_BUDGET=$WITHIN_BUDGET
-          KNOWN_GOOD_URL=${{ inputs.known_good_url }}
-          ROLLED_BACK_URL=${{ steps.rollback.outputs.new_url }}
-          EOF
+T0_ISO=${{ steps.t0.outputs.t0_iso }}
+T1_ISO=${{ steps.t1.outputs.t1_iso }}
+T2_ISO=${{ steps.t2.outputs.t2_iso }}
+T0_EPOCH=$T0
+T1_EPOCH=$T1
+T2_EPOCH=$T2
+PROMOTE_SECS=$PROMOTE_SECS
+VERIFY_SECS=$VERIFY_SECS
+TOTAL_SECS=$TOTAL_SECS
+BUDGET_SECS=$BUDGET_SECS
+WITHIN_BUDGET=$WITHIN_BUDGET
+KNOWN_GOOD_SHA=${{ inputs.known_good_sha }}
+ROLLED_BACK_URL=${{ steps.rollback.outputs.new_url }}
+EOF
           
           echo ""
           echo "═══════════════════════════════════════════════════════════════"
@@ -212,7 +219,7 @@ jobs:
           echo "  T1 (ready):       ${{ steps.t1.outputs.t1_iso }}"
           echo "  T2 (verified):    ${{ steps.t2.outputs.t2_iso }}"
           echo "  ────────────────────────────────────────────"
-          echo "  Promote (T1-T0):  ${PROMOTE_SECS}s"
+          echo "  Deploy (T1-T0):   ${PROMOTE_SECS}s"
           echo "  Verify (T2-T1):   ${VERIFY_SECS}s"
           echo "  Total (T2-T0):    ${TOTAL_SECS}s / ${BUDGET_SECS}s budget"
           if [ "$WITHIN_BUDGET" = "true" ]; then
