@@ -392,7 +392,7 @@ otp_lockout_test() {
 
   jq -n \
     --argjson ok "$ok" \
-    --argjson s1 "$(jq -n --arg status "$s1" '{ok: ($status == "200"), status: $status}')' \
+    --argjson s1 "$(jq -n --arg status "$s1" '{ok: ($status == "200"), status: $status}')" \
     --argjson s2 "$(jq -n --arg status "$s2" '{ok: ($status == "200"), status: $status}')" \
     --argjson s3 "$(jq -n --arg status "$s3" '{ok: ($status == "200"), status: $status}')" \
     --argjson s4 "$(jq -n --arg status "$s4" '{ok: ($status == "429"), status: $status, description: "4th send rate-limited (max 3 per 10 min)"}')" \
