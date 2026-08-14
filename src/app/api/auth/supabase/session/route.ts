@@ -58,7 +58,7 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
   }
 
   const token = await createSession(user.id, user.role)
-  await setSessionCookie(token)
+  const csrfToken = await setSessionCookie(token)
 
   await db.auditLog.create({
     data: {
@@ -71,5 +71,6 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
 
   return NextResponse.json({
     user: { id: user.id, phone: user.phone, name: user.name, role: user.role, email: user.email ?? email },
+    csrfToken, // P0-14: client must send this in X-CSRF-Token header on state-changing requests
   })
 })

@@ -11,6 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
 import { useRealtime, realtimeSocket } from '@/hooks/use-realtime'
+import { csrfFetch } from '@/lib/csrf-client'
 import { STATUS_META, NEXT_STATUS, inr, timeAgo } from '@/lib/snack'
 import type { MenuItem, Order, Restaurant } from '@/lib/types'
 import { VegBadge, SpiceDots } from './bits'
@@ -74,7 +75,7 @@ export function VendorView() {
       const next = NEXT_STATUS[order.status]
       if (!next) return
       try {
-        const res = await fetch(`/api/orders/${order.id}/status`, {
+        const res = await csrfFetch(`/api/orders/${order.id}/status`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ status: next, actorRole: 'VENDOR_OWNER' }),
@@ -93,7 +94,7 @@ export function VendorView() {
   const cancel = useCallback(
     async (order: Order) => {
       try {
-        await fetch(`/api/orders/${order.id}/status`, {
+        await csrfFetch(`/api/orders/${order.id}/status`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ status: 'CANCELLED', actorRole: 'VENDOR_OWNER' }),
@@ -112,7 +113,7 @@ export function VendorView() {
       const next = !item.isAvailable
       setMenu((m) => m.map((x) => (x.id === item.id ? { ...x, isAvailable: next } : x)))
       try {
-        await fetch(`/api/menu/${item.id}`, {
+        await csrfFetch(`/api/menu/${item.id}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ isAvailable: next }),

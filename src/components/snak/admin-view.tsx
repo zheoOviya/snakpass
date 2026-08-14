@@ -11,6 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
 import { useRealtime, realtimeSocket } from '@/hooks/use-realtime'
+import { csrfFetch } from '@/lib/csrf-client'
 import { STATUS_META, inr, timeAgo } from '@/lib/snack'
 import type { AdminMetrics, AuditLog, KillSwitch, Order } from '@/lib/types'
 
@@ -95,7 +96,7 @@ export function AdminView() {
       const next = !sw.enabled
       setSwitches((s) => s.map((x) => (x.key === sw.key ? { ...x, enabled: next } : x)))
       try {
-        await fetch(`/api/kill-switches/${sw.key}`, {
+        await csrfFetch(`/api/kill-switches/${sw.key}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ enabled: next }),

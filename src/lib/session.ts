@@ -1,6 +1,7 @@
 import { cookies } from 'next/headers'
 import { db } from './db'
 import { randomToken } from './otp-service'
+import { setCsrfCookie } from './csrf'
 
 // Cookie-based session. The session token maps to a Session row in the DB
 // (userId + role + expiry). HttpOnly + SameSite=Lax.
@@ -23,7 +24,11 @@ export async function createSession(userId: string, role: string): Promise<strin
   return token
 }
 
-export async function setSessionCookie(token: string) {
+// Establishes the session cookie AND the CSRF cookie (double-submit pattern).
+// Returns the CSRF token so callers can include it in the response body —
+// the client reads it from the response (and/or the httpOnly=false cookie)
+// and sends it in the X-CSRF-Token header on subsequent state-changing requests.
+export async function setSessionCookie(token: string): Promise<string> {
   const store = await cookies()
   store.set(SESSION_COOKIE, token, {
     httpOnly: true,
@@ -32,11 +37,19 @@ export async function setSessionCookie(token: string) {
     maxAge: SESSION_TTL_DAYS * 24 * 60 * 60,
     secure: process.env.NODE_ENV === 'production',
   })
+  // P0-14: Establish the CSRF cookie at session-creation time so that every
+  // authenticated client automatically has a valid token for the double-submit
+  // pattern. This is the "set" half of the round-trip; the "verify" half is
+  // in src/middleware.ts.
+  const csrfToken = await setCsrfCookie()
+  return csrfToken
 }
 
 export async function clearSessionCookie() {
   const store = await cookies()
   store.delete(SESSION_COOKIE)
+  // Also clear the CSRF cookie on logout
+  store.delete('snakzap_csrf')
 }
 
 export async function getSessionUser(): Promise<SessionUser | null> {

@@ -163,6 +163,94 @@ restaurants_json="$(probe 'restaurants' '/api/restaurants' 200 \
 killswitch_json="$(probe 'kill-switches' '/api/kill-switches' 200 \
   '(.switches | type == "array")')"
 
+# ---- P0-14 CSRF round-trip test --------------------------------------------
+# This closes the GET-only blind spot identified in the Wave-0 governance
+# review. It verifies the full CSRF double-submit round-trip:
+#   1. GET /api/auth/csrf-token → 200 + csrfToken in body + snakzap_csrf cookie
+#   2. POST /api/orders WITHOUT X-CSRF-Token header → 403 (CSRF token required)
+#   3. POST /api/orders WITH X-CSRF-Token header matching cookie → NOT 403
+#      (expected: 401 unauthenticated, or 400 validation error — but NOT 403 CSRF)
+#
+# This proves:
+#   - The CSRF cookie is set (setCsrfCookie is wired)
+#   - Missing CSRF token is rejected (validation is wired)
+#   - Valid CSRF token passes the CSRF check (round-trip works)
+
+csrf_test() {
+  local url="${BASE_URL}/api/auth/csrf-token"
+  local tmp cookie_jar csrf_token_body csrf_token_cookie http_code body_json
+
+  tmp="$(mktemp)"
+  cookie_jar="$(mktemp)"
+
+  # Step 1: GET /api/auth/csrf-token — obtain token + cookie
+  http_code="$(curl -sS -m 15 -o "$tmp" -w '%{http_code}' -c "$cookie_jar" "$url" 2>/dev/null)"
+  local step1_status="$http_code"
+  body_json="$(cat "$tmp" 2>/dev/null || true)"
+  csrf_token_body="$(printf '%s' "$body_json" | jq -r '.csrfToken // empty' 2>/dev/null)"
+  csrf_token_cookie="$(grep 'snakzap_csrf' "$cookie_jar" 2>/dev/null | awk '{print $NF}' | head -1)"
+
+  local step1_ok="false"
+  if [ "$step1_status" = "200" ] && [ -n "$csrf_token_body" ] && [ -n "$csrf_token_cookie" ] \
+     && [ "$csrf_token_body" = "$csrf_token_cookie" ]; then
+    step1_ok="true"
+  fi
+
+  # Step 2: POST /api/orders WITHOUT X-CSRF-Token → expect 403
+  local step2_status step2_body
+  http_code="$(curl -sS -m 15 -o "$tmp" -w '%{http_code}' -b "$cookie_jar" \
+    -X POST "${BASE_URL}/api/orders" \
+    -H 'content-type: application/json' \
+    -d '{}' 2>/dev/null)"
+  step2_status="$http_code"
+  step2_body="$(cat "$tmp" 2>/dev/null || true)"
+
+  local step2_ok="false"
+  if [ "$step2_status" = "403" ]; then
+    step2_ok="true"
+  fi
+
+  # Step 3: POST /api/orders WITH X-CSRF-Token → expect NOT 403 (401 or 400 is fine)
+  local step3_status step3_body
+  http_code="$(curl -sS -m 15 -o "$tmp" -w '%{http_code}' -b "$cookie_jar" \
+    -X POST "${BASE_URL}/api/orders" \
+    -H 'content-type: application/json' \
+    -H "x-csrf-token: $csrf_token_body" \
+    -d '{}' 2>/dev/null)"
+  step3_status="$http_code"
+  step3_body="$(cat "$tmp" 2>/dev/null || true)"
+
+  local step3_ok="false"
+  if [ "$step3_status" != "403" ] && [ "$step3_status" != "000" ] && [ -n "$step3_status" ]; then
+    step3_ok="true"
+  fi
+
+  local csrf_ok="false"
+  if [ "$step1_ok" = "true" ] && [ "$step2_ok" = "true" ] && [ "$step3_ok" = "true" ]; then
+    csrf_ok="true"
+  fi
+
+  rm -f "$tmp" "$cookie_jar"
+
+  # Emit JSON
+  jq -n \
+    --argjson ok "$csrf_ok" \
+    --argjson step1 "$(jq -n --argjson ok "$step1_ok" --arg status "$step1_status" --arg token "${csrf_token_body:-MISSING}" --arg cookie "${csrf_token_cookie:-MISSING}" '{ok: $ok, status: $status, tokenSet: ($token != "MISSING"), cookieSet: ($cookie != "MISSING"), tokenMatchesCookie: ($token == $cookie)}')" \
+    --argjson step2 "$(jq -n --argjson ok "$step2_ok" --arg status "$step2_status" '{ok: $ok, status: $status, expected: 403, description: "POST without X-CSRF-Token header → rejected"}')" \
+    --argjson step3 "$(jq -n --argjson ok "$step3_ok" --arg status "$step3_status" '{ok: $ok, status: $status, expected: "not 403", description: "POST with valid X-CSRF-Token header → passes CSRF check"}')" \
+    '{
+      ok: $ok,
+      description: "P0-14 CSRF double-submit round-trip (GET csrf-token → POST without token 403 → POST with token passes)",
+      steps: {
+        step1_get_csrf_token: $step1,
+        step2_post_without_token: $step2,
+        step3_post_with_valid_token: $step3
+      }
+    }'
+}
+
+csrf_json="$(csrf_test)"
+
 # ---- Aggregate -------------------------------------------------------------
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 started_epoch="$(date -u +%s%3N)"
@@ -185,12 +273,13 @@ final_json="$(jq -n \
   --argjson auth "$auth_json" \
   --argjson rest "$restaurants_json" \
   --argjson ks "$killswitch_json" \
+  --argjson csrf "$csrf_json" \
   --arg baseUrl "$BASE_URL" \
   --arg startedAt "$started_at" \
   --arg finishedAt "$finished_at" \
   --argjson elapsedMs "$elapsed_ms" \
   '{
-    ok: ($health.ok and $auth.ok and $rest.ok and $ks.ok),
+    ok: ($health.ok and $auth.ok and $rest.ok and $ks.ok and $csrf.ok),
     baseUrl: $baseUrl,
     startedAt: $startedAt,
     finishedAt: $finishedAt,
@@ -199,7 +288,8 @@ final_json="$(jq -n \
       "health":        $health,
       "auth-me":       $auth,
       "restaurants":  $rest,
-      "kill-switches": $ks
+      "kill-switches": $ks,
+      "csrf-roundtrip": $csrf
     }
   }')"
 

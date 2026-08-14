@@ -11,6 +11,7 @@ import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
 import { useCart } from '@/lib/cart-store'
+import { csrfFetch } from '@/lib/csrf-client'
 import { useRealtime, realtimeSocket } from '@/hooks/use-realtime'
 import { inr, STATUS_META, timeAgo } from '@/lib/snack'
 import type { MenuItem, Order, Restaurant } from '@/lib/types'
@@ -77,7 +78,7 @@ export function ConsumerView() {
     if (!cart.restaurantId || cart.lines.length === 0) return
     setPlacing(true)
     try {
-      const res = await fetch('/api/orders', {
+      const res = await csrfFetch('/api/orders', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
