@@ -210,12 +210,14 @@ else
     for attempt in 1 2 3 4 5; do
       echo "  --- Attempt $attempt ---"
 
-      # Reset availableCount=1 before each attempt
-      curl -sS -X POST \
-        -H "Authorization: Bearer $SUPABASE_TOKEN" \
-        -H "Content-Type: application/json" \
-        "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
-        -d "$(jq -n --arg q 'UPDATE "MenuItem" SET "availableCount" = 1, "version" = 0 WHERE id = '\''menu-003'\''' '{query: $q}')')" > /dev/null 2>&1
+      # Reset availableCount=1 before each attempt (use --rawfile to avoid escaping)
+      echo 'UPDATE "MenuItem" SET "availableCount" = 1, "version" = 0 WHERE id = '\''menu-003'\''' > /tmp/reset.sql
+      jq -n --rawfile sql /tmp/reset.sql '{query: $sql}' | \
+        curl -sS -X POST \
+          -H "Authorization: Bearer $SUPABASE_TOKEN" \
+          -H "Content-Type: application/json" \
+          "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+          -d @- > /dev/null 2>&1
 
       # Small delay to let the reset propagate
       sleep 0.5
@@ -333,11 +335,13 @@ else
 
     # Reset availableCount to NULL (cleanup)
     echo "  Resetting availableCount to NULL on menu-003..."
-    curl -sS -X POST \
-      -H "Authorization: Bearer $SUPABASE_TOKEN" \
-      -H "Content-Type: application/json" \
-      "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
-      -d "$(jq -n --arg q 'UPDATE "MenuItem" SET "availableCount" = NULL WHERE id = '\''menu-003'\''' '{query: $q}')')" > /dev/null 2>&1
+    echo 'UPDATE "MenuItem" SET "availableCount" = NULL WHERE id = '\''menu-003'\''' > /tmp/cleanup.sql
+    jq -n --rawfile sql /tmp/cleanup.sql '{query: $sql}' | \
+      curl -sS -X POST \
+        -H "Authorization: Bearer $SUPABASE_TOKEN" \
+        -H "Content-Type: application/json" \
+        "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+        -d @- > /dev/null 2>&1
     echo "  ✅ Cleanup complete"
   fi
 fi
