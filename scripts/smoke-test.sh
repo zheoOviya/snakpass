@@ -358,7 +358,9 @@ idempotency_json="$(idempotency_test)"
 # it would pollute the lockout state for the test phone number.
 
 otp_lockout_test() {
-  local test_phone="+919999900001"
+  # Use a unique phone number per run (timestamp-based) to avoid lockout state
+  # carrying over from previous smoke test runs.
+  local test_phone="+9199999$(printf '%06d' $(($(date +%s) % 1000000)))"
   local tmp http_code body
   tmp="$(mktemp)"
 
