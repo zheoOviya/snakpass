@@ -1,0 +1,235 @@
+# =============================================================================
+# P0-27 Phase 2 — Staging Rollback Drill (STAGING ONLY)
+# -----------------------------------------------------------------------------
+# PURPOSE:
+#   Demonstrate the ability to rollback a staging deployment to a known-good
+#   version within the 10-minute P0-27 budget.
+#
+# METHOD:
+#   1. T0 — record rollback initiation timestamp
+#   2. Execute `vercel redeploy <known_good_url>` — creates a new deployment
+#      using the same build output as the known-good deployment (fastest
+#      rollback method — no rebuild required)
+#   3. Wait for the new deployment to become READY
+#   4. T1 — record redeploy complete timestamp
+#   5. Run the 4-endpoint smoke test suite against the rolled-back deployment
+#   6. T2 — record smoke test pass timestamp
+#   7. Assert T2 - T0 ≤ 600 seconds (10-minute budget)
+#
+# SCOPE:
+#   - STAGING ONLY — does NOT touch production
+#   - Uses `vercel redeploy` on a preview deployment URL
+#   - Does NOT modify env vars, database, or governance files
+#
+# REQUIRED INPUTS:
+#   known_good_url  — the Vercel preview URL of the known-good deployment
+#   known_good_sha  — the git commit SHA (for checkout of smoke-test.sh)
+# =============================================================================
+
+name: Staging Rollback Drill
+
+on:
+  workflow_dispatch:
+    inputs:
+      known_good_url:
+        description: 'Known-good deployment URL (e.g. https://snakpass-xxx-snakzap.vercel.app)'
+        required: true
+      known_good_sha:
+        description: 'Known-good commit SHA (for smoke-test.sh checkout)'
+        required: true
+
+jobs:
+  rollback-drill:
+    name: Staging Rollback Drill (T0→T2, ≤10min budget)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+    steps:
+      - name: Checkout known-good SHA (for smoke-test.sh)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.known_good_sha }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Vercel CLI + jq
+        run: |
+          bun add -g vercel@latest
+          sudo apt-get update -qq && sudo apt-get install -y -qq jq curl
+
+      - name: Verify secrets
+        run: |
+          [ -n "$VERCEL_TOKEN" ] || { echo "❌ VERCEL_TOKEN NOT_SET"; exit 1; }
+          [ -n "$VERCEL_ORG_ID" ] || { echo "❌ VERCEL_ORG_ID NOT_SET"; exit 1; }
+          [ -n "$VERCEL_PROJECT_ID" ] || { echo "❌ VERCEL_PROJECT_ID NOT_SET"; exit 1; }
+          echo "✅ Secrets present"
+
+      - name: T0 — Record rollback initiation
+        id: t0
+        run: |
+          T0_EPOCH=$(date -u +%s)
+          T0_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "t0_epoch=$T0_EPOCH" >> $GITHUB_OUTPUT
+          echo "t0_iso=$T0_ISO" >> $GITHUB_OUTPUT
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  ROLLBACK DRILL — T0: Rollback initiated at $T0_ISO"
+          echo "  Known-good URL: ${{ inputs.known_good_url }}"
+          echo "  Known-good SHA: ${{ inputs.known_good_sha }}"
+          echo "═══════════════════════════════════════════════════════════════"
+
+      - name: Link Vercel project
+        run: |
+          mkdir -p .vercel
+          echo "orgId=\"$VERCEL_ORG_ID\"" > .vercel/project.local
+          echo "projectId=\"$VERCEL_PROJECT_ID\"" >> .vercel/project.local
+
+      - name: Execute rollback (vercel redeploy known-good)
+        id: rollback
+        run: |
+          KNOWN_GOOD_URL="${{ inputs.known_good_url }}"
+          echo "=== Executing: vercel redeploy $KNOWN_GOOD_URL ==="
+          
+          # Capture full output
+          REDEPLOY_OUTPUT=$(vercel redeploy "$KNOWN_GOOD_URL" --token="$VERCEL_TOKEN" --yes 2>&1)
+          echo "$REDEPLOY_OUTPUT"
+          
+          # Parse the new deployment URL from output
+          # Vercel outputs: "Preview  https://snakpass-xxx-snakzap.vercel.app"
+          NEW_URL=$(echo "$REDEPLOY_OUTPUT" | grep -oE 'https://snakpass-[a-z0-9]+-snakzap\.vercel\.app' | tail -1)
+          
+          if [ -z "$NEW_URL" ]; then
+            echo "❌ Could not parse new deployment URL from vercel redeploy output"
+            echo "::error::Failed to parse redeploy URL"
+            exit 1
+          fi
+          
+          echo "::add-mask::$NEW_URL"
+          echo "new_url=$NEW_URL" >> $GITHUB_OUTPUT
+          echo "✅ New deployment URL: $NEW_URL"
+
+      - name: Wait for rolled-back deployment to be READY
+        id: wait
+        env:
+          NEW_URL: ${{ steps.rollback.outputs.new_url }}
+        run: |
+          echo "=== Waiting for $NEW_URL to be READY ==="
+          READY="false"
+          for i in $(seq 1 60); do
+            HTTP=$(curl -sS -o /dev/null -w "%{http_code}" "$NEW_URL/api/health" 2>/dev/null || echo "000")
+            echo "  Attempt $i: HTTP $HTTP"
+            if [ "$HTTP" != "000" ] && [ "$HTTP" != "" ]; then
+              echo "✅ Deployment responding (HTTP $HTTP)"
+              READY="true"
+              break
+            fi
+            sleep 3
+          done
+          
+          if [ "$READY" != "true" ]; then
+            echo "❌ Deployment did not become ready within 180s"
+            exit 1
+          fi
+
+      - name: T1 — Record redeploy complete
+        id: t1
+        run: |
+          T1_EPOCH=$(date -u +%s)
+          T1_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "t1_epoch=$T1_EPOCH" >> $GITHUB_OUTPUT
+          echo "t1_iso=$T1_ISO" >> $GITHUB_OUTPUT
+          echo "=== T1: Rolled-back deployment READY at $T1_ISO ==="
+
+      - name: Run smoke tests on rolled-back deployment
+        id: smoke
+        env:
+          BASE_URL: ${{ steps.rollback.outputs.new_url }}
+        run: |
+          chmod +x ./scripts/smoke-test.sh
+          ./scripts/smoke-test.sh "$BASE_URL" > rollback-smoke-results.json
+          echo "===== Smoke test results after rollback ====="
+          cat rollback-smoke-results.json
+          
+          if ! jq -e '.ok == true' rollback-smoke-results.json > /dev/null; then
+            echo "::error::Smoke tests FAILED after rollback"
+            exit 1
+          fi
+          echo "✅ Smoke tests PASSED after rollback"
+
+      - name: T2 — Record smoke test pass
+        id: t2
+        run: |
+          T2_EPOCH=$(date -u +%s)
+          T2_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "t2_epoch=$T2_EPOCH" >> $GITHUB_OUTPUT
+          echo "t2_iso=$T2_ISO" >> $GITHUB_OUTPUT
+          echo "=== T2: Smoke tests PASSED at $T2_ISO ==="
+
+      - name: Assert ≤10-minute budget
+        id: assert
+        env:
+          T0: ${{ steps.t0.outputs.t0_epoch }}
+          T1: ${{ steps.t1.outputs.t1_epoch }}
+          T2: ${{ steps.t2.outputs.t2_epoch }}
+        run: |
+          TOTAL_SECS=$((T2 - T0))
+          PROMOTE_SECS=$((T1 - T0))
+          VERIFY_SECS=$((T2 - T1))
+          BUDGET_SECS=600
+          WITHIN_BUDGET="true"
+          if [ "$TOTAL_SECS" -gt "$BUDGET_SECS" ]; then
+            WITHIN_BUDGET="false"
+          fi
+          
+          # Write timing.env for evidence
+          cat > timing.env <<EOF
+          T0_ISO=${{ steps.t0.outputs.t0_iso }}
+          T1_ISO=${{ steps.t1.outputs.t1_iso }}
+          T2_ISO=${{ steps.t2.outputs.t2_iso }}
+          T0_EPOCH=$T0
+          T1_EPOCH=$T1
+          T2_EPOCH=$T2
+          PROMOTE_SECS=$PROMOTE_SECS
+          VERIFY_SECS=$VERIFY_SECS
+          TOTAL_SECS=$TOTAL_SECS
+          BUDGET_SECS=$BUDGET_SECS
+          WITHIN_BUDGET=$WITHIN_BUDGET
+          KNOWN_GOOD_URL=${{ inputs.known_good_url }}
+          ROLLED_BACK_URL=${{ steps.rollback.outputs.new_url }}
+          EOF
+          
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  ROLLBACK DRILL TIMING"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  T0 (start):       ${{ steps.t0.outputs.t0_iso }}"
+          echo "  T1 (ready):       ${{ steps.t1.outputs.t1_iso }}"
+          echo "  T2 (verified):    ${{ steps.t2.outputs.t2_iso }}"
+          echo "  ────────────────────────────────────────────"
+          echo "  Promote (T1-T0):  ${PROMOTE_SECS}s"
+          echo "  Verify (T2-T1):   ${VERIFY_SECS}s"
+          echo "  Total (T2-T0):    ${TOTAL_SECS}s / ${BUDGET_SECS}s budget"
+          if [ "$WITHIN_BUDGET" = "true" ]; then
+            echo "  ✅ WITHIN 10-MINUTE BUDGET"
+          else
+            echo "  ❌ OVER BUDGET (exceeded by $((TOTAL_SECS - BUDGET_SECS))s)"
+            exit 1
+          fi
+          echo "═══════════════════════════════════════════════════════════════"
+
+      - name: Upload rollback drill evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rollback-drill-evidence
+          path: |
+            rollback-smoke-results.json
+            timing.env
+          retention-days: 90
+          if-no-files-found: warn
