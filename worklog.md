@@ -1708,3 +1708,177 @@ P0-27 Phase 2 staging deployment is COMPLETE. Next gates (NOT yet authorized):
 3. Production deployment (requires production DATABASE_URL fix → snakzap_app, same as preview)
 
 **Note for production**: The production DATABASE_URL on Vercel still uses `postgres` superuser (not snakzap_app). Before any production deployment, the production DATABASE_URL must be updated to use snakzap_app (same fix as preview). This was intentionally NOT done per Orchestrator #7 ("Do NOT change production environment variables").
+
+---
+Task ID: 58 — P0-27 Phase 2 Staging Rollback Drill (AUTHORIZED + EXECUTED)
+Agent: main (IDE)
+Date: 2026-08-14
+Task: Execute Orchestrator-authorized staging-only rollback drill for P0-27 Phase 2. Demonstrate ability to rollback a staging deployment to a known-good version within the 10-minute budget.
+
+## Orchestrator Authorization
+STATUS:
+- P0-27 Phase 2 = STAGING_DEPLOYED ✅
+- Rollback Drill = AUTHORIZED — STAGING ONLY
+- Production = NOT AUTHORIZED
+
+REQUIRED RESULT: rollback completion + health verification ≤ 10 minutes + all smoke tests PASS.
+
+## Rollback Drill Execution
+
+### Phase 1: Establish Known-Good Baseline
+- **Known-good commit**: d2646b6ae837076b79346aa9ff498aa1b4a0d741
+- **Known-good staging URL**: https://snakpass-j4coohqyb-snakzap.vercel.app
+- **Known-good smoke tests**: ALL 4 PASS (health 200, auth/me 401, restaurants 200, kill-switches 200)
+- **Database**: snakzap_app via Transaction Pooler (aws-0-ap-northeast-1.pooler.supabase.com:6543)
+
+### Phase 2: Create Controlled Failure
+- **Bad commit**: 583edb1 (pushed to main)
+- **Controlled failure**: /api/health modified to return HTTP 503 with body:
+  ```json
+  {"status":"down","error":"ROLLBACK_DRILL_CONTROLLED_FAILURE","message":"Controlled failure for P0-27 staging rollback drill. Will be reverted."}
+  ```
+- **Bad staging URL**: https://snakpass-g06c2e7pz-snakzap.vercel.app
+- **Bad staging verification**:
+  - /api/health → **503** (controlled failure ✅)
+  - /api/auth/me → 401 (still works — only health is broken)
+  - /api/restaurants → 200 (still works)
+  - /api/kill-switches → 200 (still works)
+- **Deploy.yml failed** on 583edb1 because smoke tests failed (health 503) — expected behavior confirming the bad state.
+
+### Phase 3: Execute Rollback (T0 → T2)
+- **Workflow**: staging-rollback-drill.yml (workflow_dispatch on SHA 59f2dfb)
+- **Method**: `vercel pull` → T0 → `vercel build` (known-good d2646b6) → `vercel deploy --prebuilt` → wait READY → T1 → smoke tests → T2
+- **GitHub Actions run**: https://github.com/zheoOviya/snakpass/actions/runs/31795241721
+
+#### Timing Results (from timing.env artifact)
+
+| Metric | Value |
+|--------|-------|
+| **T0 (rollback initiated)** | 2026-08-14T11:12:16Z (epoch 1786705936) |
+| **T1 (deployment ready)** | 2026-08-14T11:13:24Z (epoch 1786706004) |
+| **T2 (smoke tests passed)** | 2026-08-14T11:13:27Z (epoch 1786706007) |
+| **Deploy time (T1-T0)** | **68 seconds** |
+| **Verify time (T2-T1)** | **3 seconds** |
+| **Total time (T2-T0)** | **71 seconds** |
+| **Budget** | 600 seconds (10 minutes) |
+| **Within budget** | ✅ **YES** (used 11.8% of budget) |
+
+#### Rolled-Back Deployment
+- **URL**: https://snakpass-bnqgwblp8-snakzap.vercel.app
+- **Built from**: d2646b6ae837076b79346aa9ff498aa1b4a0d741 (known-good)
+- **Meta**: `rollback_drill=true`, `known_good_sha=d2646b6...`, `stage=rollback-drill`
+
+#### Smoke Test Results After Rollback — ALL 4 PASS (`ok: true`)
+
+| Endpoint | HTTP | ok | Detail |
+|----------|------|-----|--------|
+| /api/health | **200** | ✅ | status="degraded", db=ok, realtime=degraded(not-configured) |
+| /api/auth/me | **401** | ✅ | {user: null} (anonymous — correct) |
+| /api/restaurants | **200** | ✅ | 3 restaurants returned |
+| /api/kill-switches | **200** | ✅ | 5 switches returned |
+
+**Overall**: ok = true
+
+### Phase 4: Restore Main to Good State
+- **Revert commit**: 22467a9 (restored /api/health/route.ts to d2646b6 version)
+- **CI on 22467a9**: PASSED ✅
+- **Main is now clean**: /api/health returns to normal (DB check + REALTIME_URL configurable + degraded logic)
+- **All workflow files preserved**: staging-rollback-drill.yml, fix-preview-database-url.yml, disable-vercel-protection.yml, diagnose-db-hostname.yml
+
+## Issues Encountered & Fixed During Rollback Drill
+
+### Issue 1: `vercel redeploy` command failed
+- **Attempt**: `vercel redeploy <known-good-url> --token=$TOKEN --yes`
+- **Result**: exit code 1 (likely requires deployment ID, not URL, or has project-linking differences)
+- **Fix**: Switched to `vercel deploy --prebuilt` (same proven approach as deploy.yml — pull → build → deploy)
+
+### Issue 2: YAML heredoc indentation broke workflow file
+- **Root cause**: `cat > timing.env <<EOF` with unindented content broke the YAML block scalar. GitHub couldn't parse the `workflow_dispatch` trigger.
+- **Fix**: Replaced heredoc with `echo` statements (all properly indented)
+
+## Evidence Artifacts
+
+### Artifact 1: rollback-drill-evidence (ID: 9217122955)
+Contains:
+- `timing.env` — T0/T1/T2 timestamps, epoch values, timing breakdown, within_budget=true
+- `rollback-smoke-results.json` — full smoke test results (ok=true, all 4 checks pass)
+
+### timing.env (full content)
+```
+T0_ISO=2026-08-14T11:12:16Z
+T1_ISO=2026-08-14T11:13:24Z
+T2_ISO=2026-08-14T11:13:27Z
+T0_EPOCH=1786705936
+T1_EPOCH=1786706004
+T2_EPOCH=1786706007
+PROMOTE_SECS=68
+VERIFY_SECS=3
+TOTAL_SECS=71
+BUDGET_SECS=600
+WITHIN_BUDGET=true
+KNOWN_GOOD_SHA=d2646b6ae837076b79346aa9ff498aa1b4a0d741
+ROLLED_BACK_URL=https://snakpass-bnqgwblp8-snakzap.vercel.app
+```
+
+## Compliance with Orchestrator Constraints
+
+| Constraint | Status |
+|-----------|--------|
+| Deploy/identify a known-good staging deployment | ✅ d2646b6 (smoke tests pass) |
+| Create a controlled staging-only failure/change | ✅ 583edb1 (/api/health → 503) |
+| Deploy that version to staging | ✅ https://snakpass-g06c2e7pz-snakzap.vercel.app |
+| Execute rollback to the known-good deployment | ✅ vercel deploy --prebuilt from d2646b6 |
+| Measure T0 → T2 | ✅ 71 seconds |
+| Rollback completion + health verification ≤ 10 minutes | ✅ 71s / 600s budget |
+| Run complete staging smoke-test suite after rollback | ✅ All 4 PASS |
+| Capture deployment IDs, timestamps, rollback result, smoke-test evidence | ✅ timing.env + rollback-smoke-results.json |
+| No production deployment | ✅ Staging only |
+| No production environment-variable changes | ✅ None |
+| No production database migration | ✅ None |
+| No change to DEV-001 / P0-22 evidence or governance files | ✅ None touched |
+| No Fly.io/Railway provisioning | ✅ None |
+| No stateful-service deployment | ✅ None |
+| No Wave-0 closure | ✅ Not performed |
+| No production declaration | ✅ Not performed |
+
+## Decision Rule Outcome
+
+Per Orchestrator's ROLLBACK DRILL SUCCESS rule:
+```
+IF rollback ≤10 minutes AND all required smoke tests PASS:
+    mark P0-27 Phase 2 = ROLLBACK_VERIFIED
+    STOP.
+    Await separate Orchestrator decision for Wave-0 Gate Review.
+```
+
+**RESULT:**
+- Rollback time: 71 seconds ≤ 600 seconds ✅
+- All 4 smoke tests PASS ✅
+- **P0-27 Phase 2 = ROLLBACK_VERIFIED**
+- **STOP.**
+
+## Stage Summary
+- ✅ **Rollback drill SUCCEEDED** — T2-T0 = 71 seconds (11.8% of 10-minute budget)
+- ✅ **All 4 smoke tests PASSED** after rollback (health 200, auth/me 401, restaurants 200, kill-switches 200)
+- ✅ **Known-good deployment restored** — rolled-back URL serving d2646b6 code
+- ✅ **Main restored to good state** — /api/health reverted (commit 22467a9)
+- ✅ **No production touched** — staging only
+- ✅ **No DEV-001/governance files changed** — all frozen files untouched
+- ✅ **Evidence captured** — timing.env + rollback-smoke-results.json artifacts (90-day retention)
+
+## Current Governance State
+```
+DEV-001 / P0-22       ✅ FINAL PASS — CLOSED
+P0-27 Phase 1         ✅ COMPLETE
+Infrastructure Gate   ✅ PASS
+P0-27 Phase 2         ✅ STAGING_DEPLOYED + ROLLBACK_VERIFIED
+Rollback Drill        ✅ PASS (71s / 600s budget)
+Wave-0                🔴 HOLD (awaiting separate Orchestrator decision)
+Wave-1                🔒 LOCKED
+Production            🚫 NOT AUTHORIZED
+```
+
+### Recommendation to Orchestrator
+P0-27 Phase 2 is now **ROLLBACK_VERIFIED**. The staging deployment passes all smoke tests AND the rollback drill completed in 71 seconds (well within the 10-minute budget). Per the Orchestrator's instruction: "STOP. Await separate Orchestrator decision for Wave-0 Gate Review."
+
+No further action is authorized. Awaiting Orchestrator decision on Wave-0 Gate Review.
