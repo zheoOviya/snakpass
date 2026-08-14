@@ -221,19 +221,37 @@ else
       sleep 0.5
 
       # Fire 2 concurrent POST /api/orders for menu-003 (availableCount=1)
+      # Use a FIFO barrier to ensure both curl commands start at EXACTLY the same time.
       CASE_A_IDEM_1="track-b-casea-$(date +%s)-$attempt-a"
       CASE_A_IDEM_2="track-b-casea-$(date +%s)-$attempt-b"
       TMP_C=$(mktemp)
       TMP_D=$(mktemp)
+      BARRIER=$(mktemp -u)
+      mkfifo "$BARRIER"
 
-      create_order "$CASE_A_IDEM_1" "rest-001" "menu-003" 6000 > "$TMP_C" 2>&1 &
+      # Each subshell opens the barrier for read (blocks until data is written)
+      (
+        exec 3<"$BARRIER"
+        create_order "$CASE_A_IDEM_1" "rest-001" "menu-003" 6000 > "$TMP_C" 2>&1
+      ) &
       PID_C=$!
 
-      create_order "$CASE_A_IDEM_2" "rest-001" "menu-003" 6000 > "$TMP_D" 2>&1 &
+      (
+        exec 3<"$BARRIER"
+        create_order "$CASE_A_IDEM_2" "rest-001" "menu-003" 6000 > "$TMP_D" 2>&1
+      ) &
       PID_D=$!
+
+      # Small delay to ensure both subshells are blocked on the barrier
+      sleep 0.2
+
+      # Open the barrier — both curl commands fire simultaneously
+      echo "go" > "$BARRIER" &
+      echo "go" > "$BARRIER" &
 
       wait $PID_C
       wait $PID_D
+      rm -f "$BARRIER"
 
       RESP_C=$(cat "$TMP_C")
       RESP_D=$(cat "$TMP_D")
