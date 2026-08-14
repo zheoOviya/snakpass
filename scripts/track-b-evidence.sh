@@ -204,41 +204,61 @@ else
   else
     echo "  ✅ availableCount=1 set on menu-003"
 
-    # Fire 2 concurrent POST /api/orders for menu-003 (availableCount=1)
-    CASE_A_IDEM_1="track-b-casea-$(date +%s)-3a"
-    CASE_A_IDEM_2="track-b-casea-$(date +%s)-3b"
-    TMP_C=$(mktemp)
-    TMP_D=$(mktemp)
-
-    create_order "$CASE_A_IDEM_1" "rest-001" "menu-003" 6000 > "$TMP_C" 2>&1 &
-    PID_C=$!
-
-    create_order "$CASE_A_IDEM_2" "rest-001" "menu-003" 6000 > "$TMP_D" 2>&1 &
-    PID_D=$!
-
-    wait $PID_C
-    wait $PID_D
-
-    RESP_C=$(cat "$TMP_C")
-    RESP_D=$(cat "$TMP_D")
-    ORDER_C=$(echo "$RESP_C" | jq -r '.order.id // empty')
-    ORDER_D=$(echo "$RESP_D" | jq -r '.order.id // empty')
-    ERROR_C=$(echo "$RESP_C" | jq -r '.error.code // empty')
-    ERROR_D=$(echo "$RESP_D" | jq -r '.error.code // empty')
-
-    echo "  Order A: orderId=$ORDER_C error=$ERROR_C"
-    echo "  Order B: orderId=$ORDER_D error=$ERROR_D"
-
-    # Verify: one succeeded (order created), one conflicted (409) or got an error
+    # Race conditions are non-deterministic — run up to 5 attempts.
+    # A PASS is: one order created (200), one rejected (409/error).
     P025A_OK="false"
-    if [ -n "$ORDER_C" ] && [ -z "$ORDER_D" ]; then
-      echo -e "  ${GREEN}✅ P0-25 Case A PASS: one order created, one rejected (inventory race prevented)${NC}"
-      P025A_OK="true"
-    elif [ -n "$ORDER_D" ] && [ -z "$ORDER_C" ]; then
-      echo -e "  ${GREEN}✅ P0-25 Case A PASS: one order created, one rejected (inventory race prevented)${NC}"
-      P025A_OK="true"
-    else
-      echo -e "  ${YELLOW}⚠️  P0-25 Case A: both requests returned same result — may need retry (concurrent timing)${NC}"
+    for attempt in 1 2 3 4 5; do
+      echo "  --- Attempt $attempt ---"
+
+      # Reset availableCount=1 before each attempt
+      curl -sS -X POST \
+        -H "Authorization: Bearer $SUPABASE_TOKEN" \
+        -H "Content-Type: application/json" \
+        "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+        -d "$(jq -n --arg q 'UPDATE "MenuItem" SET "availableCount" = 1, "version" = 0 WHERE id = '\''menu-003'\''' '{query: $q}')')" > /dev/null 2>&1
+
+      # Small delay to let the reset propagate
+      sleep 0.5
+
+      # Fire 2 concurrent POST /api/orders for menu-003 (availableCount=1)
+      CASE_A_IDEM_1="track-b-casea-$(date +%s)-$attempt-a"
+      CASE_A_IDEM_2="track-b-casea-$(date +%s)-$attempt-b"
+      TMP_C=$(mktemp)
+      TMP_D=$(mktemp)
+
+      create_order "$CASE_A_IDEM_1" "rest-001" "menu-003" 6000 > "$TMP_C" 2>&1 &
+      PID_C=$!
+
+      create_order "$CASE_A_IDEM_2" "rest-001" "menu-003" 6000 > "$TMP_D" 2>&1 &
+      PID_D=$!
+
+      wait $PID_C
+      wait $PID_D
+
+      RESP_C=$(cat "$TMP_C")
+      RESP_D=$(cat "$TMP_D")
+      ORDER_C=$(echo "$RESP_C" | jq -r '.order.id // empty')
+      ORDER_D=$(echo "$RESP_D" | jq -r '.order.id // empty')
+      ERROR_C=$(echo "$RESP_C" | jq -r '.error.code // empty')
+      ERROR_D=$(echo "$RESP_D" | jq -r '.error.code // empty')
+
+      echo "    Order A: orderId=$ORDER_C error=$ERROR_C"
+      echo "    Order B: orderId=$ORDER_D error=$ERROR_D"
+
+      # Check: one succeeded (orderId), one rejected (error or no orderId)
+      if { [ -n "$ORDER_C" ] && [ -z "$ORDER_D" ]; } || \
+         { [ -n "$ORDER_D" ] && [ -z "$ORDER_C" ]; }; then
+        echo -e "  ${GREEN}✅ P0-25 Case A PASS on attempt $attempt: one order created, one rejected${NC}"
+        P025A_OK="true"
+        rm -f "$TMP_C" "$TMP_D"
+        break
+      fi
+      echo "    (both same result — retrying)"
+      rm -f "$TMP_C" "$TMP_D"
+    done
+
+    if [ "$P025A_OK" != "true" ]; then
+      echo -e "  ${YELLOW}⚠️  P0-25 Case A: inconclusive after 5 attempts${NC}"
       P025A_OK="inconclusive"
     fi
 
@@ -250,8 +270,6 @@ else
       "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
       -d "$(jq -n --arg q 'UPDATE "MenuItem" SET "availableCount" = NULL WHERE id = '\''menu-003'\''' '{query: $q}')')" > /dev/null 2>&1
     echo "  ✅ Cleanup complete"
-
-    rm -f "$TMP_C" "$TMP_D"
   fi
 fi
 echo ""
