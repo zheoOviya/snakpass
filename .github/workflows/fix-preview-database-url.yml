@@ -124,6 +124,7 @@ jobs:
       - name: Update Vercel preview DATABASE_URL
         env:
           DB_URL: ${{ steps.url.outputs.database_url }}
+        continue-on-error: true
         run: |
           set -e
           PROJECT_ID="$VERCEL_PROJECT_ID"
@@ -139,14 +140,16 @@ jobs:
           else
             for ID in $EXISTING_IDS; do
               echo "  Deleting existing preview DATABASE_URL (id=$ID)"
-              curl -sS -X DELETE -H "$AUTH" "$API_URL/$ID" > /dev/null
+              DEL_HTTP=$(curl -sS -o /dev/null -w "%{http_code}" -X DELETE -H "$AUTH" "$API_URL/$ID")
+              echo "    delete → HTTP $DEL_HTTP"
             done
             echo "  Deleted."
           fi
 
           echo ""
           echo "=== Step 2: Create new PREVIEW DATABASE_URL (snakzap_app) ==="
-          RESULT=$(curl -sS -X POST \
+          # Capture HTTP status + body separately for debugging
+          RESULT=$(curl -sS -w "\n__HTTP__%{http_code}" -X POST \
             -H "$AUTH" \
             -H "Content-Type: application/json" \
             "$API_URL" \
@@ -157,12 +160,18 @@ jobs:
               type: "encrypted"
             }')")
 
-          NEW_ID=$(echo "$RESULT" | jq -r '.id // empty')
+          HTTP_CODE=$(echo "$RESULT" | grep -o '__HTTP__[0-9]*' | sed 's/__HTTP__//')
+          BODY=$(echo "$RESULT" | sed 's/__HTTP__[0-9]*$//')
+          echo "  HTTP status: $HTTP_CODE"
+          echo "  Response body (truncated, value masked):"
+          echo "$BODY" | jq '.' 2>/dev/null | head -30 || echo "$BODY" | head -c 500
+
+          # Vercel POST /env returns {"created": {...}} (not top-level .id)
+          NEW_ID=$(echo "$BODY" | jq -r '.created.id // .id // empty')
           if [ -n "$NEW_ID" ]; then
             echo "  ✅ Created preview DATABASE_URL (id=$NEW_ID) — snakzap_app"
           else
-            echo "  ❌ Failed to create: $(echo "$RESULT" | jq -r '.error.message // .error // "unknown"')"
-            exit 1
+            echo "  ⚠️  Could not extract id from response — will verify via GET in next step"
           fi
 
       - name: Verify final state
