@@ -139,7 +139,10 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
             body: { error: { code: 'VALIDATION_ERROR', message: `${menuItem.name} is no longer available`, traceId } },
           }
         }
-        // P0-25 Case A: If availableCount is set (not null), check quantity.
+        // P0-25 Case A: If availableCount is set (not null), atomically decrement.
+        // Uses conditional UPDATE (WHERE availableCount >= quantity AND version = X)
+        // to prevent oversell. If the UPDATE affects 0 rows, another concurrent order
+        // won the race → return 409.
         if (menuItem.availableCount !== null) {
           if (menuItem.availableCount < item.quantity) {
             return {
@@ -147,12 +150,28 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
               status: 409,
               body: { error: { code: 'CONFLICT', message: `Only ${menuItem.availableCount} of ${menuItem.name} available`, traceId } },
             }
-            // NOTE: We don't decrement availableCount here yet because there's
-            // a design decision: SnakZap's menu items are "infinitely available"
-            // by default (isAvailable Boolean). availableCount is for limited-stock
-            // items (catering specials, daily specials). The decrement would go
-            // here when that feature is exercised. For now, the isAvailable check
-            // + the transaction's row lock prevent oversell.
+          }
+          // Atomically decrement availableCount.
+          // WHERE availableCount >= quantity ensures we don't go negative.
+          // WHERE version = X ensures optimistic locking (concurrent orders conflict).
+          const decrement = await tx.menuItem.updateMany({
+            where: {
+              id: item.menuItemId,
+              availableCount: { gte: item.quantity },
+              version: menuItem.version,
+            },
+            data: {
+              availableCount: { decrement: item.quantity },
+              version: { increment: 1 },
+            },
+          })
+          if (decrement.count === 0) {
+            // Another concurrent order took the last item — race prevented
+            return {
+              type: 'error' as const,
+              status: 409,
+              body: { error: { code: 'CONFLICT', message: `Item '${menuItem.name}' was sold out by another order. Please retry.`, traceId } },
+            }
           }
         }
       }
