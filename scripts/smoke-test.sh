@@ -319,11 +319,18 @@ idempotency_test() {
 
   rm -f "$tmp" "$cookie_jar"
 
+  # bodiesMatch: compare the two response bodies for exact equality
+  local bodies_match="false"
+  if [ "$step2_body" = "$step3_body" ]; then
+    bodies_match="true"
+  fi
+
   jq -n \
     --argjson ok "$idem_ok" \
-    --argjson step2 "$(jq -n --arg status "$step2_status" '{ok: ($status != "403" and $status != "000"), status: $status, description: "First POST with Idempotency-Key"}')" \
-    --argjson step3 "$(jq -n --arg status "$step3_status" '{ok: ($status != "403" and $status != "000"), status: $status, description: "Replay POST with same Idempotency-Key"}')" \
-    --argjson bodies_match '($ENV.STEP2_BODY == $ENV.STEP3_BODY)' \
+    --argjson step2 "$(jq -n --arg status "$step2_status" --arg ok "$([ "$step2_status" != "403" ] && [ "$step2_status" != "000" ] && echo true || echo false)" '{ok: $ok, status: $status, description: "First POST with Idempotency-Key"}')" \
+    --argjson step3 "$(jq -n --arg status "$step3_status" --arg ok "$([ "$step3_status" != "403" ] && [ "$step3_status" != "000" ] && echo true || echo false)" '{ok: $ok, status: $status, description: "Replay POST with same Idempotency-Key"}')" \
+    --argjson bodies_match "$bodies_match" \
+    --argjson statuses_match "$([ "$step2_status" = "$step3_status" ] && echo true || echo false)" \
     '{
       ok: $ok,
       description: "P0-17 Idempotency — same Idempotency-Key returns same response (dedup)",
@@ -333,11 +340,9 @@ idempotency_test() {
         step3_replay_post: $step3
       },
       dedupWorked: $ok,
-      statusesMatch: ($step2.status == $step3.status),
+      statusesMatch: $statuses_match,
       bodiesMatch: $bodies_match
-    }' \
-    STEP2_BODY="$step2_body" \
-    STEP3_BODY="$step3_body"
+    }'
 }
 
 idempotency_json="$(idempotency_test)"
