@@ -49,23 +49,17 @@ jobs:
           [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN NOT_SET"; exit 1; }
           echo "✅ Secrets present"
 
-      - name: Read migration SQL
-        id: sql
-        run: |
-          SQL=$(cat prisma/scripts/wave1-subwave-1a-migration.sql)
-          echo "sql<<EOF" >> $GITHUB_OUTPUT
-          echo "$SQL" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-          echo "✅ Migration SQL loaded ($(echo "$SQL" | wc -l) lines)"
-
       - name: Apply migration via Supabase Management API
         run: |
           echo "=== Applying Wave-1 1a migration to staging Supabase ==="
-          RESULT=$(curl -sS -X POST \
-            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
-            -H "Content-Type: application/json" \
-            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
-            -d "$(jq -n --arg q '${{ steps.sql.outputs.sql }}' '{query: $q}')")
+          # Use jq -R @csv to safely read the SQL file into a JSON string
+          # (avoids shell escaping issues with $$, (), '', etc. in the SQL)
+          RESULT=$(jq -n --rawfile sql prisma/scripts/wave1-subwave-1a-migration.sql '{query: $sql}' | \
+            curl -sS -X POST \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+              -d @-)
           echo "$RESULT"
           echo "=== Migration complete ==="
 
