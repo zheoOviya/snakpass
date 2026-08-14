@@ -92,6 +92,14 @@ model MenuItem {
   spiceLevel     Int          @default(1) // 0..3 (mild/medium/hot/extra)
   isVeg          Boolean      @default(true)
   isAvailable    Boolean      @default(true)
+  // P0-25 Case A: Inventory race protection.
+  // availableCount tracks remaining quantity (NULL = unlimited availability,
+  // modeled via isAvailable only). When set, concurrent orders must decrement
+  // it atomically inside a transaction.
+  availableCount Int?
+  // P0-25: Optimistic-locking version field. Incremented on every update.
+  // Conditional UPDATE (`WHERE version = X`) prevents last-writer-wins races.
+  version        Int          @default(0)
   category       String       @default("Mains") // Starters | Mains | Breads | Rice | Desserts | Beverages
   createdAt      DateTime     @default(now())
   orderItems     OrderItem[]
@@ -117,6 +125,10 @@ model Order {
   updatedAt      DateTime       @updatedAt
   orderItems     OrderItem[]
   statusHistory  String         @default("[]") // JSON array of {status, at}
+  // P0-25 Case B: State-transition race protection.
+  // Conditional UPDATE (`WHERE version = X`) ensures only one concurrent
+  // status transition succeeds; the other gets 409 Conflict.
+  version        Int            @default(0)
 }
 
 model OrderItem {
@@ -158,4 +170,32 @@ model KillSwitch {
   enabled     Boolean  @default(false)
   severity    String   @default("HIGH") // LOW | MEDIUM | HIGH | CRITICAL
   updatedAt   DateTime @updatedAt
+  // P0-25: Optimistic-locking version field for kill-switch toggles.
+  // Prevents concurrent admin toggles from silently overwriting each other.
+  version     Int      @default(0)
+}
+
+// ----------------------------------------
+// P0-17 — Idempotency key store
+// ----------------------------------------
+// Stores the idempotency key + cached response for critical writes (orders,
+// payments, refunds, status updates). Retries with the same key return the
+// cached response instead of creating a duplicate resource.
+//
+// Usage: client sends `Idempotency-Key` header on POST /api/orders (and
+// future payment routes). The server checks this table inside the same
+// transaction as the business write — if the key exists, return the cached
+// response; else execute the write + store the key + response.
+model IdempotencyKey {
+  id              String   @id @default(cuid())
+  key             String   @unique // the client-provided idempotency key
+  resourceType    String   // e.g. "Order", "Payment" — which resource this key created
+  resourceId      String   // the id of the created resource (for lookup)
+  // Cached response payload (status + body) so retries return the exact same response.
+  responseStatus  Int      // HTTP status code
+  responseBody    String   // JSON-serialized response body
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime // TTL (default 24h); old keys are safe to delete
+
+  @@index([resourceType, resourceId])
 }

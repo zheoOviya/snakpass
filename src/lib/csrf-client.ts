@@ -42,21 +42,55 @@ function isStateChanging(method: string | undefined): boolean {
  * the request is still sent — the server will reject it with 403 if CSRF
  * is required. This matches the double-submit pattern: the server is the
  * source of truth, the client just provides the token if it has one.
+ *
+ * P0-17: For state-changing requests, an idempotency key is auto-generated
+ * (UUID) if not provided in options.idempotencyKey. This ensures retries
+ * (network blips, user double-clicks) are deduped server-side. Pass
+ * `idempotencyKey: null` to disable for a specific request.
  */
 export async function csrfFetch(
   input: string | URL | Request,
-  init: RequestInit = {},
+  init: RequestInit & { idempotencyKey?: string | null } = {},
 ): Promise<Response> {
   const method = typeof init.method === 'string' ? init.method.toUpperCase() : 'GET'
 
-  // Merge headers (don't overwrite caller-provided X-CSRF-Token)
-  const headers = new Headers(init.headers || {})
+  // Extract idempotencyKey (don't pass it to native fetch)
+  const idempotencyKey = init.idempotencyKey
+  const fetchInit: RequestInit = { ...init }
+  delete (fetchInit as { idempotencyKey?: unknown }).idempotencyKey
+
+  // Merge headers (don't overwrite caller-provided X-CSRF-Token or Idempotency-Key)
+  const headers = new Headers(fetchInit.headers || {})
   if (isStateChanging(method)) {
     const token = readCsrfCookie()
     if (token && !headers.has('X-CSRF-Token')) {
       headers.set('X-CSRF-Token', token)
     }
+    // P0-17: Auto-inject idempotency key for state-changing requests.
+    // If caller passes idempotencyKey: null, skip (explicit opt-out).
+    // If caller passes a string, use it (explicit retry of a previous request).
+    // Otherwise, generate a new UUID (default — safe dedup).
+    if (idempotencyKey !== null && !headers.has('Idempotency-Key')) {
+      const key = idempotencyKey ?? generateIdempotencyKey()
+      headers.set('Idempotency-Key', key)
+    }
   }
 
-  return fetch(input, { ...init, headers })
+  return fetch(input, { ...fetchInit, headers })
+}
+
+/**
+ * Generate a UUID v4 idempotency key (uses crypto.randomUUID if available,
+ * falls back to a Math.random-based implementation for older browsers).
+ */
+function generateIdempotencyKey(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  // Fallback: RFC4122 v4 UUID using Math.random
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0
+    const v = c === 'x' ? r : (r & 0x3) | 0x8
+    return v.toString(16)
+  })
 }
