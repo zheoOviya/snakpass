@@ -1,0 +1,302 @@
+     1→# SnakZap Production Readiness Matrix v1.4
+     2→
+     3→> **Document Type:** Specification & Decision Document
+     4→> **Status:** Draft v1.4 — G-B1 resolved (P0-07 expanded, no P0-29); Query A reinterpreted via Direct Protector vs Control/Enabler classification
+     5→> **NOT an implementation plan.** This document defines *what* must be true before SnakZap can serve a real paying customer, *how* each capability must behave under failure, and *how* we will know it is ready. Implementation order, code, and sprints are derived from this — not the other way around.
+     6→
+     7→---
+     8→
+     9→## Document Metadata
+    10→
+    11→| Field | Value |
+    12→|-------|-------|
+    13→| Version | 1.4 |
+    14→| Date | 2026-08-09 |
+    15→| Status | G-B1 resolved; Query A reinterpreted; awaiting Artifact 1 re-run |
+    16→| Baseline | Uploaded audit (`zheo-main.zip` rebuild) + self-audit + stakeholder feedback + Strategic Blueprint cross-reference |
+    17→| Authors | Engineering + Product |
+    18→| Reviewers | (pending formal sign-off) |
+    19→| Supersedes | v1.3 |
+    20→| Next review | After Artifact 1 (P0 Traceability Map) re-runs coverage queries against v1.4 |
+    21→
+    22→---
+    23→
+    24→## Revision History
+    25→
+    26→| Version | Date | Changes | Trigger |
+    27→|---------|------|---------|---------|
+    28→| v1.0 | 2026-08-09 | Initial matrix: 5-question framework, actor's worst day, P0/P1/P2/P3 inventory, 23 P0 capabilities. | Self-audit + stakeholder feedback. |
+    29→| v1.1 | 2026-08-09 | Added 5 new P0 capabilities (P0-24..P0-28): Transactional Data Integrity, Concurrency, DR, Deployment & Rollback, Unknown-Exception. Added 3 sections: Business Invariants, External Dependency Failure Matrix, Capability Lifecycle (8 states). Added G51–G57. | Stakeholder preliminary review — 7 corrections. |
+    30→| v1.2 | 2026-08-09 | Refined P0-24 (idempotent business effect), P0-25 (3 concurrency cases), P0-26 (business recovery), P0-27 (3 deploy classes), P0-28 (3 blast-radius levels). Added invariant IDs I-01..I-12 with `Protects` column. Added `Affected P0` column to dependency matrix. Added lifecycle state `Approved` (9 states). Strengthened launch gate to 6 AND conditions. Added Section 18: Traceability foundation. | Stakeholder architectural review — 10 corrections. |
+    31→| v1.3 | 2026-08-09 | Added invariants I-13 (Pickup/Handoff Integrity) + I-14 (Vendor Operational Integrity). Added 5 Architectural Laws. Added separation of duties for `Approved`. Added launch-gate condition 7 (no expired waiver). Cross-linked Section 10 to Strategic Blueprint risk register. Added observability cross-cutting note. Expanded Section 18: 8 coverage queries (A–H) + Strategic Blueprint feature mapping requirement. Added Q21–Q24. | Stakeholder v1.2 review — conceptually approved, final gate = traceability coverage check. |
+    32→| v1.4 | 2026-08-09 | **G-B1 resolved: expanded P0-07 (Order State Machine Hardening) acceptance criteria** to include 8 pickup-attribution conditions for the PICKED_UP transition (correct order_id, authorized collector, QR/OTP verification, immutable audit event with 5 fields, duplicate-pickup idempotent reject, cross-credential prevention, attribution-failure blocks transition). P0-07 → I-13 mapping now fully owned; **no P0-29 created**. Added 5 new P0-07 test criteria (correct collector, wrong collector, QR/OTP failure, duplicate pickup, attribution/audit persistence). Added P0-07 → P0-22 evidence linkage. **Query A reinterpreted**: introduced **Direct Protector vs Control/Enabler** classification — 10 foundational P0s reclassified as Control/Enablers (they detect/enable, not enforce business truths); `Protects` notation updated from `(foundational)`/`(observability)` to `(Control/Enabler)`. Added **Architectural Law 6**: "An invariant describes a truth that must never be violated; a capability describes the mechanism that enforces or preserves that truth." Updated I-14 wording to be explicit about P1-protection rationale (not launch-blocking financial/security invariant). P0 count unchanged at 28; invariant count unchanged at 14; no new capabilities; no new invariants. | Stakeholder G-B1 decision + Query A interpretation correction. |
+    33→
+    34→---
+    35→
+    36→## 1. Purpose
+    37→
+    38→This matrix exists to answer a single question:
+    39→
+    40→> **"If 10,000 real users and 500 restaurants land on SnakZap tomorrow, where will it break — and what happens when it does?"**
+    41→
+    42→It is deliberately **not** a feature backlog. A feature backlog asks "what's missing?". This matrix asks "what survives contact with reality?".
+    43→
+    44→The matrix is the gate between *demo* and *production*. No capability moves out of "not ready" until its failure path, recovery path, money/trust impact, and observability are all defined AND verified.
+    45→
+    46→---
+    47→
+    48→## 2. Scope
+    49→
+    50→**In scope:**
+    51→- All capabilities required for SnakZap to accept a real payment, fulfil a real pickup order, and recover from any failure along that path.
+    52→- Cross-cutting concerns: auth, payments, orders, fulfilment, notifications, admin control, observability, data integrity.
+    53→- Failure semantics for every P0/P1 capability.
+    54→- Acceptance and test criteria for each.
+    55→
+    56→**Out of scope (for this document):**
+    57→- Implementation details (code, schema, API contracts).
+    58→- Sprint planning, effort estimates, headcount.
+    59→- Marketing, GTM, pricing strategy.
+    60→- P3 capabilities beyond a one-line inventory entry.
+    61→
+    62→---
+    63→
+    64→## 3. Priority Definitions (strict)
+    65→
+    66→A capability's priority is **non-negotiable** and determines review rigour.
+    67→
+    68→### P0 — Cannot Launch Without It
+    69→
+    70→Capabilities whose absence or failure causes **irrecoverable money loss, legal exposure, or permanent trust destruction**. SnakZap cannot accept a single real paying customer until every P0 capability is verified.
+    71→
+    72→**Entry rule:** A capability is P0 only if its **failure path AND recovery path are both defined**. No failure/recovery → cannot be P0 → cannot launch.
+    73→
+    74→### P1 — Must Work Reliably After Launch
+    75→
+    76→Capabilities whose absence degrades the product to the point where users/vendors churn rapidly, but does not immediately destroy money or trust. Must be reliable (not just present) within a short window after launch.
+    77→
+    78→**Entry rule:** Same as P0 — failure + recovery must be defined.
+    79→
+    80→### P2 — Growth / Retention
+    81→
+    82→Capabilities that improve conversion, repeat rate, or unit economics. Launch is possible without them; growth is not.
+    83→
+    84→**Entry rule:** Failure/recovery defined for anything touching money (coupons, wallet). Others need happy path + observability only.
+    85→
+    86→### P3 — Expansion
+    87→
+    88→Capabilities that open new markets or business models. Out of scope for v1 launch; listed for inventory completeness only.
+    89→
+    90→---
+    91→
+    92→## 4. The 5-Question Framework
+    93→
+    94→**Every P0 and P1 capability must answer all five questions.** A capability with any question unanswered is, by definition, *not ready* — regardless of whether the happy path works.
+    95→
+    96→| # | Question | What it forces us to define |
+    97→|---|----------|------------------------------|
+    98→| 1 | **Happy Path** — What should happen in the normal case? | The expected end-to-end behaviour. |
+    99→| 2 | **Failure Path** — What happens when something goes wrong? | Every realistic failure mode and the system's response to each. |
+   100→| 3 | **Recovery Path** — How does the system return to normal? | Manual + automated recovery procedures, data correction, reconciliation. |
+   101→| 4 | **Money / Trust Impact** — If this fails, is money or user trust affected? | Direct financial exposure, refund liability, trust erosion severity. |
+   102→| 5 | **Observability** — How will we know this failed? | Logs, metrics, alerts, dashboards that surface the failure. |
+   103→
+   104→**The rule that makes this real:**
+   105→
+   106→> A capability is "ready" only when all five answers exist **and** the corresponding test criteria pass.
+   107→
+   108→---
+   109→
+   110→## 5. Actor's Worst Day Dimension
+   111→
+   112→A separate, orthogonal lens applied across the matrix. For each actor, we define their worst plausible day and trace which capabilities must hold for the system to survive it. This is **not** a priority level — it is a stress test applied to the matrix itself.
+   113→
+   114→| Actor | Worst Day Scenario | Capabilities That Must Hold |
+   115→|-------|---------------------|------------------------------|
+   116→| **Consumer** | Paid ₹500, app crashed, no idea if order went through. Re-opens to find no order, no refund path, no support contact. | Payment idempotency, order-payment state separation, reconciliation, refund-on-failed-order, support surface, push/email confirmation as out-of-band receipt. |
+   117→| **Vendor** | Sunday evening, 30 orders hit at once, kitchen overloaded, 2 payments captured but orders stuck, no way to pause intake. | Vendor busy-mode / pause new orders, order queue load handling, payment-order reconciliation surfacing the mismatch, exception queue alert to admin. |
+   118→| **Admin** | Razorpay partial outage, 200 payments in limbo, support tickets piling up, no idea which orders are safe to fulfil. | Payment reconciliation dashboard, exception queue with bulk actions, kill switch for order intake, audit trail of every manual override. |
+   119→| **Backend / Platform** | Database unavailable for 30 seconds mid-payment; webhook retries arrive 3×; double-click on "Pay". | Idempotency on all critical writes, webhook dedup, queue-based payment finalisation, retry-with-backoff, health checks + alerts. |
+   120→| **Finance / Compliance** | GST invoice missing for a captured payment; refund issued but ledger not updated; settlement doesn't reconcile with gateway. | Double-entry payment ledger, invoice generation tied to capture event, refund ledger entry, daily reconciliation report. |
+   121→
+   122→**Usage rule:** Before signing off any P0 capability, trace it through every actor's worst day. If a capability is implicated in a worst-day scenario and is not P0, escalate it.
+   123→
+   124→---
+   125→
+   126→## 6. Starting Inventory (from uploaded audit)
+   127→
+   128→These gaps were identified during the rebuild audit and form the **starting inventory** of the matrix. They are **not** the full matrix — the matrix below adds failure semantics, dependencies, and capabilities the audit did not surface.
+   129→
+   130→| # | Gap (from audit) | Provisional Priority |
+   131→|---|------------------|----------------------|
+   132→| G1 | No payment system (fake "Paid") | P0 |
+   133→| G2 | Server-side Firebase ID token not verified | P0 |
+   134→| G3 | No Zod input validation on APIs | P0 |
+   135→| G4 | No rate limiting | P0 |
+   136→| G5 | No idempotency on critical writes | P0 |
+   137→| G6 | Single order status (no payment/fulfilment/refund separation) | P0 |
+   138→| G7 | No refund/cancellation flow | P0 |
+   139→| G8 | No webhook integrity (HMAC, dedup) | P0 |
+   140→| G9 | No audit trail integrity guarantees | P0 |
+   141→| G10 | `db:push` instead of migrations | P0 |
+   142→| G11 | No backup/recovery | P0 |
+   143→| G12 | No structured logging / monitoring / alerts | P0 |
+   144→| G13 | No error boundaries / consistent error responses | P0 |
+   145→| G14 | Cart not re-validated at checkout | P1 |
+   146→| G15 | No ETA estimation | P1 |
+   147→| G16 | No push notifications | P1 |
+   148→| G17 | No email notifications / receipts | P1 |
+   149→| G18 | No GST invoice | P1 |
+   150→| G19 | No vendor busy-mode / pause | P1 |
+   151→| G20 | No vendor menu CRUD | P1 |
+   152→| G21 | No vendor settlement dashboard | P1 |
+   153→| G22 | No vendor customer intelligence | P1 |
+   154→| G23 | No restaurant discovery / ranking / location | P1 |
+   155→| G24 | No admin exception queue | P1 |
+   156→| G25 | No admin user/vendor lifecycle management | P1 |
+   157→| G26 | No admin dispute resolution | P1 |
+   158→| G27 | No consumer profile / address | P1 |
+   159→| G28 | No real-time reconnect / missed-event sync | P1 |
+   160→| G29 | No PWA (service worker, offline) | P1 |
+   161→| G30 | No i18n (en/hi) | P1 |
+   162→| G31 | Dark mode toggle lost | P1 |
+   163→| G32 | No notification event system | P1 |
+   164→| G33 | No tests | P0 (for P0 capabilities) / P1 (for P1) |
+   165→| G34 | No loyalty / stamps / streaks / referrals | P2 |
+   166→| G35 | No coupons / promotions | P2 |
+   167→| G36 | No wallet / cashback | P2 |
+   168→| G37 | No ratings / reviews | P2 |
+   169→| G38 | No favourites | P2 |
+   170→| G39 | No reorder | P2 |
+   171→| G40 | No personalization (spice tolerance, history) | P2 |
+   172→| G41 | No AI food images (currently SVG) | P2 |
+   173→| G42 | No analytics custom events | P2 |
+   174→| G43 | No group orders | P3 |
+   175→| G44 | No catering (UI missing; backend exists) | P3 |
+   176→| G45 | No POS integration (Petpooja) | P3 |
+   177→| G46 | No multi-outlet chains | P3 |
+   178→| G47 | No heatmap | P3 |
+   179→| G48 | No watch API | P3 |
+   180→| G49 | No geo-fence auto check-in | P3 |
+   181→| G50 | No A/B testing framework | P3 |
+   182→| G51 | No transactional data integrity (cross-entity consistency) | P0 |
+   183→| G52 | No concurrency / race-condition handling on money + order writes | P0 |
+   184→| G53 | Disaster recovery not separated from backup (no RPO/RTO/restore drill) | P0 |
+   185→| G54 | No deployment / rollback capability | P0 |
+   186→| G55 | No external-dependency failure strategy (fail-open vs fail-closed per dependency) | P0 |
+   187→| G56 | No explicit business invariants (state-machine laws) | P0 |
+   188→| G57 | No unknown-exception handling (unclassified states silently ignored) | P0 |
+   189→
+   190→---
+   191→
+   192→## 7. The Matrix
+   193→
+   194→Columns: **ID | Domain | Capability | Failure Scenario | Dependency | Acceptance Criteria | Test Criteria | Protects (Invariants) | Owner**
+   195→
+   196→### 7.1 P0 — Cannot Launch Without It
+   197→
+   198→The `Protects` column lists which Business Invariants (Section 9) the capability is responsible for upholding. A capability may not reach `Production-ready` until every invariant it protects is verified.
+   199→
+   200→**Capability classification (v1.4):** Every P0 is one of two types:
+   201→- **Direct Protector** — a capability that *enforces* one or more business invariants directly (e.g. P0-01 enforces I-01 Payment Integrity by rejecting unsigned captures). Its `Protects` column lists specific I-xx IDs.
+   202→- **Control/Enabler** — a capability that *detects, enables, or preserves* the system but does not enforce a specific business truth (e.g. P0-19 logging detects failures but does not enforce payment integrity; P0-15 migrations preserve schema but do not enforce any single invariant). Its `Protects` column reads `(Control/Enabler)`.
+   203→
+   204→This distinction matters for Coverage Query A (Section 18.5): a Direct Protector must map to ≥1 specific invariant; a Control/Enabler legitimately does not. Calling observability an "indirect protector of I-01" would distort the architecture — observability detects I-01 violations, it does not enforce them. The classification keeps ownership honest.
+   205→
+   206→**Architectural Law 6 (v1.4):** *An invariant describes a truth that must never be violated; a capability describes the mechanism that enforces or preserves that truth.* Direct Protectors enforce; Control/Enablers preserve the conditions under which Direct Protectors can function. Both are P0; their relationship to invariants differs.
+   207→
+   208→| ID | Domain | Capability | Failure Scenario | Dependency | Acceptance Criteria | Test Criteria | Protects | Owner |
+   209→|----|--------|------------|------------------|------------|---------------------|---------------|----------|-------|
+   210→| P0-01 | Payment | Razorpay order create + verify + capture | Gateway timeout / signature mismatch / double Pay click | Razorpay SDK, Payment model | Every payment has a verifiable captured state; no payment captured without verified signature | Idempotency test; signature-tamper test; double-submit test | I-01, I-04 | Backend |
+   211→| P0-02 | Payment | Payment ledger (double-entry) | Ledger write fails after capture | Payment model, DB txn | Every captured payment has matching ledger entries; ledger is append-only | Ledger integrity test; partial-failure test | I-06, I-10 | Backend |
+   212→| P0-03 | Payment | Payment reconciliation (gateway ↔ ledger) | Gateway says captured, DB says failed | Payment + scheduled job | Daily reconciliation report; mismatches surface in exception queue within 1 hour | Reconciliation job test; mismatch injection test | I-01, I-06 | Backend |
+   213→| P0-04 | Payment | Refund flow (full + partial) | Refund requested but gateway down / partial refund mismatch | Payment + Razorpay refund API | Refund has its own status lifecycle; partial refunds tracked; ledger updated atomically | Refund lifecycle test; partial-refund test; refund-during-outage test | I-03, I-06, I-11 | Backend |
+   214→| P0-05 | Payment | Webhook integrity (HMAC + idempotent) | Duplicate webhook / tampered signature / out-of-order | Payment + webhook endpoint | Duplicate webhooks deduped; tampered rejected; out-of-order handled | Duplicate injection test; signature tamper test; reorder test | I-01, I-04 | Backend |
+   215→| P0-06 | Order | State separation (Order / Payment / Fulfilment / Refund) | Order cancelled but payment captured | Order + Payment + Fulfilment + Refund models | Each dimension evolves independently; inconsistent combos surfaced in exception queue | State-transition matrix test; inconsistent-state detection test | I-01, I-02, I-08 | Backend |
+   216→| P0-07 | Order | Order state machine hardening | Invalid transition attempted / concurrent updates | Order model + optimistic locking | Invalid transitions rejected; concurrent updates serialised; PICKED_UP transition requires pickup verification (QR+OTP) per I-13 | Concurrency test; invalid-transition test; pickup-verification test | I-02, I-08, I-13 | Backend |
+   217→| P0-08 | Order | Idempotency on order creation | Double submit / retry storm | Order model + idempotency key | Same idempotency key returns same order; no duplicate orders created | Idempotency-key test; retry-storm test | I-02, I-10 | Backend |
+   218→| P0-09 | Auth | Server-side Firebase ID token verification | Forged client identity / expired token | Firebase Admin SDK + session | Server rejects unverified identity; sessions bound to verified phone | Token-forgery test; expired-token test | I-12 | Backend |
+   219→| P0-10 | Auth | Session integrity (refresh, revoke, active sessions) | Stolen session token / user logs out elsewhere | Session model | Sessions expireable, revocable; active-sessions list available | Session-revoke test; concurrent-session test | I-12 | Backend |
+   220→| P0-11 | Auth | OTP retry limits + phone validation | OTP brute-force / invalid phone format | OTP service + rate limiter | Max 5 OTP attempts / 3 sends per 10 min; phone E.164 validated | Brute-force test; invalid-phone test | I-12 | Backend |
+   221→| P0-12 | Security | Zod input validation on every API | Malformed payload / type confusion | Zod schemas per route | No API accepts unvalidated input; 400 on schema mismatch | Fuzz test per route; schema-mismatch test | (Control/Enabler) | Backend |
+   222→| P0-13 | Security | Rate limiting (fail-closed for auth/payment/admin-write) | Redis down / abuse burst | Rate limiter (Redis or in-memory fallback) | Auth/payment/admin-write return 503 when limiter unavailable; general API fail-open | Fail-closed test; burst test | (Control/Enabler; enables P0-09..P0-11 to function safely) | Backend |
+   223→| P0-14 | Security | CSRF protection | Cross-site forged POST | CSRF token + SameSite cookie | State-changing POSTs require valid CSRF token | CSRF injection test | (Control/Enabler; enables all state-changing writes to be safe) | Backend |
+   224→| P0-15 | Data | Database migrations (not `db:push`) | Schema drift / data loss on deploy | Prisma migrate + review process | Every schema change ships as reviewed migration; no data-destructive push | Migration rollback test; drift detection test | (Control/Enabler) | Backend |
+   225→| P0-16 | Data | Backup | DB corruption / accidental delete | Backup schedule + corruption-detection | Daily backups; corruption-detection checksum on every backup; backup integrity verified | Backup-integrity test; corruption-detection test | (Control/Enabler) | Backend |
+   226→| P0-17 | Reliability | Idempotency on all critical writes | Retry storm / partial failure | Idempotency key on orders, payments, refunds, status updates | All critical writes idempotent; retries return same result | Idempotency test per critical write | I-04, I-10 | Backend |
+   227→| P0-18 | Reliability | Error handling (boundaries + consistent responses) | Unhandled exception / partial response | Error boundaries + error envelope | Every API returns consistent error envelope; UI shows actionable errors | Error-injection test per route | (Control/Enabler) | Full-stack |
+   228→| P0-19 | Observability | Structured logging | Silent failure / untraceable error | Logger (structured JSON) | Every critical path logs structured event with trace id | Log-coverage test | (Control/Enabler) | Backend |
+   229→| P0-20 | Observability | Health checks + basic metrics | Service silently degraded | Health endpoint + metrics export | `/health` reflects DB + Redis + gateway status; metrics exported | Health-probe test; metric-coverage test | (Control/Enabler) | Backend |
+   230→| P0-21 | Observability | Alerting on P0 failures | Payment success rate < 95% / reconciliation mismatch | Alert rules + on-call | Alerts fire on defined thresholds; false-positive rate < 5% | Alert-trigger test; false-positive audit | (Control/Enabler) | Backend |
+   231→| P0-22 | Audit | Audit trail integrity (immutable, complete) | Tampered audit log / missing entry | Audit model + append-only storage | Audit entries immutable; every admin/financial action audited | Tamper test; coverage test | I-07 | Backend |
+   232→| P0-23 | Governance | Kill switch fail-safe behaviour | Kill switch itself fails | Kill switch + fallback | Kill switch defaults to safe state on failure; toggles audited | Kill-switch-failure test | I-09 | Backend |
+   233→| P0-24 | Data | Transactional data integrity (cross-entity) — see detailed breakdown | Order + items + payment + availability + audit event partially commit; outbox publisher crashes after commit | DB transactions + outbox pattern | Committed business transaction eventually produces its required event with **idempotent business effect** (exactly-once in business outcome, even if physical delivery occurs more than once); no orphan entities; no partial commits | Partial-failure injection test; outbox-crash test; idempotent-replay test | I-01, I-02, I-05, I-06, I-10 | Backend |
+   234→| P0-25 | Reliability | Concurrency + duplicate-execution control — see detailed breakdown | (A) last-item inventory race; (B) state-transition race (vendor ACCEPT→CANCEL while admin CANCEL→OVERRIDE); (C) payment double-click / frontend retry | Optimistic locking + row-level locks + atomic decrements + idempotency keys | Concurrent writes serialised; no oversell; conflicts surface as retry/conflict not silent corruption; duplicate executions are deduped, not double-applied | Concurrency case A (last-item); case B (state-transition); case C (payment duplicate); optimistic-lock conflict test | I-02, I-04, I-05, I-10 | Backend |
+   235→| P0-26 | Data | Disaster recovery (business recovery, not just DB restore) — see detailed breakdown | DB corruption / regional failure / restore leaves payments-in-gateway inconsistent with restored DB | Backup + restore drill + post-restore reconciliation + documented runbook | RPO ≤ 24h, RTO ≤ 4h; restore drill passes monthly; **post-restore business-state reconciliation**: gateway payments re-synced to restored DB (captured-but-DB-pending → reconciled or refunded); audit log re-verified; **NO-GO if any money state unresolved post-restore** | Restore-drill test; corruption-detection test; post-restore reconciliation test; runbook walkthrough | I-01, I-02, I-06, I-07, I-10 | Backend |
+   236→| P0-27 | Reliability | Deployment & rollback (3 classes) — see detailed breakdown | Bad release / migration incompatibility / failed deploy / DB rollback unsafe | CI/CD + health-checked deploy + feature flags + 3 deployment classes | Application rollback ≤ 10 min for backward-compatible deploys; **expand-migrate-contract** for schema changes (no breaking migration without contract phase); breaking deploys gated + flagged; failed deploy auto-aborts; **DB rollback never assumed safe — contract migrations preserve old-version compatibility** | Rollback drill test (per class); expand-migrate-contract test; migration-compatibility test; failed-deploy-abort test | (Control/Enabler) | Backend |
+   237→| P0-28 | Admin | Unknown-exception handling (3 blast-radius levels) — see detailed breakdown | System reaches a state not in known state machine | Invariant checker + 3-level blast-radius freeze + exception queue + alert | Unknown state triggers the **smallest sufficient** freeze level (transaction / entity / system kill switch), preserves evidence, creates exception queue entry, alerts; never silently ignored; never over-freezes (one malformed order does not stop the platform) | Unknown-state injection at each blast-radius level; freeze-precision test; over-freeze-prevention test | I-01..I-14 (all) | Backend |
+   238→
+   239→### 7.2 P1 — Must Work Reliably After Launch
+   240→
+   241→| Priority | Domain | Capability | Failure Scenario | Dependency | Acceptance Criteria | Test Criteria | Owner |
+   242→|----------|--------|------------|------------------|------------|---------------------|---------------|-------|
+   243→| P1 | Vendor Ops | Busy mode / pause new orders | 30 simultaneous orders / kitchen overload | Vendor + Order intake | Vendor can pause new orders; existing orders unaffected; auto-resume optional | Load test; pause/resume test | Vendor |
+   244→| P1 | Vendor Ops | Prep-time override | Vendor sets +15 min | Order + ETA | Override reflected in consumer ETA; expires after order | Override test; expiry test | Vendor |
+   245→| P1 | Vendor Ops | Menu CRUD | Vendor edits price mid-cart | Menu + cart re-validation | Price change does not silently affect existing carts; cart re-validated at checkout | Mid-cart-edit test; re-validation test | Vendor |
+   246→| P1 | Vendor Ops | Order accept/reject flow | Vendor rejects after payment captured | Order + Payment + Refund | Rejection after capture triggers auto-refund; consumer notified | Accept/reject test; post-capture-reject test | Vendor |
+   247→| P1 | Vendor Ops | Settlement dashboard | Settlement mismatch | Payment + settlement job | Daily settlement matches ledger; discrepancies surfaced | Settlement-reconciliation test | Vendor |
+   248→| P1 | Vendor Ops | Customer intelligence (privacy-controlled) | PII leakage | Aggregation + privacy filter | Vendor sees aggregated stats only; no raw PII export | Privacy-leak test; aggregation test | Vendor |
+   249→| P1 | Discovery | Restaurant ranking + location engine | Bad ranking / no location | Geo + ranking service | Ranking considers distance, rating, availability, prep time, popularity | Ranking-regression test; location test | Backend |
+   250→| P1 | Cart | Cart re-validation at checkout | Price changed / item unavailable / restaurant closed | Cart + menu + restaurant state | Checkout blocked with clear reason if any line invalid; stale cart surfaced | Re-validation test per failure mode | Full-stack |
+   251→| P1 | Fulfilment | ETA estimation | ETA wildly wrong | Prep time + queue depth + historical | ETA within ±5 min of actual 80% of the time | ETA-accuracy test | Backend |
+   252→| P1 | Notifications | Push notifications (FCM) | Notification not delivered | FCM + token management | Token refresh handled; delivery confirmed via callback; fallback to email | FCM-failure test; fallback test | Backend |
+   253→| P1 | Notifications | Email notifications (confirmation, receipt) | Email bounced / marked spam | Email service + template | Bounces tracked; critical emails retried; spam-rate monitored | Bounce test; retry test | Backend |
+   254→| P1 | Notifications | Notification event system | One event, multiple consumers diverge | Event bus + subscribers | Single event triggers all intended consumers consistently | Event-fanout test; consumer-divergence test | Backend |
+   255→| P1 | Receipts | GST-compliant invoice generation | Invoice missing / wrong GST | Invoice service + GST config | Every captured payment has an invoice; GST calculated per rules | Invoice-coverage test; GST-calc test | Backend |
+   256→| P1 | Admin | Exception queue | 200 stuck payments | Payment + Admin + bulk actions | All unresolved exceptions visible; bulk actions available; audit logged | Failure-injection test; bulk-action test | Admin |
+   257→| P1 | Admin | User / vendor lifecycle management | Wrong suspension / no audit | Admin + audit | Suspend/reactivate audited; affected orders handled | Suspension test; audit test | Admin |
+   258→| P1 | Admin | Dispute resolution workflow | Dispute stuck / no SLA | Dispute model + SLA timer | Disputes tracked with SLA; resolution audited; refund linked | Dispute-lifecycle test; SLA-breach test | Admin |
+   259→| P1 | Consumer | Profile management | Profile edit breaks session | User model + session | Profile edits don't invalidate session; phone change re-verifies | Profile-edit test; phone-change test | Full-stack |
+   260→| P1 | Consumer | Address management | Address used for wrong restaurant | Address + restaurant geo | Address validated against restaurant pickup location | Address-validation test | Full-stack |
+   261→| P1 | Realtime | Reconnect + missed-event sync | Socket drops, events lost | Socket + event log | Reconnect fetches missed events since last-seen; no silent gaps | Reconnect test; missed-event test | Full-stack |
+   262→| P1 | PWA | Service worker + offline page | SW fails to register / offline broken | SW + manifest + offline fallback | App installable; offline shows graceful fallback, not blank | Offline test; install test | Frontend |
+   263→| P1 | i18n | en/hi translations | Missing key / wrong locale | i18n loader + locale detection | All user-facing strings translated; locale persisted | Key-coverage test; locale-switch test | Frontend |
+   264→| P1 | UX | Dark mode restore | Toggle missing / flash on load | Theme provider + persistence | Toggle present; no flash; persisted across sessions | Theme-persistence test | Frontend |
+   265→| P1 | Observability | Traces (latency diagnosis) | Latency spike, no trace | Distributed tracing | Critical paths traced; p95 latency visible | Trace-coverage test | Backend |
+   266→
+   267→### 7.3 P2 — Growth / Retention
+   268→
+   269→| Priority | Domain | Capability | Failure Scenario | Acceptance Criteria | Owner |
+   270→|----------|--------|------------|------------------|---------------------|-------|
+   271→| P2 | Retention | Reorder | Stale menu breaks reorder | Reorder validates current menu/price | Full-stack |
+   272→| P2 | Retention | Ratings / reviews | Fake review / review bombing | Fraud-screened; rate-limited | Full-stack |
+   273→| P2 | Retention | Favourites | Favourite points to deleted restaurant | Soft-delete; graceful fallback | Full-stack |
+   274→| P2 | Retention | Loyalty (stamps, streaks, points) | Point balance drift | Ledger-backed; auditable | Backend |
+   275→| P2 | Growth | Coupons / promotions | Coupon abuse / expired coupon | Fraud-screened; expiry enforced | Backend |
+   276→| P2 | Growth | Referral system | Self-referral / fake accounts | Fraud-screened; device/phone dedup | Backend |
+   277→| P2 | Personalization | Spice tolerance, history-based | Filter bubble / stale profile | Anti-filter-bubble guardrail | Backend |
+   278→| P2 | Polish | AI food images | Image missing / inconsistent | Fallback to SVG; consistent style template | Frontend |
+   279→| P2 | Insights | Heatmaps | Stale data / privacy leak | Aggregated; TTL-enforced | Backend |
+   280→| P2 | Wallet | Cashback + ledger | Ledger imbalance | Double-entry; reconciled | Backend |
+   281→| P2 | Analytics | Custom events | Event schema drift | Schema-validated events | Frontend |
+   282→
+   283→### 7.4 P3 — Expansion (inventory only)
+   284→
+   285→Group orders · Catering (separate workflow: Inquiry → Quote → Advance → Fulfil → Final) · POS integration (Petpooja) · Multi-outlet chains · Advanced analytics (CAC/LTV, cohort) · Watch API · Geo-fence auto check-in · 24h cart persistence · A/B testing framework.
+   286→
+   287→*Failure/recovery definitions deferred until promoted to P1/P2.*
+   288→
+   289→---
+   290→
+   291→## 8. Detailed 5-Question Breakdowns (P0 + P1)
+   292→
+   293→Each capability below has all five questions answered. A capability is **not ready** until the corresponding test criteria pass.
+   294→
+   295→### P0-1 · Razorpay Payment Create + Verify + Capture
+   296→
+   297→1. **Happy Path:** Consumer places order → backend creates Razorpay order → Checkout SDK opens → user pays → `payment.success` → backend verifies signature → marks Payment CAPTURED → marks Order CONFIRMED → emits `ORDER_CONFIRMED` event.
+   298→2. **Failure Path:**
+   299→   - Gateway timeout during order create → rollback order to PAYMENT_PENDING; consumer sees retry.
+   300→   - Signature mismatch → reject; do not capture; alert; consumer sees "payment failed, try again".
+
+[showing lines 1-300 of 1025; use offset=301 with limit to continue reading]

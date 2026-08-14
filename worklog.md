@@ -1882,3 +1882,136 @@ Production            🚫 NOT AUTHORIZED
 P0-27 Phase 2 is now **ROLLBACK_VERIFIED**. The staging deployment passes all smoke tests AND the rollback drill completed in 71 seconds (well within the 10-minute budget). Per the Orchestrator's instruction: "STOP. Await separate Orchestrator decision for Wave-0 Gate Review."
 
 No further action is authorized. Awaiting Orchestrator decision on Wave-0 Gate Review.
+
+---
+Task ID: WAVE0-1
+Agent: Explore (research)
+Task: Gather P0-27 acceptance criteria + all P0 item statuses for Wave-0 Gate Review
+
+Work Log:
+- Read worklog.md (full 1885 lines; focused on Task IDs 52-58: P0-27 Phase 2 staging deployment + rollback drill + DEV-001 closure diagnostic + GH review).
+- Read /home/z/my-project/P0-27-PHASE2-REMEDIATION.md (Task 55 remediation report — 14 sections; established staging-deploy + rollback-drill + smoke-test artifacts + Supabase pooler strategy).
+- Read /home/z/my-project/INFRASTRUCTURE_READINESS.md (Task 56 — 17 blockers inventory; 8 staging-blocking + 1 MAYBE-blocking + 8 Phase-3-deferred; final verdict READY at repository-local layer, BLOCKED at runtime provisioning layer).
+- Read /home/z/my-project/WAVE0_EVIDENCE.md (pre-acceptance evidence for 11 non-deviation Wave-0 P0s; classified 8 operationally evidenced / 2 operational gap / 3 environment-blocked).
+- Read /home/z/my-project/PRODUCTION_READINESS_MATRIX.md (v1.4 — 28 P0 capabilities; 14 invariants I-01..I-14; 7 AND-condition launch gate; P0-27 detailed 5-question breakdown + 3 deployment classes).
+- Read /home/z/my-project/P0_TRACEABILITY_MAP.md (Artifact 1 FINAL; 8 coverage queries A-H; Queries A,B,D PASS; C,E,F STRUCTURAL PASS; G,H FAIL pending implementation).
+- Read /home/z/my-project/DEV-001-CLOSURE.md (PostgreSQL WORM closure runbook; 5 tamper tests; role separation snakzap_admin vs snakzap_app).
+- Read /home/z/my-project/DEVIATION_LOG.md (DEV-001: CLOSED FINAL PASS 2026-08-13 via PostgreSQL REVOKE; DEV-002: CLOSED via Supabase/JWKS migration).
+- Read /home/z/my-project/GH_REVIEW_DEV001.md (Independent G/H review — verdict ACCEPT_WITH_CONDITIONS → conditions met → FINAL PASS; 5 conditions documented, Conditions 1+2 BLOCKING, Conditions 3+4+5 non-blocking).
+- Read /home/z/my-project/IMPLEMENTATION_LOG.md (Sprint 1 Wave-0 lifecycle tracker — 13 Wave-0 P0s with S4 Implemented status; P0-09/22 marked NOT Production-ready pending deviation closure).
+- Cross-referenced Task 57 (staging deployment SUCCESS, smoke tests 4/4 PASS, snakzap_app role confirmed via psql) and Task 58 (rollback drill SUCCESS, T2-T0=71s vs 600s budget, 4/4 smoke tests PASS) in worklog.md.
+- Verified no files modified during this review (READ-ONLY task per Wave-0 Gate Review constraints).
+- Appended this work record to worklog.md in the required template format.
+
+Stage Summary:
+- P0-27 Phase 2 = STAGING_DEPLOYED + ROLLBACK_VERIFIED (Task 57 + 58 evidence: 71s rollback within 600s budget; 4/4 smoke tests PASS post-rollback; staging URL live; DATABASE_URL confirmed snakzap_app via Transaction Pooler).
+- DEV-001 / P0-22 = FINAL PASS — CLOSED (PostgreSQL REVOKE boundary + snakzap_admin/snakzap_app role separation + has_table_privilege() runtime ACL check; G/H review ACCEPT_WITH_CONDITIONS → all blocking conditions met).
+- Wave-0 Gate = HOLD (awaiting separate Orchestrator decision); Wave-1 = LOCKED; Production = NOT AUTHORIZED.
+- Infrastructure Gate = PASS at repository-local layer (12 R-items READY); BLOCKED at runtime layer (8 staging blockers NOT_READY — all Orchestrator-action items requiring credentials / external mutations).
+- Inventory delivered: 9 P0-27 acceptance criteria with status/evidence/gaps; 15 P0 items (P0-13..P0-27) with status/evidence; DEV-001 closure confirmed; 17 infrastructure blockers enumerated with READY/NOT_READY state.
+
+---
+
+## Task ID: WAVE0-2
+
+**Agent:** Explore (research)
+**Date:** 2026-08-14
+**Task:** Gather staging + rollback drill + Phase-3 deferred items evidence for Wave-0 Gate Review (READ-ONLY — no deployments, no modifications)
+
+### Work Log
+- Read `worklog.md` Tasks 55, 56, 57, 58 to absorb prior work (P0-27 Phase 2 readiness → staging deploy → rollback drill).
+- Read 10 reference artifacts end-to-end: `docs/STAGING_ARCHITECTURE.md`, `docs/POSTGRESQL_CUTOVER_PLAN.md`, `docs/ENV_VAR_AUDIT.md`, `docs/BACKUP_REPLACEMENT_PLAN.md`, `docs/STATEFUL_SERVICES_HOSTING.md`, `vercel.json`, `scripts/smoke-test.sh`, `.github/workflows/deploy.yml`, `.github/workflows/rollback.yml`, `.github/workflows/staging-rollback-drill.yml`.
+- Cross-referenced `INFRASTRUCTURE_READINESS.md` (17-blocker ledger) and `prisma/schema.prisma` (confirmed `provider = "postgresql"` + `binaryTargets = ["native", "rhel-openssl-3.0.x"]`).
+- Verified the production DATABASE_URL gap by reading `.github/workflows/fix-preview-database-url.yml` § 4 + final echo ("Production DATABASE_URL NOT modified (per Orchestrator authorization #7)").
+- Verified `src/app/api/health/route.ts` shows the Task 57 fix: REALTIME_URL env var made configurable with degraded fallback when unset.
+- Compiled the Phase-3 deferred items inventory across all 5 docs (STAGING_ARCHITECTURE.md §3.5/§6, INFRASTRUCTURE_READINESS.md §4.1/§4.2, ENV_VAR_AUDIT.md §5.2, BACKUP_REPLACEMENT_PLAN.md §4/§5.2, STATEFUL_SERVICES_HOSTING.md §3.3).
+- Wrote the Wave-0 Gate Review evidence assessment as a structured Markdown report returned to the Orchestrator.
+- Appended this worklog entry (append-only; no other files modified).
+
+### Stage Summary
+- **Staging deployment EVIDENCE CONFIRMED** — Commit `d2646b6` deployed to Vercel preview `snakpass-j4coohqyb-snakzap.vercel.app` (deployment ID `Ft79iwRMBRFDaEkBf4ci32dbmR74`); all 4 smoke tests PASS; DATABASE_URL uses `snakzap_app.<project-ref>` via Transaction Pooler port 6543 (confirmed via psql `current_user=snakzap_app`); deployment is reproducible from `main` via `deploy.yml` (push → ci-gate → deploy-staging → smoke).
+- **Rollback drill EVIDENCE CONFIRMED** — T0=11:12:16Z, T1=11:13:24Z, T2=11:13:27Z; total 71s vs 600s budget (11.8% used); controlled failure = commit `583edb1` (`/api/health` → 503); rollback via `vercel deploy --prebuilt` from `d2646b6`; post-rollback smoke tests all PASS; drill is reproducible via `staging-rollback-drill.yml` workflow_dispatch with `known_good_sha` input.
+- **Production DATABASE_URL gap CONFIRMED as OPEN BLOCKER** — Production still uses `postgres` superuser (NOT `snakzap_app`); fixes only preview per Orchestrator authorization #7. This BYPASSES the DEV-001 WORM boundary in production (any AuditLog UPDATE/DELETE/TRUNCATE would succeed). BLOCKER for any production deployment, NOT for Wave-0 closure.
+- **Phase-3 deferred items** — 14 distinct items identified across 5 docs (D-1 to D-5, S-12 to S-14, Blockers 9/10/11/12/A1/A2/A3, R-M2, R-M3, pg_dump rewrite + 8 new env vars, Supabase prod project, CORS hardening). Originally D-4 / S-11 (rollback drill) was deferred but is now SATISFIED via Task 58. R-M1 / A2 (REALTIME_URL hard-coded) partially addressed in Task 57. NONE of the deferred items block Wave-0 closure — all are production-launch (Phase 3) requirements.
+- **Stateful services** — 6 mini-services inventoried: `realtime` (3003) + `alert-evaluator` (3005) deferred to Fly.io (Phase 3); `backup-scheduler` (3004) deferred pending pg_dump rewrite (Phase 3); `consumer-portal` (3006), `vendor-portal` (3007), `admin-portal` (3008) RETIRED on Vercel (kept for local dev only). NONE deployed in staging; /api/health reports realtime as "degraded" (REALTIME_URL unset).
+- **Backup replacement** — 22-item SQLite dependency inventory (2 CRITICAL: `DB_PATH` reads at `src/lib/backup.ts:14`+`:36` and `mini-services/backup-scheduler/index.ts:21`+`:58`); pg_dump → Supabase Storage plan documented with 8 new env vars + DR restore runbook (RTO <30 min). NOT implemented. NOT blocking Wave-0 (Phase 3 only); staging relies on Supabase-managed daily backups (if Pro tier) or accepts no backups (if Free tier).
+- **Verdict for Wave-0 Gate Review**: Staging deployment evidence is COMPLETE (P0-27 Phase 2 staging passed). Rollback drill evidence is COMPLETE (71s/600s budget). Production DATABASE_URL gap is a Phase-3 production-launch blocker, NOT a Wave-0 closure blocker. All Phase-3 deferrals are explicitly documented; none retroactively block Wave-0. The gate-review evidence is sufficient to close Wave-0 P0-27 Phase 2; Orchestrator retains the closure decision.
+
+---
+Task ID: 59 — Wave-0 Gate Review (READ-ONLY, Orchestrator-Authorized)
+Agent: main (IDE)
+Date: 2026-08-14
+Task: Execute Orchestrator-authorized READ-ONLY Wave-0 Gate Review. Produce the Wave-0 Gate Review Report assessing P0-27 acceptance criteria, staging evidence sufficiency + reproducibility, remaining blocking issues, Phase-3 mandatory items, and production exclusions. DO NOT deploy, provision, migrate, or modify production.
+
+## Authorization
+- **Scope**: READ-ONLY Wave-0 Gate Review ONLY
+- **Forbidden**: Deploy, provision, migrate, modify production, declare Wave-0 closure, unlock Wave-1, declare production
+
+## Method
+1. Launched 2 parallel Explore subagents (WAVE0-1 + WAVE0-2) to gather evidence from worklog + 15+ governance/infrastructure documents.
+2. Synthesized findings into the Wave-0 Gate Review Report.
+
+## Work Log
+- Read worklog Tasks 55-58 (P0-27 Phase 2 staging + rollback drill evidence).
+- Gathered P0-27 acceptance criteria from `PRODUCTION_READINESS_MATRIX.md` v1.4 §7.1 + §14.1 + WAVE0_EVIDENCE.md + P0-27-PHASE2-REMEDIATION.md.
+- Inventoried all 13 Wave-0 P0 items (P0-13..P0-27) with status + primary evidence location.
+- Confirmed DEV-001 / P0-22 FINAL PASS — CLOSED (independent G/H review ACCEPT_WITH_CONDITIONS → conditions met).
+- Assessed staging deployment evidence (commit d2646b6, 4/4 smoke tests PASS, DATABASE_URL=snakzap_app confirmed).
+- Assessed rollback drill evidence (71s vs 600s budget, 4/4 smoke tests PASS post-rollback).
+- Confirmed production DATABASE_URL gap (still uses postgres superuser) — classified as Phase-3 production-launch blocker, NOT Wave-0 closure blocker.
+- Inventoried 15 Phase-3 deferred items; classified 10 as production-mandatory, 3 as cleanup/hygiene, 2 as already-satisfied.
+- Documented stateful services state (realtime/alert-evaluator/backup-scheduler NOT deployed; 3 portal shims retired on Vercel).
+- Documented backup replacement plan (22-item SQLite inventory; pg_dump → Supabase Storage design).
+- Wrote `/home/z/my-project/WAVE0_GATE_REVIEW.md` (13-section report).
+
+## Stage Summary
+
+### Wave-0 Gate Review Verdict
+🟢 **TECHNICALLY SUFFICIENT TO CLOSE WAVE-0 P0-27 PHASE 2**
+
+- ✅ All 9 P0-27 acceptance criteria for Class-1 (backward-compatible) staging deployments are SATISFIED
+- ✅ Staging deployment evidence is complete + reproducible from `main`
+- ✅ Rollback drill evidence is complete (71s / 600s budget) + reproducible via `staging-rollback-drill.yml`
+- ✅ No NEW blocking issues for Wave-0 (all 6 staging issues resolved; 4 PARTIAL P0 items are pre-existing)
+- ✅ Production DATABASE_URL gap is a Phase-3 production-launch blocker, NOT a Wave-0 closure blocker
+- ✅ All 10 Phase-3 production-mandatory items documented; none block Wave-0
+
+### P0 Status Rollup (13 Wave-0 P0s)
+- ✅ PASS: 7 (P0-15, P0-18, P0-19, P0-20, P0-22, P0-23, P0-27)
+- 🟡 PARTIAL: 4 (P0-13, P0-14, P0-16, P0-21) — libraries complete, integration deferred to Phase 3
+- 🔴 NOT STARTED / LOCKED: 4 (P0-17, P0-24, P0-25, P0-26) — Wave-1/Wave-2
+
+### Orchestrator Decisions Required
+1. Are the 4 pre-existing PARTIAL P0 items acceptable for Wave-0 closure? (libraries complete; integration is Phase 3)
+2. Is Class-1-only rollback drill sufficient, or must Class-2/3 drills also be performed before Wave-0 closure?
+3. Should Wave-0 be closed, or should additional evidence be required first?
+
+### Files Written
+- `/home/z/my-project/WAVE0_GATE_REVIEW.md` (~13-section report, ~500 lines)
+
+### Constraint Compliance
+- ✅ READ-ONLY — no deployments, no provisioning, no migrations, no production modifications
+- ✅ No Wave-0 closure declaration (report is input, not closure)
+- ✅ No Wave-1 unlock
+- ✅ No production declaration
+- ✅ No DEV-001 / P0-22 file changes
+- ✅ No governance file changes
+
+### Current Governance State
+```
+DEV-001 / P0-22       ✅ FINAL PASS — CLOSED
+P0-27 Phase 1         ✅ COMPLETE
+Infrastructure Gate   ✅ PASS (staging) / 🔴 BLOCKED (production)
+P0-27 Phase 2         ✅ STAGING_DEPLOYED + ROLLBACK_VERIFIED
+Rollback Drill        ✅ PASS (71s / 600s budget)
+Wave-0                🟡 GATE REVIEW COMPLETE — awaiting Orchestrator closure decision
+Wave-1                🔒 LOCKED
+Production            🚫 NOT AUTHORIZED
+```
+
+### Recommendation to Orchestrator
+The Wave-0 staging + rollback drill evidence is complete, verifiable, and reproducible. The 71-second rollback drill is strong evidence of deployment + rollback capability. The production DATABASE_URL gap is clearly documented as a Phase-3 production-launch blocker, not a Wave-0 closure blocker. No new blocking issues were introduced.
+
+**The evidence is technically sufficient to close Wave-0 P0-27 Phase 2. The Orchestrator retains the closure decision.**
+
+STOP. Awaiting Orchestrator decision on Wave-0 closure.
