@@ -2,7 +2,12 @@
 // Pickup-first food ordering platform: catalog, ordering, fulfillment, governance.
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Vercel serverless runs on Amazon Linux 2 (rhel-openssl-3.0.x).
+  // Build runs on debian (debian-openssl-3.0.x). Include both so the
+  // query engine binary is available at runtime. Without rhel-openssl-3.0.x,
+  // Prisma throws: "could not locate the Query Engine for runtime rhel-openssl-3.0.x".
+  binaryTargets = ["native", "rhel-openssl-3.0.x"]
 }
 
 datasource db {
