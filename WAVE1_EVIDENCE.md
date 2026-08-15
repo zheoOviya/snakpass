@@ -338,3 +338,51 @@ These require an authenticated session (OTP login flow) which is more complex th
 current smoke test. They are Track B deliverables — to be closed in parallel with
 Wave-2 execution, NOT a blocker for Wave-2 unlock.
 
+
+### Track B — Evidence Closure (2026-08-14) — ALL 3 TESTS PASS ✅
+
+**Workflow:** `.github/workflows/track-b-evidence.yml` (run ID: 31852133672)
+**Staging URL:** https://snakpass-ay1q5rojl-snakzap.vercel.app
+**Script:** `scripts/track-b-evidence.sh` (authenticated OTP login + real business operations)
+
+#### P0-17 — Authenticated Real-Order Idempotency — ✅ PASS
+- **Test:** Authenticated user (OTP login) creates 2 orders with the SAME Idempotency-Key
+- **Expected:** Same orderId returned for both requests (dedup works for real orders, not just 401)
+- **Result:**
+  - POST #1: orderId=`cmstly9nu006ol10443czb7c4`, status=CONFIRMED
+  - POST #2 (replay with same key): orderId=`cmstly9nu006ol10443czb7c4` (SAME — dedup verified)
+- **Evidence:** Only 1 order created in DB despite 2 requests with same key
+
+#### P0-25 Case B — State-Transition Race — ✅ PASS
+- **Test:** 2 concurrent PATCH /api/orders/[id]/status (CONFIRMED → PREPARING) on the same order
+- **Expected:** One succeeds (200), one conflicts (409) — optimistic locking prevents last-writer-wins
+- **Result:**
+  - PATCH A: HTTP 200 — order.status="PREPARING"
+  - PATCH B: HTTP 409 — error.code="CONFLICT"
+- **Evidence:** `updateMany WHERE version = X` prevents concurrent state-transition corruption
+
+#### P0-25 Case A — Inventory Race — ✅ PASS
+- **Test:** Set availableCount=1 on menu item, then 2 concurrent POST /api/orders for that item
+- **Expected:** One order created (200), one rejected (409) — atomic decrement prevents oversell
+- **Result:**
+  - Order A: orderId=`cmstlyd0a0073l104sfb8bru6` (created)
+  - Order B: error="CONFLICT" (rejected — sold out by another order)
+- **Evidence:** `updateMany WHERE availableCount >= quantity AND version = X` prevents oversell
+
+#### Track B Summary
+```json
+{
+  "ok": true,
+  "tests": {
+    "p017_idempotency": { "ok": true, "dedupVerified": true },
+    "p025_case_b_state_transition": { "ok": true },
+    "p025_case_a_inventory": { "ok": true, "status": "true" }
+  }
+}
+```
+
+**All 3 Orchestrator-identified evidence gaps are now CLOSED.**
+- ✅ Authenticated P0-17 real-order idempotency: PASS (same orderId for same key)
+- ✅ Real concurrent P0-25 Case-A: PASS (one order created, one 409)
+- ✅ Real concurrent P0-25 Case-B: PASS (one 200, one 409)
+
