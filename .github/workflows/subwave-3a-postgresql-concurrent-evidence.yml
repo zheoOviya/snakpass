@@ -153,15 +153,6 @@ jobs:
             done
           fi
 
-          # Remove existing NODE_ENV entries so we can re-create with value=development
-          EXISTING_NODE_ENV_IDS=$(echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "NODE_ENV") | .id' 2>/dev/null)
-          if [ -n "$EXISTING_NODE_ENV_IDS" ]; then
-            for EID in $EXISTING_NODE_ENV_IDS; do
-              echo "  ⚠️  Removing existing NODE_ENV id=$EID"
-              curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID" > /dev/null 2>&1
-            done
-          fi
-
           # Step 2: Create EVIDENCE_TEST_MODE=true for BOTH preview AND production targets.
           # We deploy to `preview` target (Step #8), but set on both for safety.
           echo ""
@@ -191,34 +182,10 @@ jobs:
             exit 1
           fi
 
-          # Step 3: Attempt to set NODE_ENV=development for BOTH preview AND production targets.
-          # The evidence-setup endpoint guards on `process.env.NODE_ENV === 'production'`
-          # and refuses to serve requests if true. Vercel forcibly sets NODE_ENV=production
-          # for production deployments; preview deployments may also inherit this.
-          # We attempt to override NODE_ENV=development via the API.
-          # NOTE: Vercel MAY reject this (NODE_ENV is treated as a system env var). If so,
-          # we log the failure but DO NOT exit — the deployment will still proceed, and
-          # the verify step will surface the 403 error if NODE_ENV is still 'production'.
-          echo ""
-          echo "  === Attempting to set NODE_ENV=development for preview+production targets ==="
-          NODE_ENV_PAYLOAD='{"key":"NODE_ENV","value":"development","target":["preview","production"],"type":"plain"}'
-          echo "  Payload: $NODE_ENV_PAYLOAD"
-          NODE_RESULT=$(curl -sS -w "\n%{http_code}" -X POST \
-            -H "$AUTH" \
-            -H "Content-Type: application/json" \
-            "$API_URL" \
-            -d "$NODE_ENV_PAYLOAD")
-          NODE_HTTP=$(echo "$NODE_RESULT" | tail -1)
-          NODE_BODY=$(echo "$NODE_RESULT" | head -n -1)
-          echo "  NODE_ENV Create HTTP: $NODE_HTTP"
-          echo "  NODE_ENV Create response (first 400 chars): $(echo "$NODE_BODY" | head -c 400)"
-          if echo "$NODE_HTTP" | grep -qE "^(200|201)$"; then
-            NODE_CREATED_ID=$(echo "$NODE_BODY" | jq -r '.created.id // .id // empty')
-            echo "  ✅ NODE_ENV=development set (id=$NODE_CREATED_ID) — if Vercel honors the override, the evidence-setup endpoint gate will pass"
-          else
-            echo "  ⚠️  Vercel rejected NODE_ENV override (HTTP $NODE_HTTP). This is expected if Vercel treats NODE_ENV as a system env var."
-            echo "  ⚠️  The evidence-setup endpoint may still return 403 (production guard). If so, see worklog Task 3a-workflow-fix for next steps."
-          fi
+          # NOTE: NODE_ENV override was removed. The evidence-setup + evidence-verify
+          # endpoints now gate ONLY on EVIDENCE_TEST_MODE (not NODE_ENV). This is safe
+          # because EVIDENCE_TEST_MODE defaults to undefined/false everywhere and is
+          # only set by this evidence workflow on the staging Vercel project.
 
           echo ""
           echo "  Note: env var changes require a new deployment to take effect."

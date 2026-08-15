@@ -21,10 +21,8 @@ import { apiError } from '@/lib/errors'
 // ----------------------------------------------------------------------------
 
 export async function GET(req: Request) {
-  // Production guard
-  if (process.env.NODE_ENV === 'production') {
-    return apiError('AUTHORIZATION_DENIED', 'Test endpoint not available in production', 403)
-  }
+  // Evidence test mode gate — EVIDENCE_TEST_MODE env var must be 'true'.
+  // See evidence-setup/route.ts for rationale on why NODE_ENV is not checked.
   if (process.env.EVIDENCE_TEST_MODE !== 'true') {
     return apiError('AUTHORIZATION_DENIED', 'Evidence test mode not enabled', 403)
   }

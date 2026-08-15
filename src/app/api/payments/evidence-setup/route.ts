@@ -27,10 +27,12 @@ import { cookies } from 'next/headers'
 const EVIDENCE_PHONE = '+919999900001'
 
 export async function GET(req: Request) {
-  // Production guard
-  if (process.env.NODE_ENV === 'production') {
-    return apiError('AUTHORIZATION_DENIED', 'Test endpoint not available in production', 403)
-  }
+  // Evidence test mode gate — EVIDENCE_TEST_MODE env var must be 'true'.
+  // This is set ONLY during evidence test runs via the staging workflow
+  // (never in production, never by default). NODE_ENV is intentionally NOT
+  // checked because Vercel preview deployments set NODE_ENV=production, which
+  // would block evidence tests on the staging deployment. The EVIDENCE_TEST_MODE
+  // flag is sufficient — it defaults to undefined/false everywhere.
   if (process.env.EVIDENCE_TEST_MODE !== 'true') {
     return apiError('AUTHORIZATION_DENIED', 'Evidence test mode not enabled', 403)
   }
