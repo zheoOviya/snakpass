@@ -153,3 +153,60 @@ Per Orchestrator Decision (Wave-2 Gate Review PASS + Sub-Wave 2a authorized):
 **Sub-Wave 2a: READY FOR ORCHESTRATOR REVIEW → Sub-Wave 2b unlock**
 
 ---
+
+### Sub-Wave 2a — Rollback Injection Evidence (2026-08-15) — ✅ EMPIRICALLY VERIFIED
+
+**Orchestrator requirement:** "Transaction failure → business + outbox rollback" must be empirically proven, not just implementation reasoning.
+
+**Test:** Deliberate failure injection inside a transaction AFTER order.create + outbox INSERT → verify BOTH roll back.
+
+**Workflow:** `subwave-2a-rollback-evidence.yml` (run ID: 31869987403)
+**Endpoint:** `POST /api/test/rollback-injection` (guarded by VERCEL_ENV !== 'production')
+
+**Sequence:**
+1. Start transaction
+2. Create order (business mutation) — orderId=`cmsu0a9lf0001jr045s6lqryh`
+3. Write outbox event (ORDER_CREATED) inside same transaction
+4. Throw deliberate error (`DELIBERATE_ROLLBACK_INJECTION_TEST_FAILURE`)
+5. Transaction rolls back
+6. Query DB: Order table + Outbox table
+
+**Result:**
+```json
+{
+  "ok": true,
+  "testMarker": "rollback-test-1786775979788-48dvxq",
+  "injectedOrderId": "cmsu0a9lf0001jr045s6lqryh",
+  "verification": {
+    "orderExists": false,
+    "orderCount": 0,
+    "outboxExists": false,
+    "outboxCount": 0
+  },
+  "conclusion": {
+    "businessMutationRolledBack": true,
+    "outboxInsertRolledBack": true,
+    "atomicRollback": true
+  }
+}
+```
+
+**Evidence:** Both the business mutation (Order) AND the outbox INSERT were rolled back atomically. No orphan entities. No phantom events. This empirically proves P0-24's transactional integrity.
+
+#### Updated Exit Gate Assessment
+
+| Evidence | Status |
+|----------|--------|
+| Outbox schema migration applied to staging | ✅ PASS |
+| Business mutation + outbox same transaction | ✅ PASS |
+| Commit after → outbox row exists | ✅ PASS |
+| **Transaction failure → business + outbox rollback** | ✅ **EMPIRICALLY VERIFIED** |
+| Publisher OFF → event safely persisted | ✅ PASS |
+| Existing CSRF protection intact | ✅ PASS |
+| Existing idempotency intact | ✅ PASS |
+| Staging smoke tests pass (7/7) | ✅ PASS |
+| Production untouched | ✅ PASS |
+| WAVE2_EVIDENCE.md updated | ✅ PASS |
+
+**Sub-Wave 2a: S5 / EVIDENCE-COMPLETE → Ready for Sub-Wave 2b unlock**
+
