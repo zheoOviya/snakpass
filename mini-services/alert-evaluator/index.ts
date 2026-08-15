@@ -39,6 +39,9 @@ const ALERT_RULES: AlertRule[] = [
   { id: 'db-unavailable', name: 'Database Unavailable', severity: 'critical', metric: 'db_health', threshold: 0, comparison: 'eq', cooldownMs: 30000 },
   { id: 'auth-failure-spike', name: 'Auth Failure Spike', severity: 'warning', metric: 'auth_failure_rate', threshold: 20, comparison: 'gt', cooldownMs: 300000 },
   { id: 'exception-queue-backlog', name: 'Exception Queue Backlog', severity: 'warning', metric: 'exception_queue_depth', threshold: 10, comparison: 'gt', cooldownMs: 300000 },
+  { id: 'otp-brute-force', name: 'OTP Brute Force Detected', severity: 'warning', metric: 'otp_lockout_count', threshold: 0, comparison: 'gt', cooldownMs: 300000 },
+  { id: 'outbox-lag-exceeded', name: 'Outbox Lag Exceeded', severity: 'warning', metric: 'outbox_lag_seconds', threshold: 60, comparison: 'gt', cooldownMs: 60000 },
+  { id: 'outbox-publish-failed', name: 'Outbox Publish Failed', severity: 'critical', metric: 'outbox_failed_count', threshold: 0, comparison: 'gt', cooldownMs: 0 },
 ]
 
 const lastFired = new Map<string, number>()
@@ -146,6 +149,31 @@ async function evaluateAlertRules(): Promise<EvaluationCycle> {
 
   // 7. DR drill (passing — no drill run yet)
   evaluateAndFire(results, 'dr-drill-failed', 'dr_drill_pass', 1, 1, 'lt')
+
+  // 8. Outbox lag (age of oldest PENDING outbox row in seconds)
+  let outboxLagSeconds = 0
+  try {
+    const oldestPending = await db.outbox.findFirst({
+      where: { status: 'PENDING' },
+      orderBy: { createdAt: 'asc' },
+      select: { createdAt: true },
+    })
+    if (oldestPending) {
+      outboxLagSeconds = Math.floor((Date.now() - oldestPending.createdAt.getTime()) / 1000)
+    }
+  } catch {
+    outboxLagSeconds = 0 // can't check
+  }
+  evaluateAndFire(results, 'outbox-lag-exceeded', 'outbox_lag_seconds', outboxLagSeconds, 60, 'gt')
+
+  // 9. Outbox failed count (events that reached FAILED status)
+  let outboxFailedCount = 0
+  try {
+    outboxFailedCount = await db.outbox.count({ where: { status: 'FAILED' } })
+  } catch {
+    outboxFailedCount = 0 // can't check
+  }
+  evaluateAndFire(results, 'outbox-publish-failed', 'outbox_failed_count', outboxFailedCount, 0, 'gt')
 
   const alertsTriggered = results.filter((r) => r.alertFired).length
   const cleanBaseline = alertsTriggered === 0

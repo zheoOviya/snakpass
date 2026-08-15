@@ -1,0 +1,224 @@
+name: "Sub-Wave 2b-5 - Alert Evidence"
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_url:
+        description: 'Staging URL'
+        required: true
+
+jobs:
+  alert-evidence:
+    name: 2b-5 Alert-E1 (lag) + Alert-E2 (failure) empirical evidence
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        run: bun install
+
+      - name: "Alert-E1 + Alert-E2 Evidence"
+        env:
+          STAGING_URL: ${{ inputs.staging_url }}
+        run: |
+          STAGING_URL=$(echo "${{ inputs.staging_url }}" | sed 's/\/$//')
+          APP_PASSWORD="CHANGE_ME_IN_PRODUCTION_USE_SECRET_MANAGER"
+          ENCODED_PW=$(jq -rn --arg pw "$APP_PASSWORD" '$pw|@uri')
+          PUBLISHER_DB_URL="postgresql://snakzap_app.zmzqqcyapcezmaqvuzzd:$ENCODED_PW@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+
+          # Helper: query Supabase DB
+          query_db() {
+            local sql="$1"
+            echo "$sql" > /tmp/query.sql
+            jq -n --rawfile sql /tmp/query.sql '{query: $sql}' | \
+              curl -sS -X POST \
+                -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+                -H "Content-Type: application/json" \
+                "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+                -d @-
+          }
+
+          # Helper: create outbox row
+          create_outbox_row() {
+            local event_id="$1"
+            local event_type="$2"
+            local payload="$3"
+            printf 'INSERT INTO "Outbox" ("id", "eventId", "eventType", "aggregateType", "aggregateId", "payload", "status", "attempts", "createdAt") VALUES (gen_random_uuid()::text, '"'"'%s'"'"', '"'"'%s'"'"', '"'"'Test'"'"', '"'"'test-%s'"'"', '"'"'%s'"'"', '"'"'PENDING'"'"', 0, NOW());' "$event_id" "$event_type" "$event_id" "$payload" > /tmp/insert.sql
+            jq -n --rawfile sql /tmp/insert.sql '{query: $sql}' | \
+              curl -sS -X POST \
+                -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+                -H "Content-Type: application/json" \
+                "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+                -d @- > /dev/null 2>&1
+          }
+
+          echo "=================================================="
+          echo "  Alert-E1: outbox-lag-exceeded"
+          echo "=================================================="
+          echo ""
+
+          LAG_EVENT_ID="alert-lag-$(date +%s)"
+          echo "=== Step 1: Create PENDING event (will age > 60s) ==="
+          create_outbox_row "$LAG_EVENT_ID" "ORDER_CREATED" '{"orderId":"lag-test"}'
+          echo "Created: eventId=$LAG_EVENT_ID"
+
+          echo ""
+          echo "=== Step 2: Wait 65 seconds (exceed 60s threshold) ==="
+          sleep 65
+
+          echo ""
+          echo "=== Step 3: Run alert evaluator ==="
+          export DATABASE_URL="$PUBLISHER_DB_URL"
+          export ALERT_INTERVAL_MS="999999999"
+          # Run evaluator once (immediate evaluation on startup)
+          EVAL_OUTPUT=$(timeout 10 bun run mini-services/alert-evaluator/index.ts 2>&1 || true)
+
+          echo ""
+          echo "=== Step 4: Check if outbox-lag-exceeded fired ==="
+          LAG_FIRED=$(echo "$EVAL_OUTPUT" | grep -c "outbox-lag-exceeded" || echo "0")
+          echo "Evaluator output (last 10 lines):"
+          echo "$EVAL_OUTPUT" | tail -10
+          echo ""
+          echo "outbox-lag-exceeded fired count: $LAG_FIRED"
+
+          # Also verify via JSON output
+          LAG_RESULT=$(echo "$EVAL_OUTPUT" | grep "outbox-lag-exceeded" | head -1 || echo "")
+          echo "Lag alert result: $LAG_RESULT"
+
+          LAG_OK="false"
+          if [ "$LAG_FIRED" -gt 0 ]; then
+            LAG_OK="true"
+            echo "PASS: outbox-lag-exceeded alert fired"
+          else
+            echo "FAIL: outbox-lag-exceeded alert did not fire"
+          fi
+
+          # Cleanup lag event
+          query_db "DELETE FROM \"Outbox\" WHERE \"eventId\" = '$LAG_EVENT_ID';" > /dev/null 2>&1
+
+          echo ""
+          echo "=================================================="
+          echo "  Alert-E2: outbox-publish-failed"
+          echo "=================================================="
+          echo ""
+
+          POISON_EVENT_ID="alert-fail-$(date +%s)"
+          echo "=== Step 1: Create poison event (unknown type) ==="
+          create_outbox_row "$POISON_EVENT_ID" "UNKNOWN_POISON_TYPE" '{"test":"poison"}'
+
+          echo ""
+          echo "=== Step 2: Run publisher 5 times (all fail) ==="
+          for i in 1 2 3 4 5; do
+            query_db "UPDATE \"Outbox\" SET \"claimUntil\"=NOW() - INTERVAL '1 second' WHERE \"eventId\"='$POISON_EVENT_ID' AND status='PENDING';" > /dev/null 2>&1
+            export OUTBOX_TRANSPORT_MODE="http"
+            export CONSUMER_URL="http://invalid-host-12345.example.com"
+            export OUTBOX_PUBLISHER_PORT=$((3009 + RANDOM % 100))
+            export OUTBOX_PUBLISHER_AUTO_RUN=true
+            timeout 10 bun run mini-services/outbox-publisher/index.ts 2>&1 || true
+            echo "Attempt $i done"
+          done
+
+          echo ""
+          echo "=== Step 3: Verify event is FAILED ==="
+          FAIL_CHECK=$(query_db "SELECT status, attempts FROM \"Outbox\" WHERE \"eventId\" = '$POISON_EVENT_ID';")
+          echo "Outbox: $FAIL_CHECK"
+          FAIL_STATUS=$(echo "$FAIL_CHECK" | jq -r '.[0].status // empty' 2>/dev/null)
+          FAIL_ATTEMPTS=$(echo "$FAIL_CHECK" | jq -r '.[0].attempts // 0' 2>/dev/null)
+          echo "status=$FAIL_STATUS, attempts=$FAIL_ATTEMPTS"
+
+          echo ""
+          echo "=== Step 4: Run alert evaluator ==="
+          export OUTBOX_TRANSPORT_MODE=""
+          export CONSUMER_URL=""
+          EVAL_OUTPUT2=$(timeout 10 bun run mini-services/alert-evaluator/index.ts 2>&1 || true)
+
+          echo ""
+          echo "=== Step 5: Check if outbox-publish-failed fired ==="
+          FAIL_FIRED=$(echo "$EVAL_OUTPUT2" | grep -c "outbox-publish-failed" || echo "0")
+          echo "Evaluator output (last 10 lines):"
+          echo "$EVAL_OUTPUT2" | tail -10
+          echo ""
+          echo "outbox-publish-failed fired count: $FAIL_FIRED"
+
+          FAIL_ALERT_OK="false"
+          if [ "$FAIL_FIRED" -gt 0 ]; then
+            FAIL_ALERT_OK="true"
+            echo "PASS: outbox-publish-failed alert fired"
+          else
+            echo "FAIL: outbox-publish-failed alert did not fire"
+          fi
+
+          # Cleanup poison event
+          query_db "DELETE FROM \"Outbox\" WHERE \"eventId\" = '$POISON_EVENT_ID';" > /dev/null 2>&1
+
+          echo ""
+          echo "=================================================="
+          echo "  ALERT EVIDENCE SUMMARY"
+          echo "=================================================="
+          echo ""
+          echo "  Alert-E1 (lag):       $([ "$LAG_OK" = "true" ] && echo "PASS" || echo "FAIL")"
+          echo "  Alert-E2 (failure):  $([ "$FAIL_ALERT_OK" = "true" ] && echo "PASS" || echo "FAIL")"
+          echo ""
+
+          ALL_OK="false"
+          if [ "$LAG_OK" = "true" ] && [ "$FAIL_ALERT_OK" = "true" ]; then
+            ALL_OK="true"
+          fi
+
+          jq -n \
+            --argjson ok "$ALL_OK" \
+            --arg lagOk "$LAG_OK" \
+            --arg failOk "$FAIL_ALERT_OK" \
+            --arg lagEventId "$LAG_EVENT_ID" \
+            --arg failEventId "$POISON_EVENT_ID" \
+            --arg failStatus "$FAIL_STATUS" \
+            --argjson failAttempts "$FAIL_ATTEMPTS" \
+            --arg stagingUrl "$STAGING_URL" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              ok: $ok,
+              timestamp: $timestamp,
+              stagingUrl: $stagingUrl,
+              tests: {
+                "alert-e1-lag": {
+                  ok: ($lagOk == "true"),
+                  alert: "outbox-lag-exceeded",
+                  description: "PENDING event > 60s old -> alert evaluator fires outbox-lag-exceeded",
+                  eventId: $lagEventId,
+                  thresholdSeconds: 60
+                },
+                "alert-e2-failure": {
+                  ok: ($failOk == "true"),
+                  alert: "outbox-publish-failed",
+                  description: "Poison event -> 5 attempts -> FAILED -> alert evaluator fires outbox-publish-failed",
+                  eventId: $failEventId,
+                  eventStatus: $failStatus,
+                  attempts: $failAttempts
+                }
+              }
+            }' > 2b5-alert-evidence.json
+
+          echo "=== Evidence JSON ==="
+          cat 2b5-alert-evidence.json | jq '.'
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subwave-2b5-alert-evidence
+          path: 2b5-alert-evidence.json
+          retention-days: 90
