@@ -4269,3 +4269,91 @@ All Orchestrator-required empirical evidence tests for Sub-Wave 2b are now COMPL
 **Sub-Wave 2b is ready for S5 / Evidence-Complete → Orchestrator review for 2b final PASS.**
 
 STOP. Awaiting Orchestrator decision on Sub-Wave 2b final closure + 2c authorization.
+
+---
+Task ID: 82 — Sub-Wave 2b FINAL PASS Declared + 2c Gate Review Commenced
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Record Orchestrator's formal Sub-Wave 2b PASS declaration (S5 Evidence-Complete). Begin READ/PLAN-FIRST Sub-Wave 2c Gate Review.
+
+## Orchestrator Decision — Sub-Wave 2b PASS ✅
+```
+Sub-Wave 2a               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2b               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2c               🔒 LOCKED (READ/PLAN-FIRST review required)
+Sub-Wave 2d               🔒 LOCKED
+Wave-2 closure             🔒 NOT YET
+Wave-3                     🔒 LOCKED
+Production                 🚫 NOT AUTHORIZED
+```
+
+## Critical Invariants Now Locked
+- Business mutation + Outbox INSERT in SAME TX → PENDING → atomic claim+lease → successful transport → consumer → ProcessedEvent dedup → business effect exactly once → PUBLISHED
+- Transport failure → retry / FAILED → NEVER PUBLISHED
+
+## 2c Gate Review Scope (READ/PLAN-FIRST)
+1. Partial-failure test (business mutation mid-failure → complete rollback → no orphan)
+2. Outbox-crash test (commit + publisher crash → event recoverable → no loss)
+3. Idempotent-replay test (same event replay → no duplicate business effect)
+4. Dependency mapping with existing 2a/2b evidence
+5. Test isolation + staging safety
+6. 2c exit criteria + required artifacts
+7. Which tests need NEW empirical evidence vs satisfied by existing evidence
+
+## Governance Flow
+```
+Sub-Wave 2c
+      ↓
+READ/PLAN-FIRST Gate Review
+      ↓
+Orchestrator acceptance
+      ↓
+Explicit implementation authorization
+```
+
+---
+Task ID: 83 — Sub-Wave 2c Gate Review (READ/PLAN-FIRST, Orchestrator-Authorized)
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Execute Orchestrator-authorized READ/PLAN-FIRST Sub-Wave 2c Gate Review. Assess whether 3 P0-24 failure-injection tests need new evidence or are satisfied by existing 2a/2b evidence.
+
+## Authorization
+- **Scope**: READ/PLAN-FIRST Sub-Wave 2c Gate Review ONLY
+- **Forbidden**: Implementation, deployments, production changes
+
+## Key Finding: ALL 3 tests have existing evidence from 2a/2b
+
+| Test | Matrix Requirement | Existing Evidence | Gap |
+|------|-------------------|-------------------|-----|
+| Partial-failure | Mid-txn failure → full rollback → no orphans | ✅ 2a rollback-injection (run 31869987403): orderExists=false, outboxExists=false, atomicRollback=true | NONE |
+| Outbox-crash | Publisher crash after commit → event recoverable | ✅ 2b-3 crash recovery (run 31873863056): CLAIMED→lease expired→recovered→PUBLISHED, noEventLoss=true | NONE |
+| Idempotent-replay | Same event 2× → business effect exactly once | ✅ 2b-E2 consumer E2E (run 31877198639): 3× delivery→1 ProcessedEvent→1 business effect | NONE |
+
+## Recommendation: Option A (satisfy by existing evidence)
+All 3 P0-24 test criteria are already empirically satisfied. No new implementation needed. Only evidence consolidation required.
+
+## Alternative: Option B (consolidated re-run)
+If Orchestrator prefers fresh consolidated run, a single workflow can execute all 3 tests in sequence.
+
+## Files Written
+- `/home/z/my-project/SUBWAVE_2C_GATE_REVIEW.md` (~7-section report)
+
+## Current Governance State
+```
+Wave-2                    🔓 UNLOCKED
+Sub-Wave 2a               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2b               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2c               🔒 LOCKED (READ/PLAN-FIRST review complete — awaiting Orchestrator decision)
+Sub-Wave 2d               🔒 LOCKED
+Wave-2 closure             🔒 NOT YET
+Wave-3                     🔒 LOCKED
+Production                 🚫 NOT AUTHORIZED
+```
+
+## Recommendation to Orchestrator
+2c may be satisfied by existing evidence from 2a and 2b. The 3 P0-24 test criteria map directly to tests already empirically verified:
+1. Partial-failure → 2a rollback-injection
+2. Outbox-crash → 2b-3 crash recovery
+3. Idempotent-replay → 2b-E2 consumer E2E
+
+**STOP.** Awaiting Orchestrator decision on 2c: Option A (existing evidence) vs Option B (consolidated re-run).
