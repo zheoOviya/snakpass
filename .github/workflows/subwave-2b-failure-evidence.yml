@@ -189,49 +189,63 @@ jobs:
           echo "═══════════════════════════════════════════════════════════════"
           echo ""
 
-          # Create a test event for dedup
+          # Test processEvent() directly (the consumer-side dedup library)
+          # We simulate 3× delivery of the same eventId and verify that
+          # processEvent() returns processed=true only once, and
+          # ProcessedEvent table has exactly 1 row.
           DEDUP_EVENT_ID="dedup-test-$(date +%s)"
-          echo "=== Step 1: Create outbox row (eventId=$DEDUP_EVENT_ID) ==="
-          create_outbox_row "$DEDUP_EVENT_ID" "ORDER_CREATED" '{"orderId":"dedup-test","status":"CONFIRMED"}'
 
-          # Step 2: Run publisher 3 times (simulating 3× delivery)
-          echo ""
-          echo "=== Step 2: Run publisher 3 times (simulating 3× delivery) ==="
-          for i in 1 2 3; do
-            echo "--- Delivery $i ---"
-            # For deliveries 2 and 3, reset the outbox row back to PENDING (simulate re-delivery)
-            if [ "$i" -gt 1 ]; then
-              RESET_SQL="UPDATE \"Outbox\" SET status='PENDING', \"claimUntil\"=NULL, \"claimedAt\"=NULL, \"workerId\"=NULL WHERE \"eventId\"='$DEDUP_EVENT_ID';"
-              query_db "$RESET_SQL" > /dev/null 2>&1
-            fi
-            run_publisher 10
-          done
+          echo "=== Step 1: Simulate 3× delivery of eventId=$DEDUP_EVENT_ID ==="
+          echo 'import { PrismaClient } from "@prisma/client"
+          import { processEvent } from "./src/lib/event-consumer"
 
-          # Step 3: Check ProcessedEvent table — should have exactly 1 row
-          echo ""
-          echo "=== Step 3: Check ProcessedEvent count (should be exactly 1) ==="
-          PROCESSED_SQL="SELECT COUNT(*) as count FROM \"ProcessedEvent\" WHERE \"eventId\" = '$DEDUP_EVENT_ID';"
-          PROCESSED_RESULT=$(query_db "$PROCESSED_SQL")
-          echo "ProcessedEvent: $PROCESSED_RESULT"
-          PROCESSED_COUNT=$(echo "$PROCESSED_RESULT" | jq -r '.[0].count // 0' 2>/dev/null)
-          echo "ProcessedEvent count: $PROCESSED_COUNT (expected: 1 — exactly-once business effect)"
+          const db = new PrismaClient()
+          const eventId = process.argv[2]
+          let processedCount = 0
 
-          # Step 4: Check Outbox final status
-          DEDUP_FINAL=$(get_outbox_status "$DEDUP_EVENT_ID")
-          DEDUP_FINAL_STATUS=$(echo "$DEDUP_FINAL" | jq -r '.[0].status' 2>/dev/null)
-          DEDUP_ATTEMPTS=$(echo "$DEDUP_FINAL" | jq -r '.[0].attempts // 0' 2>/dev/null)
-          echo "Outbox final: status=$DEDUP_FINAL_STATUS, attempts=$DEDUP_ATTEMPTS"
+          for (let i = 1; i <= 3; i++) {
+            const result = await processEvent(
+              db,
+              eventId,
+              "ORDER_CREATED",
+              async (tx) => {
+                // Business effect (e.g., increment a counter)
+                processedCount++
+              }
+            )
+            console.log(JSON.stringify({ delivery: i, processed: result.processed }))
+          }
+
+          // Check ProcessedEvent count
+          const peCount = await db.processedEvent.count({ where: { eventId } })
+          console.log(JSON.stringify({ processedEventCount: peCount, businessEffectCount: processedCount }))
+
+          await db.$disconnect()
+          ' > /tmp/dedup-test.mjs
+
+          # Note: processEvent uses Prisma TransactionClient, but for this test
+          # we pass db (PrismaClient) which IS a valid TransactionClient.
+          # The $transaction wrapper is internal to processEvent's expected usage,
+          # but for testing we can call it directly.
+
+          DEDUP_RESULT=$(bun run /tmp/dedup-test.mjs "$DEDUP_EVENT_ID" 2>&1 || echo '{"error":"bun run failed"}')
+          echo "Dedup test result: $DEDUP_RESULT"
+
+          PROCESSED_COUNT=$(echo "$DEDUP_RESULT" | grep -o '"processedEventCount":[0-9]*' | grep -o '[0-9]*' || echo "0")
+          BUSINESS_EFFECT_COUNT=$(echo "$DEDUP_RESULT" | grep -o '"businessEffectCount":[0-9]*' | grep -o '[0-9]*' || echo "0")
+          echo "ProcessedEvent count: $PROCESSED_COUNT (expected: 1)"
+          echo "Business effect count: $BUSINESS_EFFECT_COUNT (expected: 1)"
 
           DEDUP_OK="false"
-          if [ "$PROCESSED_COUNT" = "1" ]; then
+          if [ "$PROCESSED_COUNT" = "1" ] && [ "$BUSINESS_EFFECT_COUNT" = "1" ]; then
             DEDUP_OK="true"
-            echo "✅ DEDUP PASS: 3× delivery → exactly 1 ProcessedEvent (business effect applied once)"
+            echo "✅ DEDUP PASS: 3× delivery → exactly 1 ProcessedEvent + 1 business effect"
           else
-            echo "❌ DEDUP FAIL: expected 1 ProcessedEvent, got $PROCESSED_COUNT"
+            echo "❌ DEDUP FAIL: expected 1 ProcessedEvent + 1 business effect, got $PROCESSED_COUNT + $BUSINESS_EFFECT_COUNT"
           fi
 
-          # Cleanup: delete test rows
-          CLEANUP_SQL="DELETE FROM \"Outbox\" WHERE \"eventId\" IN ('$CRASH_EVENT_ID', '$POISON_EVENT_ID', '$DEDUP_EVENT_ID'); DELETE FROM \"ProcessedEvent\" WHERE \"eventId\" = '$DEDUP_EVENT_ID';"
+          # Cleanup
+          CLEANUP_SQL="DELETE FROM \"ProcessedEvent\" WHERE \"eventId\" = '$DEDUP_EVENT_ID';"
           query_db "$CLEANUP_SQL" > /dev/null 2>&1
 
           echo ""
