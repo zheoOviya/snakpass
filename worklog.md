@@ -4357,3 +4357,55 @@ Production                 🚫 NOT AUTHORIZED
 3. Idempotent-replay → 2b-E2 consumer E2E
 
 **STOP.** Awaiting Orchestrator decision on 2c: Option A (existing evidence) vs Option B (consolidated re-run).
+
+---
+Task ID: 84 — Sub-Wave 2c PASS Declared + 2d Gate Review (READ/PLAN-FIRST)
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Record Orchestrator's formal Sub-Wave 2c PASS declaration (S5 Evidence-Complete, Option A accepted). Execute 2c evidence consolidation + 2d READ/PLAN-FIRST Gate Review.
+
+## Orchestrator Decision — Sub-Wave 2c PASS ✅
+```
+Sub-Wave 2a               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2b               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2c               ✅ PASS — S5 Evidence-Complete (Option A: existing evidence)
+Sub-Wave 2d               🔒 LOCKED (READ/PLAN-FIRST review complete)
+Wave-2 closure             🔒 NOT YET
+Wave-3                     🔒 LOCKED
+Production                 🚫 NOT AUTHORIZED
+```
+
+## 2c Evidence Consolidation (completed)
+- Added §7 to WAVE2_EVIDENCE.md with cross-references to 2a/2b evidence
+- All 3 P0-24 criteria mapped to existing evidence with run IDs + key metrics
+- No new runs executed, no fabricated claims
+- Lint: PASS. Working tree: clean.
+- Commit: 9b48b7f
+
+## 2d Gate Review (READ/PLAN-FIRST)
+### Key Findings:
+1. **Reconciliation gap:** No periodic reconciliation job exists to detect business-without-outbox or outbox-without-business mismatches. Transaction guarantee should be sufficient, but reconciliation provides defense-in-depth.
+2. **FAILED event detection:** ✅ Already handled by `outbox-publish-failed` alert rule
+3. **Stale CLAIMED recovery:** ✅ Already handled by publisher lease mechanism
+4. **Duplicate prevention:** ✅ Already handled by ProcessedEvent dedup
+5. **Implementation plan:** Add 2 SQL queries + 2 alert rules to existing alert-evaluator (minimal effort, no new infrastructure)
+
+### 2d Exit Criteria:
+- Reconciliation queries for business-without-outbox + outbox-without-business
+- Reconciliation integrated into alert-evaluator
+- Alert fires on mismatch detection
+- WAVE2_EVIDENCE.md final consolidation
+- Production untouched
+
+### Files Written:
+- `/home/z/my-project/SUBWAVE_2D_GATE_REVIEW.md` (~7-section report)
+
+## Recommendation to Orchestrator
+2d scope is well-defined and minimal:
+1. 2 SQL queries + 2 alert rules added to existing alert-evaluator
+2. WAVE2_EVIDENCE.md final consolidation
+3. Wave-2 closure declaration
+
+No new infrastructure needed. The reconciliation implementation is additive (detection-only, no repair).
+
+**STOP.** Awaiting Orchestrator decision on 2d implementation authorization.
