@@ -288,12 +288,12 @@ jobs:
                   description: "Unknown event type → 5 attempts → FAILED (no infinite retry)",
                   finalStatus: $poisonFinalStatus,
                   attempts: $poisonAttempts,
-                  noInfiniteRetry: ($poisonFinalStatus == "FAILED" && $poisonAttempts >= 5)
+                  noInfiniteRetry: (($poisonFinalStatus == "FAILED") and ($poisonAttempts >= 5))
                 },
                 "2b-8-duplicate-delivery": {
                   ok: ($dedupOk == "true"),
                   eventId: $dedupEventId,
-                  description: "3× delivery → exactly 1 ProcessedEvent (business effect applied once)",
+                  description: "3x delivery -> exactly 1 ProcessedEvent (business effect applied once)",
                   processedEventCount: $dedupProcessedCount,
                   exactlyOnce: ($dedupProcessedCount == 1)
                 }
