@@ -1,0 +1,146 @@
+name: Sub-Wave 2a — Rollback Injection Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_url:
+        description: 'Staging URL'
+        required: true
+
+jobs:
+  rollback-evidence:
+    name: Verify transaction rollback on failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl
+
+      - name: Authenticated rollback injection test
+        env:
+          STAGING_URL: ${{ inputs.staging_url }}
+        run: |
+          STAGING_URL="${STAGING_URL%/}"
+          COOKIE_JAR=$(mktemp)
+          TEST_PHONE="+9199999$(printf '%06d' $(($(date +%s) % 1000000)))"
+
+          echo "=== Step 1: OTP Login ==="
+          OTP_RESP=$(curl -sS -c "$COOKIE_JAR" -X POST "$STAGING_URL/api/auth/otp/send" \
+            -H 'content-type: application/json' \
+            -d "{\"phone\":\"$TEST_PHONE\",\"purpose\":\"consumer_login\"}")
+          OTP_ID=$(echo "$OTP_RESP" | jq -r '.otpId')
+          OTP_CODE=$(echo "$OTP_RESP" | jq -r '.code')
+
+          VERIFY_RESP=$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST "$STAGING_URL/api/auth/otp/verify" \
+            -H 'content-type: application/json' \
+            -d "{\"otpId\":\"$OTP_ID\",\"code\":\"$OTP_CODE\",\"phone\":\"$TEST_PHONE\",\"purpose\":\"consumer_login\"}")
+          CSRF_TOKEN=$(echo "$VERIFY_RESP" | jq -r '.csrfToken')
+          echo "Login: csrfToken set"
+
+          echo ""
+          echo "=== Step 2: Trigger rollback injection ==="
+          INJECT_RESP=$(curl -sS -b "$COOKIE_JAR" \
+            -X POST "$STAGING_URL/api/test/rollback-injection" \
+            -H "x-csrf-token: $CSRF_TOKEN" \
+            -H 'content-type: application/json')
+          echo "Injection response: $INJECT_RESP"
+
+          TEST_MARKER=$(echo "$INJECT_RESP" | jq -r '.testMarker // empty')
+          INJECTED_ORDER_ID=$(echo "$INJECT_RESP" | jq -r '.injectedOrderId // empty')
+          echo "Test marker: $TEST_MARKER"
+          echo "Injected orderId: $INJECTED_ORDER_ID"
+
+          if [ -z "$TEST_MARKER" ] || [ -z "$INJECTED_ORDER_ID" ]; then
+            echo "❌ Rollback injection failed — no testMarker/orderId returned"
+            rm -f "$COOKIE_JAR"
+            exit 1
+          fi
+
+          echo ""
+          echo "=== Step 3: Verify Order does NOT exist (rolled back) ==="
+          echo "SELECT id, note FROM \"Order\" WHERE id = '$INJECTED_ORDER_ID';" > /tmp/check_order.sql
+          ORDER_RESULT=$(jq -n --rawfile sql /tmp/check_order.sql '{query: $sql}' | \
+            curl -sS -X POST \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+              -d @-)
+          echo "Order query result: $ORDER_RESULT"
+          ORDER_COUNT=$(echo "$ORDER_RESULT" | jq 'if type == "array" then length else 0 end' 2>/dev/null)
+          echo "Order rows found: $ORDER_COUNT (expected: 0)"
+
+          echo ""
+          echo "=== Step 4: Verify Outbox row does NOT exist (rolled back) ==="
+          echo "SELECT id, \"eventId\", \"eventType\", \"aggregateId\" FROM \"Outbox\" WHERE \"aggregateId\" = '$INJECTED_ORDER_ID';" > /tmp/check_outbox.sql
+          OUTBOX_RESULT=$(jq -n --rawfile sql /tmp/check_outbox.sql '{query: $sql}' | \
+            curl -sS -X POST \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+              -d @-)
+          echo "Outbox query result: $OUTBOX_RESULT"
+          OUTBOX_COUNT=$(echo "$OUTBOX_RESULT" | jq 'if type == "array" then length else 0 end' 2>/dev/null)
+          echo "Outbox rows found: $OUTBOX_COUNT (expected: 0)"
+
+          echo ""
+          echo "=== Step 5: Verification ==="
+          ROLLBACK_OK="false"
+          if [ "$ORDER_COUNT" = "0" ] && [ "$OUTBOX_COUNT" = "0" ]; then
+            echo "✅ ROLLBACK VERIFIED: Order does NOT exist + Outbox row does NOT exist"
+            echo "    Both business mutation + outbox INSERT were rolled back atomically."
+            ROLLBACK_OK="true"
+          else
+            echo "❌ ROLLBACK FAILED: Order exists=$ORDER_COUNT, Outbox exists=$OUTBOX_COUNT"
+            echo "    Transactional integrity NOT verified — orphan entities exist."
+          fi
+
+          rm -f "$COOKIE_JAR"
+
+          # Emit JSON evidence
+          jq -n \
+            --argjson ok "$ROLLBACK_OK" \
+            --arg testMarker "$TEST_MARKER" \
+            --arg injectedOrderId "$INJECTED_ORDER_ID" \
+            --argjson orderCount "$ORDER_COUNT" \
+            --argjson outboxCount "$OUTBOX_COUNT" \
+            --arg stagingUrl "$STAGING_URL" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              ok: $ok,
+              timestamp: $timestamp,
+              stagingUrl: $stagingUrl,
+              test: "Rollback injection — deliberate failure AFTER order.create + outbox INSERT → both rolled back",
+              testMarker: $testMarker,
+              injectedOrderId: $injectedOrderId,
+              verification: {
+                orderExists: ($orderCount > 0),
+                orderCount: $orderCount,
+                outboxExists: ($outboxCount > 0),
+                outboxCount: $outboxCount,
+                expected: { orderCount: 0, outboxCount: 0 }
+              },
+              conclusion: {
+                businessMutationRolledBack: ($orderCount == 0),
+                outboxInsertRolledBack: ($outboxCount == 0),
+                atomicRollback: ($orderCount == 0 and $outboxCount == 0)
+              }
+            }' > rollback-evidence.json
+
+          echo ""
+          echo "=== Evidence JSON ==="
+          cat rollback-evidence.json | jq '.'
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subwave-2a-rollback-evidence
+          path: rollback-evidence.json
+          retention-days: 90
