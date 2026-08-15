@@ -5196,3 +5196,41 @@ Stage Summary:
 - STOP: IDE is not starting 3c. Awaiting Orchestrator S5 decision for 3b.
 - Production NOT touched. realPayments OFF. Webhook schema-only. 3c LOCKED.
 
+
+---
+Task ID: 3b-s5-closure
+Agent: IDE (main)
+Task: Sub-Wave 3b S5 PASS / CLOSED — Orchestrator decision formalization
+
+Work Log:
+- Received Orchestrator S5 PASS decision for Sub-Wave 3b.
+- Authorized scope fulfilled:
+  - C5 evidence endpoints (Orders): IMPLEMENTED ✅
+  - C6 failure injection (5 checkpoints): IMPLEMENTED ✅
+  - C2 actionable 409 message (retryStrategy: same-key/new-key): IMPLEMENTED ✅
+  - Rate limiting skip during EVIDENCE_TEST_MODE: IMPLEMENTED ✅
+  - SQLite evidence (5/5 PASS): rollback, replay, conflict, concurrent, phantom-block ✅
+  - PostgreSQL-native concurrency (workflow 31912679504): PASS ✅
+    - 5 concurrent POST /api/orders → exactly 1 Order/OrderItem/Outbox/IdempotencyKey/AuditLog
+    - ok: true, database: postgresql, exactlyOneOrder: true
+- C1 requestHash: DEFERRED to 3c (per Orchestrator D1 — Option A cached-response semantics)
+- Updated WAVE3_EVIDENCE.md:
+  - Status: Sub-Wave 3b — S5 PASS / CLOSED
+  - P0-08 status: ✅ S5 PASS / CLOSED
+  - Sub-Wave 3b status: ✅ S5 PASS / CLOSED
+  - Sub-Wave 3c status: 🔒 LOCKED (C1 requestHash deferred here)
+  - Added §10 "Sub-Wave 3b — S5 PASS / CLOSED (Orchestrator Decision)" section with decisive evidence, final governance state, and important decisions.
+- Formalized governance state:
+  - 3b will NOT reopen for evidence (PostgreSQL concurrency gap closed)
+  - 3c does NOT auto-unlock (each Sub-Wave requires its own authorization)
+  - C1 requestHash deferred to 3c
+  - Next gate: 3c READ/PLAN-FIRST Gate Review (failure injection + cross-P0 closure + C1)
+
+Stage Summary:
+- Sub-Wave 3b: ✅ S5 PASS / EVIDENCE-COMPLETE / CLOSED
+- Sub-Wave 3a: ✅ S5 PASS / CLOSED (will not reopen)
+- Sub-Wave 3b: ✅ S5 PASS / CLOSED (will not reopen)
+- C1 requestHash: deferred to 3c (NOT retrospectively added to 3b)
+- IDE is STOPPING. Not starting 3c. Awaiting Orchestrator authorization for 3c READ/PLAN-FIRST Gate Review.
+- Production NOT touched. realPayments OFF. Webhook schema-only. 3c LOCKED.
+
