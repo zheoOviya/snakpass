@@ -6,6 +6,7 @@ import { createOtp } from '@/lib/otp-service'
 import { validateBody, statusUpdateBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
 import { info as logInfo, newTraceId } from '@/lib/logger'
+import { enqueueOutboxEvent } from '@/lib/outbox'
 
 // PATCH /api/orders/[id]/status  body: { status, actorRole? }
 // P0-25 Case B: State-transition race protection via optimistic locking.
@@ -98,6 +99,21 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
             actorRole: actorRole ?? 'VENDOR_OWNER',
             action: 'ORDER_STATUS_CHANGED',
             metadata: JSON.stringify({ orderId: id, from: order.status, to: desired }),
+          },
+        })
+
+        // P0-24: Write outbox event INSIDE the same transaction.
+        await enqueueOutboxEvent(tx, {
+          eventType: 'ORDER_STATUS_CHANGED',
+          aggregateType: 'Order',
+          aggregateId: id,
+          payload: {
+            orderId: id,
+            restaurantId: updatedOrder?.restaurantId ?? '',
+            status: desired,
+            totalAmount: updatedOrder?.totalAmount ?? 0,
+            updatedAt: updatedOrder?.updatedAt.toISOString() ?? new Date().toISOString(),
+            pickupOtp: updatedOrder?.pickupOtp ?? '',
           },
         })
 

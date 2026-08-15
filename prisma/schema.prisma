@@ -262,3 +262,53 @@ model ExceptionQueue {
   @@index([entityType, entityId])
   @@index([freezeLevel, resolvedAt])
 }
+
+// ----------------------------------------
+// P0-24 — Transactional outbox (cross-entity atomic writes)
+// ----------------------------------------
+// The Outbox table is the persistent event queue committed INSIDE the same
+// transaction as the business write. This ensures the event is NOT lost even
+// if the process crashes after commit — the outbox publisher worker will
+// pick it up and deliver it later (at-least-once delivery).
+//
+// Key principle (Architectural Law 2 — Idempotent Business Effect):
+//   "We do NOT chase technical 'exactly-once delivery.' We chase idempotent
+//    business effect." — the consumer side deduplicates via the eventId.
+//
+// Usage:
+//   await withTransaction(async (tx) => {
+//     const order = await tx.order.create({ ... })      // business mutation
+//     await enqueueOutboxEvent(tx, {                    // outbox INSERT (same txn)
+//       eventType: 'ORDER_CREATED',
+//       aggregateType: 'Order',
+//       aggregateId: order.id,
+//       payload: { orderId: order.id, status: order.status, ... },
+//     })
+//   })
+//   // Publisher (Sub-Wave 2b) later reads PENDING rows + delivers via Socket.io
+model Outbox {
+  id              String   @id @default(cuid())
+  // Unique event ID for consumer-side idempotency (Q17 decision: event id = idempotency key)
+  eventId         String   @unique
+  // Event type for routing (e.g., "ORDER_CREATED", "ORDER_STATUS_CHANGED", "KILL_SWITCH_TOGGLED")
+  eventType       String
+  // The aggregate root type (e.g., "Order", "KillSwitch")
+  aggregateType   String
+  // The aggregate root ID (e.g., order.id, kill-switch key)
+  aggregateId     String
+  // JSON payload of the event (the data the consumer needs)
+  payload         String   // JSON
+  // PENDING = not yet published; PUBLISHED = delivered by publisher
+  status          String   @default("PENDING") // PENDING | PUBLISHED | FAILED
+  // Number of publish attempts (for retry tracking + backoff)
+  attempts        Int      @default(0)
+  // Last error message (if publishing failed)
+  lastError       String?
+  // When the event was created (inside the business transaction)
+  createdAt       DateTime @default(now())
+  // When the publisher successfully delivered the event
+  publishedAt     DateTime?
+
+  @@index([status, createdAt]) // publisher polls WHERE status='PENDING' ORDER BY createdAt
+  @@index([aggregateType, aggregateId]) // lookup by aggregate
+}

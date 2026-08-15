@@ -6,6 +6,8 @@ import { validateBody, createOrderBodySchema } from '@/lib/validation'
 import { apiError, withErrorHandler } from '@/lib/errors'
 import { info as logInfo, newTraceId } from '@/lib/logger'
 import { getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, parseCachedResponse } from '@/lib/idempotency'
+import { enqueueOutboxEvent } from '@/lib/outbox'
+import { isFeatureEnabled } from '@/lib/deployment'
 
 // GET /api/orders?role=consumer|vendor|admin&restaurantId=&status=&limit=
 export async function GET(req: NextRequest) {
@@ -263,6 +265,26 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         )
         logInfo('idempotency-key-stored', { key: idempotencyKey, orderId: order.id }, traceId)
       }
+
+      // P0-24: Write outbox event INSIDE the same transaction (behind feature flag).
+      // When outboxPublisher flag is ON, the publisher worker (Sub-Wave 2b) will
+      // pick up this event and deliver it via Socket.io.
+      // When flag is OFF (Sub-Wave 2a state), the event is still persisted in the
+      // Outbox table (committed atomically with the order) — it just won't be
+      // published yet. This proves the transactional outbox pattern is wired.
+      await enqueueOutboxEvent(tx, {
+        eventType: 'ORDER_CREATED',
+        aggregateType: 'Order',
+        aggregateId: order.id,
+        payload: {
+          orderId: order.id,
+          restaurantId: order.restaurantId,
+          status: order.status,
+          totalAmount: order.totalAmount,
+          updatedAt: order.updatedAt.toISOString(),
+          pickupOtp: order.pickupOtp,
+        },
+      })
 
       return { type: 'created' as const, status: 200, body: responseBody, order }
     })

@@ -5,6 +5,7 @@ import { emitKillSwitchToggled } from '@/lib/realtime'
 import { validateBody, killSwitchToggleBodySchema } from '@/lib/validation'
 import { withErrorHandler, apiError } from '@/lib/errors'
 import { newTraceId } from '@/lib/logger'
+import { enqueueOutboxEvent } from '@/lib/outbox'
 
 // PATCH /api/kill-switches/[key]  body: { enabled }
 // P0-25: Kill-switch toggle uses optimistic locking to prevent concurrent
@@ -60,6 +61,18 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ key: str
             actorRole: session.role,
             action: 'KILL_SWITCH_TOGGLE',
             metadata: JSON.stringify({ key, enabled, label: ks.label }),
+          },
+        })
+
+        // P0-24: Write outbox event INSIDE the same transaction.
+        await enqueueOutboxEvent(tx, {
+          eventType: 'KILL_SWITCH_TOGGLED',
+          aggregateType: 'KillSwitch',
+          aggregateId: key,
+          payload: {
+            key,
+            enabled,
+            label: ks.label,
           },
         })
 

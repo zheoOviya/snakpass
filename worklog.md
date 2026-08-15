@@ -3439,3 +3439,60 @@ Track B evidence gaps (authenticated idempotency + concurrency tests) remain as 
 **Wave-2 (P0-24) is now technically unblockable** — P0-25 (its Wave-1 dependency) is at S5 (Tested). The Orchestrator may now review Wave-1 evidence and authorize Wave-2 unlock, with Track B evidence closure as a parallel task.
 
 **STOP.** Awaiting Orchestrator review of Wave-1 + decision on Wave-2 unlock.
+
+---
+Task ID: 71 — Repository Integrity Check + Local Checkout Sync (Orchestrator-Authorized)
+Agent: main (IDE)
+Date: 2026-08-14
+Task: Perform READ-ONLY integrity check per Orchestrator instruction. Verify canonical Wave-1 work exists on origin/main. If local checkout is diverged, sync from canonical remote.
+
+## Orchestrator Correction (acknowledged)
+The Orchestrator verified that the canonical remote (origin/main at f3d513c) contains all Wave-1 work. My previous report (Task 70) incorrectly stated the remote was also reverted. The issue was a **local checkout divergence** only — HEAD was at `27429ae` (a sandbox snapshot) instead of `f3d513c` (canonical origin/main).
+
+## Integrity Check Results — ALL 16 PASS ✅
+
+| # | Check | Result |
+|---|-------|--------|
+| 1 | HEAD matches origin/main | ✅ PASS (both at f3d513c after sync) |
+| 2 | f3d513c in ancestry | ✅ PASS |
+| 3 | withTransaction() in db.ts | ✅ 4 matches |
+| 4 | TransactionConflictError in db.ts | ✅ 4 matches |
+| 5 | IdempotencyKey in schema | ✅ 1 match |
+| 6 | ExceptionQueue in schema | ✅ 2 matches |
+| 7 | OtpLockout in schema | ✅ 1 match |
+| 8 | version fields in schema | ✅ 3 matches (Order, MenuItem, KillSwitch) |
+| 9 | WAVE1_EVIDENCE.md exists | ✅ PASS |
+| 10 | csrf-client.ts exists | ✅ PASS |
+| 11 | idempotency.ts exists | ✅ PASS |
+| 12 | invariant-checker.ts exists | ✅ PASS |
+| 13 | otp-lockout.ts exists | ✅ PASS |
+| 14 | track-b-evidence.sh exists | ✅ PASS |
+| 15 | DR_RUNBOOK.md exists | ✅ PASS |
+| 16 | Wave-1 workflows exist | ✅ ALL 4 present |
+
+## Action Taken
+1. `git fetch origin` — fetched canonical remote state
+2. Verified origin/main is at f3d513c (Track B evidence closure)
+3. Verified local HEAD was diverged (at 27429ae — sandbox snapshot)
+4. Working tree was clean (no uncommitted changes)
+5. `git reset --hard origin/main` — synced local checkout to canonical remote
+6. Re-verified all 16 integrity checks — ALL PASS
+
+## Wave-1 Historical Closure — CONFIRMED INTACT
+Wave-1 closure (Task 68) is NOT retracted. The GitHub evidence confirms all Wave-1 work exists:
+- Sub-Wave 1a (withTransaction + P0-25 A+B + P0-17)
+- Sub-Wave 1b (P0-28 + P0-10 + P0-11)
+- Sub-Wave 1c (P0-26 DR design)
+- Track B evidence (all 3 gaps closed)
+
+## Governance State (confirmed)
+```
+Wave-0                  ✅ CLOSED
+Wave-1                  ✅ CLOSED
+Wave-2 Gate Review      ✅ PASS
+Wave-2                  🔓 UNLOCKED
+Sub-Wave 2a             🟢 AUTHORIZED (integrity check PASS)
+```
+
+## Next Action
+Proceed with Sub-Wave 2a implementation (Outbox model + migration + helper + route integration).
