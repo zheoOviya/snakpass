@@ -436,16 +436,149 @@ This uses the project's linked GitHub repo automatically.
 | 12 | Schema/env restored to production state | ✅ PASS | postgresql provider + clean .env |
 | 13 | withTransaction regression analysis | ✅ PASS | `evidence/wave3-3a/regression-analysis.md` |
 | 14 | Architectural invariant documented | ✅ PASS | `docs/TRANSACTION_RETRY_INVARIANT.md` |
-| 15 | PostgreSQL concurrency proof | 🟡 PENDING | Workflow created + committed; Vercel deploy trigger fix identified |
+| 15 | PostgreSQL concurrency proof | ✅ PASS | PostgreSQL evidence below (run 31896343466) |
 
-**Sub-Wave 3a: EVIDENCE-COMPLETE PENDING ORCHESTRATOR S5 REVIEW.**
+**Sub-Wave 3a: EVIDENCE-COMPLETE — PostgreSQL concurrency PROVEN.**
 
-*The 4 application-level evidence tests PASS. The PostgreSQL concurrency
-re-run is an identified gap with a clear remediation path (ref-only Vercel
-deploy payload). The Orchestrator may accept the SQLite evidence as S5-
-sufficient OR require the PostgreSQL re-run before S5 closure.*
+---
 
-#### Governance State (Final — awaiting Orchestrator)
+### Sub-Wave 3a — PostgreSQL-Native Concurrent-Idempotency Evidence (FINAL)
+
+> **Context:** Orchestrator Decision (Option B): PostgreSQL-native concurrency
+> evidence REQUIRED for S5 closure. SQLite evidence accepted as application-
+> level invariant proof but not sufficient for production-grade concurrency
+> proof.
+
+#### Evidence Run
+
+- **Workflow:** `.github/workflows/subwave-3a-postgresql-concurrent-evidence.yml`
+- **Run ID:** `31896343466` (GitHub Actions run)
+- **Database:** PostgreSQL (Supabase staging, project ref `zmzqqcyapcezmaqvuzzd`)
+- **Staging URL:** `https://snakpass-hu7urdxz5-snakzap.vercel.app` (fresh preview deployment)
+- **Timestamp:** 2026-08-15T16:46:10Z
+- **Evidence JSON:** `evidence/wave3-3a/evidence-postgresql-3a-pg-ev.json`
+- **Result:** `ok: true` ✅
+
+#### 3a-PG-E1: 5 Concurrent Requests, Same Idempotency Key, on PostgreSQL — ✅ PASS
+
+**Test:** 5 concurrent POST /api/payments (Promise.all via background curl jobs)
+with the same `Idempotency-Key` header + same orderId, against the staging
+PostgreSQL database (via a fresh Vercel preview deployment).
+
+**Orchestrator-required proof:**
+
+```text
+5 concurrent requests
+      ↓
+same idempotency key
+      ↓
+exactly 1 Payment             ✅ (paymentCount: 1)
+exactly 1 capture             ✅ (paymentStatus: CAPTURED)
+exactly 1 debit LedgerEntry   ✅ (ledgerEntries.debit: 1)
+exactly 1 credit LedgerEntry  ✅ (ledgerEntries.credit: 1)
+exactly 1 Outbox event        ✅ (outboxEventCount: 1)
+exactly 1 IdempotencyRecord   ✅ (idempotencyRecordCount: 1)
+exactly 1 AuditLog            ✅ (auditLogCount: 1)
+      ↓
+remaining requests receive cached response
+      ↓
+all 5 requests return HTTP 200 with the SAME paymentId
+```
+
+**Actual results (from evidence JSON):**
+
+```json
+{
+  "ok": true,
+  "database": "postgresql",
+  "runId": "3a-pg-ev-1786812361-1",
+  "orchestratorRequiredFields": {
+    "database": "postgresql",
+    "concurrentRequests": 5,
+    "uniquePaymentIds": 1,
+    "paymentCount": 1,
+    "ledgerPairCount": 1,
+    "outboxEventCount": 1,
+    "idempotencyRecordCount": 1
+  },
+  "invariant": {
+    "exactlyOneCapture": true
+  },
+  "databaseState": {
+    "paymentCount": 1,
+    "paymentId": "cmsuly2z20009jo04wd1vym90",
+    "paymentStatus": "CAPTURED",
+    "orderStatus": "PAID",
+    "ledgerEntries": { "total": 2, "debit": 1, "credit": 1 },
+    "outboxEventCount": 1,
+    "idempotencyRecordCount": 1,
+    "auditLogCount": 1
+  },
+  "responseSummary": {
+    "successCount": 5,
+    "errorCount": 0,
+    "uniquePaymentIdsInResponses": 1,
+    "winningPaymentId": "cmsuly2z20009jo04wd1vym90",
+    "responsesReturningWinningPaymentId": 5
+  }
+}
+```
+
+**Proof:** From 5 simultaneous concurrent requests with the same idempotency key
+against the staging PostgreSQL database:
+- **Exactly 1 Payment** was created (not 0, not 5)
+- **Exactly 1 ledger pair** (Dr + Cr)
+- **Exactly 1 outbox event**
+- **Exactly 1 idempotency record**
+- **Exactly 1 audit log entry**
+- All 5 requests returned HTTP 200 with the same paymentId
+  (the 4 losers found the cached response via `withTransaction` retry →
+  `getCachedResponse` returns the cached paymentId)
+
+**P2002 behavior of losing concurrent transactions:**
+On PostgreSQL, concurrent transactions that race to create the same
+`IdempotencyKey.key` get P2002 (unique constraint violation) immediately.
+The `withTransaction` retry logic (P2002/P1008/P2034/P2036/P2024 retryable)
+re-runs the transaction body, and the early `getCachedResponse` check at the
+start returns the cached response. All 5 requests returned 200 with the same
+paymentId — no 409 conflicts, no duplicate captures.
+
+#### Governance Compliance (PostgreSQL Evidence Run)
+
+| Criterion | Status |
+|-----------|--------|
+| `realPayments` not enabled | ✅ PASS (demo mode throughout) |
+| No production Razorpay credentials | ✅ PASS (mock capture) |
+| No Webhook handler implementation | ✅ PASS (schema-only) |
+| Sub-Wave 3b/3c not started | ✅ PASS |
+| Production untouched | ✅ PASS (staging PostgreSQL only) |
+| Staging DB cleaned up after test | ✅ PASS (test data deleted) |
+| Lint PASS | ✅ PASS (`bun run lint` clean) |
+| Schema/env restored to production state | ✅ PASS (postgresql provider + clean .env) |
+
+#### Final 3a Evidence Summary (COMPLETE)
+
+| # | Orchestrator Criterion | Status | Evidence Source |
+|---|------------------------|--------|-----------------|
+| 1 | Capture failure → rollback | ✅ PASS | SQLite empirical (3a-E1) |
+| 2 | Same idempotency key → same Payment | ✅ PASS | SQLite empirical (3a-E2) |
+| 3 | Same key + different order → no 2nd capture | ✅ PASS | SQLite empirical (3a-E3) |
+| 4 | 5 concurrent → exactly 1 Payment/ledger/outbox | ✅ PASS | SQLite empirical (3a-E4) |
+| 5 | Self-validating JSON (ok:true + runId) | ✅ PASS | `evidence/wave3-3a/evidence-3a-ev-1786800391142-e8ad0a07.json` |
+| 6 | realPayments not enabled | ✅ PASS | `realPayments=false` throughout |
+| 7 | No production Razorpay credentials | ✅ PASS | Demo mode (mock capture) |
+| 8 | No Webhook implementation | ✅ PASS | WebhookEvent model only (schema-only) |
+| 9 | 3b/3c not started | ✅ PASS | Not started |
+| 10 | Production untouched | ✅ PASS | Local SQLite + staging PostgreSQL only |
+| 11 | Lint PASS | ✅ PASS | `bun run lint` clean |
+| 12 | Schema/env restored to production state | ✅ PASS | postgresql provider + clean .env |
+| 13 | withTransaction regression analysis | ✅ PASS | `evidence/wave3-3a/regression-analysis.md` |
+| 14 | Architectural invariant documented | ✅ PASS | `docs/TRANSACTION_RETRY_INVARIANT.md` |
+| 15 | PostgreSQL concurrency proof | ✅ PASS | `evidence/wave3-3a/evidence-postgresql-3a-pg-ev.json` (run 31896343466) |
+
+**Sub-Wave 3a: ALL 15 EVIDENCE CRITERIA PASS. PostgreSQL-native concurrency PROVEN.**
+
+#### Governance State (Final — awaiting Orchestrator S5 decision)
 
 ```text
 Wave-0        ✅ CLOSED
@@ -454,9 +587,9 @@ Wave-2        ✅ CLOSED — S5
 
 Wave-3        🔓 UNLOCKED
 
-Sub-Wave 3a   🟡 EVIDENCE-COMPLETE — PENDING ORCHESTRATOR S5 REVIEW
+Sub-Wave 3a   🟢 EVIDENCE-COMPLETE — PostgreSQL concurrency PROVEN
               ├─ Application-level invariants: ✅ PROVEN (SQLite)
-              ├─ PostgreSQL concurrency: 🟡 PENDING (workflow fix identified)
+              ├─ PostgreSQL concurrency: ✅ PROVEN (staging PostgreSQL)
               ├─ Architectural invariant: ✅ DOCUMENTED
               └─ Regression analysis: ✅ PASS-WITH-DOCUMENTED-RISK
 
