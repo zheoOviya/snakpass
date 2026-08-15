@@ -105,40 +105,72 @@ jobs:
 
       - name: Set EVIDENCE_TEST_MODE=true on Vercel preview environment
         run: |
+          set +e  # Don't exit on individual failures — capture details
           echo "=== Setting EVIDENCE_TEST_MODE=true on Vercel preview environment ==="
           PROJECT_ID="$VERCEL_PROJECT_ID"
           API_URL="https://api.vercel.com/v10/projects/$PROJECT_ID/env"
           AUTH="Authorization: Bearer $VERCEL_TOKEN"
 
-          # Check if EVIDENCE_TEST_MODE already exists for preview
-          EXISTING=$(curl -sS -H "$AUTH" "$API_URL" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE" and (.target[] | contains("preview"))) | .id' 2>/dev/null | head -1)
+          echo "  Project ID: $PROJECT_ID"
+          echo "  API URL: $API_URL"
 
-          if [ -n "$EXISTING" ]; then
-            echo "  ⚠️  EVIDENCE_TEST_MODE (preview) already exists (id=$EXISTING) — removing old one"
-            curl -sS -X DELETE -H "$AUTH" "$API_URL/$EXISTING" > /dev/null 2>&1
+          # Step 1: List existing env vars to verify token works + see if EVIDENCE_TEST_MODE exists
+          echo ""
+          echo "  === Listing existing env vars (verifying token access) ==="
+          LIST_RESP=$(curl -sS -w "\n%{http_code}" -H "$AUTH" "$API_URL")
+          LIST_HTTP=$(echo "$LIST_RESP" | tail -1)
+          LIST_BODY=$(echo "$LIST_RESP" | head -n -1)
+          echo "  List HTTP: $LIST_HTTP"
+          if [ "$LIST_HTTP" != "200" ]; then
+            echo "  ❌ Failed to list env vars (HTTP $LIST_HTTP)"
+            echo "  Response: $(echo $LIST_BODY | head -c 500)"
+            exit 1
+          fi
+          echo "  ✅ Token works — env vars listable"
+
+          # Show existing EVIDENCE_TEST_MODE entries (if any)
+          echo ""
+          echo "  === Existing EVIDENCE_TEST_MODE entries ==="
+          echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE") | "  - id=\(.id) target=\(.target | join(",")) type=\(.type) value=\(.value // "(encrypted)")"' 2>/dev/null || echo "  (none)"
+
+          # Remove existing EVIDENCE_TEST_MODE for preview target (if any)
+          EXISTING_IDS=$(echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE" and (.target[] | contains("preview"))) | .id' 2>/dev/null)
+          if [ -n "$EXISTING_IDS" ]; then
+            for EID in $EXISTING_IDS; do
+              echo "  ⚠️  Removing existing EVIDENCE_TEST_MODE (preview) id=$EID"
+              curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID" > /dev/null 2>&1
+            done
           fi
 
-          # Create EVIDENCE_TEST_MODE=true for preview target
-          RESULT=$(curl -sS -X POST \
+          # Step 2: Create EVIDENCE_TEST_MODE=true for preview target
+          echo ""
+          echo "  === Creating EVIDENCE_TEST_MODE=true for preview target ==="
+          CREATE_PAYLOAD='{"key":"EVIDENCE_TEST_MODE","value":"true","target":["preview"],"type":"plain"}'
+          echo "  Payload: $CREATE_PAYLOAD"
+
+          RESULT=$(curl -sS -w "\n%{http_code}" -X POST \
             -H "$AUTH" \
             -H "Content-Type: application/json" \
             "$API_URL" \
-            -d "$(jq -n '{key: "EVIDENCE_TEST_MODE", value: "true", target: ["preview"], type: "plain"}')")
+            -d "$CREATE_PAYLOAD")
 
-          if echo "$RESULT" | jq -e '.id' > /dev/null 2>&1; then
+          RESULT_HTTP=$(echo "$RESULT" | tail -1)
+          RESULT_BODY=$(echo "$RESULT" | head -n -1)
+          echo "  Create HTTP: $RESULT_HTTP"
+          echo "  Create response: $RESULT_BODY" | head -c 500
+          echo ""
+
+          if [ "$RESULT_HTTP" = "200" ] && echo "$RESULT_BODY" | jq -e '.id' > /dev/null 2>&1; then
             echo "  ✅ EVIDENCE_TEST_MODE=true configured for preview environment"
           else
-            echo "  ❌ Failed to set EVIDENCE_TEST_MODE: $(echo $RESULT | jq -r '.error.message // .error // "unknown"')"
+            echo "  ❌ Failed to set EVIDENCE_TEST_MODE"
+            echo "  HTTP code: $RESULT_HTTP"
+            echo "  Response body: $RESULT_BODY"
             exit 1
           fi
 
-          # IMPORTANT: env var changes on Vercel do NOT affect existing deployments.
-          # A NEW deployment is required to pick up the env var change.
-          # The staging URL provided as input must point to a deployment that
-          # was created AFTER this env var was set.
           echo ""
           echo "  Note: env var changes require a new deployment to take effect."
-          echo "  The provided staging URL must be a deployment created after this env var was set."
 
       - name: Trigger new Vercel deployment (to pick up EVIDENCE_TEST_MODE env var)
         run: |
