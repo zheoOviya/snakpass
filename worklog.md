@@ -3811,3 +3811,61 @@ Production                🚫 NOT AUTHORIZED
 Sub-Wave 2b scope is well-defined. All 8 Orchestrator-identified concerns are addressed in the review. The implementation plan is 6 steps. The key decision is the publisher hosting strategy (Vercel Cron for Phase 2 staging vs Fly.io for Phase 3 production).
 
 **STOP.** Awaiting Orchestrator's explicit authorization to implement Sub-Wave 2b.
+
+---
+Task ID: 76 — Sub-Wave 2b Gate Review ACCEPTED — Implementation Authorization Pending
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Record Orchestrator's acceptance of Sub-Wave 2b Gate Review (READ/PLAN-FIRST complete). Implementation NOT yet authorized — 2 governance clarifications required before authorization.
+
+## Orchestrator Decision
+- **Sub-Wave 2a:** ✅ PASS — S5 Evidence-Complete
+- **Sub-Wave 2b Gate Review:** ACCEPTED (8 concerns addressed)
+- **Sub-Wave 2b Implementation:** 🔒 NOT AUTHORIZED — pending 2 governance clarifications
+
+## 2 Governance Clarifications Required Before 2b Authorization
+
+### 1. Publisher Transport Contract
+Socket.io/realtime as publisher delivery mechanism must be proven to be the SAME event path that ProcessedEvent protects. "Event emitted" alone is NOT evidence of consumer-side idempotency. The full chain must be verified:
+```
+Outbox row (PENDING) → publisher delivers → consumer receives → ProcessedEvent check → business effect applied
+```
+
+### 2. Vercel Cron Execution Semantics
+Cron invocation is a periodic trigger, NOT a durable continuously-running worker. The claim must be:
+**"Cron-triggered publisher + DB-backed lease/claim + retry state"**
+NOT simply "worker polls continuously."
+
+## Orchestrator-Specified Execution Sequence (8 steps)
+```
+2b-1  ProcessedEvent model + migration
+2b-2  Atomic outbox claim/lease + publisher
+2b-3  Consumer deduplication (ProcessedEvent check)
+2b-4  Retry / FAILED / poison-event handling (max 5 retries)
+2b-5  Lag + failure alerts (outbox-lag-exceeded + outbox-publish-failed)
+2b-6  Staging E2E verification (events flow end-to-end)
+2b-7  FEATURE_OUTBOX_PUBLISHER = ON (flip AFTER staging evidence ready)
+2b-8  Crash + duplicate-delivery evidence (3×→1× + kill→restart→no loss)
+```
+
+**Critical:** FEATURE_OUTBOX_PUBLISHER=ON must be flipped AFTER staging evidence is ready, NOT during implementation.
+
+## Critical Evidence Requirements (per Orchestrator)
+Every 2b exit claim must be empirically proven, especially:
+1. **3× duplicate delivery → exactly 1 business effect** (consumer dedup works)
+2. **Publisher crash/restart → no event loss** (crash recovery works)
+
+## Current Governance State
+```
+Wave-2                    🔓 UNLOCKED
+Sub-Wave 2a               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2b               🔒 GATED — READ/PLAN-FIRST COMPLETE (implementation NOT authorized)
+Sub-Wave 2c               🔒 GATED
+Sub-Wave 2d               🔒 GATED
+Wave-3                    🔒 LOCKED
+Production                🚫 NOT AUTHORIZED
+```
+
+## Next Action
+STOP. Awaiting explicit Orchestrator instruction: "Orchestrator has authorized Sub-Wave 2b."
+Only then will implementation begin, following the 8-step sequence above, with every exit claim empirically proven.
