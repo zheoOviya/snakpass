@@ -175,52 +175,93 @@ jobs:
 
       - name: Trigger new Vercel deployment (to pick up EVIDENCE_TEST_MODE env var)
         run: |
+          set +e
           echo "=== Triggering new Vercel deployment from main branch ==="
           PROJECT_ID="$VERCEL_PROJECT_ID"
           AUTH="Authorization: Bearer $VERCEL_TOKEN"
 
-          # Create a new deployment from the main branch
-          DEPLOY_RESP=$(curl -sS -X POST \
+          # First, check if there's already a production deployment for the current commit
+          # The push of this workflow file likely triggered a deploy already.
+          echo "  === Querying existing Vercel deployments for main branch ==="
+          LIST_DEPLOYS=$(curl -sS -H "$AUTH" \
+            "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&limit=5&target=preview&state=READY")
+          echo "  Recent READY preview deployments:"
+          echo "$LIST_DEPLOYS" | jq -r '.deployments[]? | "    - \(.url) (created: \(.createdAt), meta: \(.meta.githubCommitMessage // "n/a" | .[0:60]))"' 2>/dev/null | head -5
+
+          # Try to create a new deployment from main
+          echo ""
+          echo "  === Attempting to trigger a new deployment ==="
+          DEPLOY_RESP=$(curl -sS -w "\n%{http_code}" -X POST \
             -H "$AUTH" \
             -H "Content-Type: application/json" \
             "https://api.vercel.com/v13/deployments" \
-            -d "$(jq -n '{name: "snakpass", target: "preview", gitSource: {repo: "zheoOviya/snakpass", ref: "main"}}')")
+            -d '{"name":"snakpass","target":"preview","gitSource":{"repo":"zheoOviya/snakpass","ref":"main"}}')
 
-          DEPLOY_ID=$(echo "$DEPLOY_RESP" | jq -r '.id // empty')
-          DEPLOY_URL=$(echo "$DEPLOY_RESP" | jq -r '.url // empty')
-          echo "Deployment triggered: id=$DEPLOY_ID, url=$DEPLOY_URL"
+          DEPLOY_HTTP=$(echo "$DEPLOY_RESP" | tail -1)
+          DEPLOY_BODY=$(echo "$DEPLOY_RESP" | head -n -1)
+          echo "  Deploy trigger HTTP: $DEPLOY_HTTP"
+          echo "  Deploy response (first 300 chars): $(echo $DEPLOY_BODY | head -c 300)"
 
-          if [ -z "$DEPLOY_ID" ] || [ "$DEPLOY_ID" = "null" ]; then
-            echo "  ⚠️ Could not trigger new deployment (may already be deploying). Using provided staging URL."
-            echo "  Response: $DEPLOY_RESP" | head -c 500
-          else
-            echo "  Waiting for deployment $DEPLOY_ID to be ready..."
-            # Save the new deployment URL for use in subsequent steps
+          DEPLOY_ID=$(echo "$DEPLOY_BODY" | jq -r '.id // empty')
+          DEPLOY_URL=$(echo "$DEPLOY_BODY" | jq -r '.url // empty')
+
+          if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
+            echo "  ✅ Deployment triggered: id=$DEPLOY_ID, url=$DEPLOY_URL"
             if [ -n "$DEPLOY_URL" ] && [ "$DEPLOY_URL" != "null" ]; then
               NEW_STAGING_URL="https://$DEPLOY_URL"
-              echo "  New staging URL: $NEW_STAGING_URL"
               echo "NEW_STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+              echo "  New staging URL: $NEW_STAGING_URL"
             fi
-          fi
-
-          # Wait for the deployment to be ready (poll up to 4 minutes)
-          if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
-            echo "  Polling deployment status..."
-            for i in $(seq 1 48); do
+            echo "  Waiting for deployment to be READY..."
+            for i in $(seq 1 60); do
               STATUS_RESP=$(curl -sS -H "$AUTH" "https://api.vercel.com/v13/deployments/$DEPLOY_ID")
               STATUS=$(echo "$STATUS_RESP" | jq -r '.status // empty')
-              READY=$(echo "$STATUS_RESP" | jq -r '.ready // false')
-              echo "    Attempt $i: status=$STATUS, ready=$READY"
-              if [ "$STATUS" = "READY" ] || [ "$READY" = "true" ]; then
+              READY_STATE=$(echo "$STATUS_RESP" | jq -r '.readyState // empty')
+              echo "    [$i] status=$STATUS, readyState=$READY_STATE"
+              if [ "$READY_STATE" = "READY" ] || [ "$STATUS" = "READY" ]; then
                 echo "  ✅ Deployment is READY"
+                # Re-extract the URL in case it changed
+                FINAL_URL=$(echo "$STATUS_RESP" | jq -r '.url // empty')
+                if [ -n "$FINAL_URL" ] && [ "$FINAL_URL" != "null" ]; then
+                  NEW_STAGING_URL="https://$FINAL_URL"
+                  echo "NEW_STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+                  echo "  Final staging URL: $NEW_STAGING_URL"
+                fi
                 break
               fi
-              if [ "$STATUS" = "ERROR" ] || [ "$STATUS" = "CANCELED" ]; then
-                echo "  ❌ Deployment $STATUS"
-                exit 1
+              if [ "$READY_STATE" = "ERROR" ] || [ "$STATUS" = "ERROR" ] || [ "$STATUS" = "CANCELED" ]; then
+                echo "  ❌ Deployment $READY_STATE"
+                # Don't exit — fall back to the latest READY deployment
+                break
               fi
               sleep 5
             done
+          else
+            echo "  ⚠️ Could not trigger new deployment (may already be deploying)."
+            echo "  Falling back to querying the latest READY preview deployment..."
+          fi
+
+          # If we don't have a new deployment URL yet, query for the latest READY preview deployment
+          if [ -z "$NEW_STAGING_URL" ]; then
+            echo ""
+            echo "  === Querying latest READY preview deployment ==="
+            # Wait a bit for any in-progress deploy to complete
+            sleep 30
+            LATEST=$(curl -sS -H "$AUTH" \
+              "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&limit=10&target=preview&state=READY")
+            LATEST_URL=$(echo "$LATEST" | jq -r '.deployments[0].url // empty')
+            LATEST_COMMIT=$(echo "$LATEST" | jq -r '.deployments[0].meta.githubCommitSha // "unknown"')
+            LATEST_MSG=$(echo "$LATEST" | jq -r '.deployments[0].meta.githubCommitMessage // "unknown"' | head -c 80)
+            echo "  Latest READY preview deployment:"
+            echo "    URL: https://$LATEST_URL"
+            echo "    Commit SHA: $LATEST_COMMIT"
+            echo "    Commit msg: $LATEST_MSG"
+
+            if [ -n "$LATEST_URL" ] && [ "$LATEST_URL" != "null" ]; then
+              NEW_STAGING_URL="https://$LATEST_URL"
+              echo "NEW_STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+              echo "  ✅ Using latest READY preview deployment: $NEW_STAGING_URL"
+            fi
           fi
 
       - name: Use new deployment URL if available
@@ -238,26 +279,47 @@ jobs:
           STAGING_URL="${STAGING_URL%/}"
           echo "=== Staging URL: $STAGING_URL ==="
 
-          echo "=== Health check ==="
-          HEALTH=$(curl -sS "$STAGING_URL/api/health")
-          echo "$HEALTH" | jq '.' 2>/dev/null || echo "$HEALTH"
+          # Retry the health check + evidence-setup endpoint a few times
+          # (new deployments may take a moment to be fully reachable)
+          READY=0
+          for attempt in $(seq 1 12); do
+            echo ""
+            echo "=== Attempt $attempt: Health check ==="
+            HEALTH=$(curl -sS -w "\n%{http_code}" "$STAGING_URL/api/health")
+            HEALTH_HTTP=$(echo "$HEALTH" | tail -1)
+            HEALTH_BODY=$(echo "$HEALTH" | head -n -1)
+            echo "  Health HTTP: $HEALTH_HTTP"
+            if [ "$HEALTH_HTTP" = "200" ]; then
+              echo "  Health body: $HEALTH_BODY" | head -c 200
+              echo ""
+              echo "  === Verify evidence-setup endpoint ==="
+              SETUP_RESP=$(curl -sS -w "\n%{http_code}" "$STAGING_URL/api/payments/evidence-setup?scenario=pre-flight")
+              SETUP_HTTP=$(echo "$SETUP_RESP" | tail -1)
+              SETUP_BODY=$(echo "$SETUP_RESP" | head -n -1)
+              echo "  evidence-setup HTTP: $SETUP_HTTP"
+              if [ "$SETUP_HTTP" = "200" ]; then
+                echo "  evidence-setup body: $SETUP_BODY" | head -c 200
+                echo ""
+                echo "✅ Evidence endpoints deployed + evidence test mode enabled"
+                READY=1
+                break
+              elif [ "$SETUP_HTTP" = "403" ]; then
+                echo "  ❌ Evidence test mode NOT enabled (403). Env var may not have propagated."
+              else
+                echo "  ⚠️ evidence-setup returned $SETUP_HTTP (expected 200). Latest commit may not be deployed yet."
+              fi
+            else
+              echo "  ⚠️ Health check failed (HTTP $HEALTH_HTTP)"
+            fi
+            echo "  Waiting 15s before retry..."
+            sleep 15
+          done
 
-          echo ""
-          echo "=== Verify evidence-setup endpoint is deployed (should return JSON, not 404) ==="
-          SETUP_RESP=$(curl -sS -w "\n%{http_code}" "$STAGING_URL/api/payments/evidence-setup?scenario=pre-flight")
-          SETUP_HTTP=$(echo "$SETUP_RESP" | tail -1)
-          SETUP_BODY=$(echo "$SETUP_RESP" | head -n -1)
-          echo "evidence-setup HTTP: $SETUP_HTTP"
-          echo "evidence-setup body: $SETUP_BODY"
-          if [ "$SETUP_HTTP" = "403" ]; then
-            echo "❌ Evidence test mode NOT enabled on staging. Need to set EVIDENCE_TEST_MODE=true env var on Vercel."
+          if [ "$READY" != "1" ]; then
+            echo ""
+            echo "❌ FAILED: Staging not ready or evidence endpoints not deployed after 12 attempts."
             exit 1
           fi
-          if [ "$SETUP_HTTP" != "200" ]; then
-            echo "❌ evidence-setup endpoint returned $SETUP_HTTP (expected 200). Is the latest commit deployed?"
-            exit 1
-          fi
-          echo "✅ Evidence endpoints deployed + evidence test mode enabled"
 
       - name: Run 5-concurrent-request test + verify PostgreSQL state
         env:
