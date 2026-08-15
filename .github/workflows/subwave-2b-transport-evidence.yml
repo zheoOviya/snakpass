@@ -155,7 +155,11 @@ jobs:
               -d "{\"eventId\":\"$CONSUMER_EVENT_ID\",\"eventType\":\"ORDER_CREATED\"}")
             echo "  Consumer response: $RESP"
             PROCESSED=$(echo "$RESP" | jq -r '.processed // false' | tr '[:upper:]' '[:lower:]')
-            DELIVERY_RESULTS="$DELIVERY_RESULTS,{\"delivery\":$i,\"processed\":$PROCESSED}"
+            if [ -z "$DELIVERY_RESULTS" ]; then
+              DELIVERY_RESULTS="{\"delivery\":$i,\"processed\":$PROCESSED}"
+            else
+              DELIVERY_RESULTS="$DELIVERY_RESULTS,{\"delivery\":$i,\"processed\":$PROCESSED}"
+            fi
             echo "  processed=$PROCESSED"
           done
 
