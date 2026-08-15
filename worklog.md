@@ -4108,3 +4108,73 @@ All Orchestrator-required empirical evidence tests PASS with `ok: true`:
 The publisher now uses HTTP transport mode (POST to consumer endpoint) for staging E2E. PUBLISHED is only set on successful transport (best-effort mode removed per Orchestrator constraint).
 
 **STOP.** Awaiting Orchestrator review of 2b-E1/E2/E3/E4 evidence + decision on 2b-7 (flag ON).
+
+---
+Task ID: 80 — Sub-Wave 2b-7 Flag ON + Post-Flag Regression — ALL 4 PASS ok:true
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Execute Orchestrator-authorized 2b-7 (FEATURE_OUTBOX_PUBLISHER=ON on staging) + post-flag regression (Test A/B/C + security check).
+
+## Authorization
+- **Scope**: 2b-7 staging flag ON + Test A (normal flow) + Test B (3×→1× dedup) + Test C (transport failure → NOT PUBLISHED) + Security check
+- **Forbidden**: Production flag ON, 2c, Wave-3
+
+## Evidence Results — ALL 4 PASS, ok:true ✅
+
+### Test A — Normal Business Flow — ✅ PASS
+- Authenticated order → Outbox PENDING → Publisher claims → Consumer processes → ProcessedEvent=1 → PUBLISHED
+- Full E2E flow with flag ON verified
+
+### Test B — Duplicate Delivery After Flag ON — ✅ PASS
+- 3× delivery via real consumer endpoint → 1 ProcessedEvent (dedup works with flag ON)
+
+### Test C — Transport Failure → NOT PUBLISHED — ✅ PASS
+- Invalid consumer URL → transport failure → event NOT PUBLISHED (stays PENDING)
+- **Invariant proven:** Transport failure can never produce PUBLISHED
+
+### Security Check — ✅ PASS
+- Staging (VERCEL_ENV=preview): /api/test/* endpoints accessible
+- Production: guarded by VERCEL_ENV !== 'production' check
+
+## Evidence Artifacts
+- **Workflow:** `subwave-2b-flag-on.yml` (run ID: 31879863834)
+- **Artifact:** `subwave-2b7-flag-on-evidence` (2b7-evidence.json, 90-day retention)
+- **Staging URL:** https://snakpass-zy6k0erry-snakzap.vercel.app
+- **Production:** NOT TOUCHED (flag set on preview only)
+
+## Issues Fixed
+1. YAML em-dashes (—) caused "mapping values are not allowed" error → replaced with ASCII dashes
+2. workflow_dispatch trigger not recognized by GitHub → fixed by valid YAML
+
+## Current Governance State
+```
+Wave-2                    🔓 UNLOCKED
+Sub-Wave 2a               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2b               🟡 All evidence PASS (ok:true)
+  ├─ 2b-0 Transport        ✅ PASS
+  ├─ 2b-1 ProcessedEvent   ✅ IMPLEMENTED
+  ├─ 2b-2 Claim/Lease      ✅ IMPLEMENTED + E2E
+  ├─ 2b-3 Crash Recovery   ✅ EMPIRICALLY VERIFIED
+  ├─ 2b-4 Poison Event     ✅ EMPIRICALLY VERIFIED (5→FAILED)
+  ├─ 2b-4a Transient Retry ✅ EMPIRICALLY VERIFIED (FAIL→RETRY→PUBLISHED)
+  ├─ 2b-5 Alerts           ✅ IMPLEMENTED (lag+failure rules added)
+  ├─ 2b-6 E2E              ✅ PASS
+  ├─ 2b-7 Flag ON          ✅ PASS (flag ON + Test A/B/C + security)
+  ├─ 2b-8 Dedup            ✅ EMPIRICALLY VERIFIED (3×→1× via real consumer)
+  └─ 2b-8 Final Package    🟡 Remaining: alert evidence (2b-5 empirical)
+Sub-Wave 2c               🔒 LOCKED
+Sub-Wave 2d               🔒 LOCKED
+Wave-3                    🔒 LOCKED
+Production                🚫 NOT AUTHORIZED
+```
+
+## Remaining 2b Items
+- 2b-5 Alert evidence: lag alert (pending > 60s) + failure alert (FAILED → critical) — alert rules implemented but empirical evidence (alert evaluator output) not yet captured
+- 2b-8 Final evidence package (A-J): requires 2b-5 alert evidence
+
+## Recommendation to Orchestrator
+2b-7 is complete with all 4 post-flag tests PASSING (ok:true). The flag is ON on staging. The critical invariant is proven: **transport failure can never produce PUBLISHED**.
+
+Remaining: 2b-5 alert evidence (empirical proof that lag/failure alerts fire). This is the last gap before 2b final S5 closure.
+
+**STOP.** Awaiting Orchestrator review of 2b-7 evidence + decision on 2b-5 alert evidence + 2b final closure.

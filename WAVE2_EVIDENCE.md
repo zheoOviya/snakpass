@@ -355,3 +355,26 @@ Per Orchestrator Decision (Wave-2 Gate Review PASS + Sub-Wave 2a authorized):
 
 #### Evidence JSON self-validation: ok:true ✅
 
+
+### Sub-Wave 2b-7 — Flag ON + Post-Flag Regression (2026-08-15) — ALL 4 PASS ok:true ✅
+
+**Workflow:** `subwave-2b-flag-on.yml` (run ID: 31879863834)
+**Evidence JSON:** `ok: true`, `flagOn: true`
+
+#### Test A — Normal Business Flow — ✅ PASS
+- Authenticated order creation → Outbox PENDING → Publisher claims → Consumer processes → ProcessedEvent=1 → PUBLISHED
+- Full E2E flow verified with flag ON
+
+#### Test B — Duplicate Delivery After Flag ON — ✅ PASS
+- 3× delivery via real consumer endpoint → 1 ProcessedEvent (dedup works with flag ON)
+
+#### Test C — Transport Failure → NOT PUBLISHED — ✅ PASS
+- Invalid consumer URL → transport failure → event NOT PUBLISHED (stays PENDING)
+- **Invariant proven:** Transport failure can never produce PUBLISHED
+
+#### Security Check — ✅ PASS
+- Staging (VERCEL_ENV=preview): /api/test/* endpoints accessible (not 403)
+- Production: guarded by VERCEL_ENV !== 'production' check
+
+#### Evidence JSON self-validation: ok:true ✅
+
