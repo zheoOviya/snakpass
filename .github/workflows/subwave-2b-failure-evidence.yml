@@ -68,8 +68,14 @@ jobs:
             local event_id="$1"
             local event_type="$2"
             local payload="$3"
-            local sql="INSERT INTO \"Outbox\" (\"id\", \"eventId\", \"eventType\", \"aggregateType\", \"aggregateId\", \"payload\", \"status\", \"attempts\", \"createdAt\") VALUES (gen_random_uuid()::text, '$event_id', '$event_type', 'Test', 'test-$event_id', '\$$payload', 'PENDING', 0, NOW());"
-            query_db "$sql" > /dev/null 2>&1
+            # Write SQL to file using printf (avoids shell expansion of $ in JSON)
+            printf 'INSERT INTO "Outbox" ("id", "eventId", "eventType", "aggregateType", "aggregateId", "payload", "status", "attempts", "createdAt") VALUES (gen_random_uuid()::text, '"'"'%s'"'"', '"'"'%s'"'"', '"'"'Test'"'"', '"'"'test-%s'"'"', '"'"'%s'"'"', '"'"'PENDING'"'"', 0, NOW());' "$event_id" "$event_type" "$event_id" "$payload" > /tmp/insert_outbox.sql
+            jq -n --rawfile sql /tmp/insert_outbox.sql '{query: $sql}' | \
+              curl -sS -X POST \
+                -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+                -H "Content-Type: application/json" \
+                "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+                -d @- > /dev/null 2>&1
           }
 
           # Helper: get outbox row status
