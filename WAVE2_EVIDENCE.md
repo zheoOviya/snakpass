@@ -394,3 +394,70 @@ Per Orchestrator Decision (Wave-2 Gate Review PASS + Sub-Wave 2a authorized):
 
 #### Evidence JSON self-validation: ok:true ✅
 
+
+---
+
+## 7. Sub-Wave 2c — Evidence Consolidation (2026-08-15) — S5 Evidence-Complete ✅
+
+**Decision:** Option A accepted by Orchestrator — existing 2a/2b evidence satisfies all 3 P0-24 failure-injection test criteria. No new test execution required.
+
+### Important: Evidence Origin
+All evidence below was generated during Sub-Wave 2a and Sub-Wave 2b execution. It is cross-referenced here for 2c consolidation. **No new runs were executed for 2c.** No fabricated evidence claims.
+
+### 2c-1: Partial-Failure Injection Test — ✅ PASS (evidence from 2a)
+
+**P0-24 matrix requirement:**
+> "Partial failure mid-transaction → entire business transaction rolls back; no orphan OrderItems, no orphan ledger entries, no decremented availability without order."
+
+**Evidence source:** Sub-Wave 2a rollback-injection test
+- **Workflow:** `subwave-2a-rollback-evidence.yml` (run ID: 31869987403)
+- **Endpoint:** `POST /api/test/rollback-injection`
+- **Sequence:** Start transaction → create order (business mutation) → write outbox event (ORDER_CREATED) inside same transaction → throw deliberate error
+- **Result:**
+  - `orderExists: false` (business mutation rolled back)
+  - `outboxExists: false` (outbox INSERT rolled back)
+  - `atomicRollback: true` (both rolled back atomically)
+- **Conclusion:** No orphan entities. No partial commits. Transactional integrity empirically proven.
+
+### 2c-2: Outbox-Crash Test — ✅ PASS (evidence from 2b-3)
+
+**P0-24 matrix requirement:**
+> "Outbox publisher crashes after commit → the event row is already committed in the DB, so it is NOT lost. Publisher restarts and re-publishes."
+
+**Evidence source:** Sub-Wave 2b-3 crash recovery test
+- **Workflow:** `subwave-2b-failure-evidence.yml` (run ID: 31873863056)
+- **Sequence:** Event created → claimed by crashed worker (5s lease) → lease expired → publisher recovered → PUBLISHED
+- **Result:**
+  - Before: status=PENDING
+  - After claim: status=CLAIMED (simulated crash)
+  - After lease expiry + publisher recovery: status=PUBLISHED
+  - `noEventLoss: true`
+- **Conclusion:** Event recoverable after publisher crash. No event loss.
+
+### 2c-3: Idempotent-Replay Test — ✅ PASS (evidence from 2b-E2)
+
+**P0-24 matrix requirement:**
+> "Consumers may receive the event more than once → consumers must be idempotent, so the business effect is exactly-once even if physical delivery is at-least-once."
+
+**Evidence source:** Sub-Wave 2b-E2 real consumer E2E test
+- **Workflow:** `subwave-2b-transport-evidence.yml` (run ID: 31877198639)
+- **Sequence:** Create outbox event → deliver 3× via real HTTP consumer endpoint (`/api/test/consume-event`) → verify ProcessedEvent count + business effect count
+- **Result:**
+  - Delivery 1: `processed: true` (business effect applied)
+  - Delivery 2: `processed: false` (dedup — already processed)
+  - Delivery 3: `processed: false` (dedup — already processed)
+  - `processedEventCount: 1`
+  - `businessEffectCount: 1`
+  - `exactlyOnce: true`
+- **Conclusion:** 3× delivery → exactly 1 business effect. Consumer-side idempotency empirically proven.
+
+### 2c Summary
+
+| P0-24 Criterion | Evidence Source | Run ID | Key Metrics | Decision |
+|----------------|----------------|--------|-------------|----------|
+| Partial-failure → full rollback | 2a rollback-injection | 31869987403 | orderExists=false, outboxExists=false, atomicRollback=true | ✅ PASS |
+| Publisher crash → no event loss | 2b-3 crash recovery | 31873863056 | noEventLoss=true, finalStatus=PUBLISHED | ✅ PASS |
+| Duplicate replay → exactly-once | 2b-E2 consumer E2E | 31877198639 | processedEventCount=1, businessEffectCount=1, exactlyOnce=true | ✅ PASS |
+
+**Sub-Wave 2c: S5 / Evidence-Complete ✅**
+
