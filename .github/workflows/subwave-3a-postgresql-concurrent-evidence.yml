@@ -265,68 +265,65 @@ jobs:
           echo "$LIST_DEPLOYS" | jq -r '.deployments[]? | "    - target=\(.target // "preview") url=\(.url) created=\(.createdAt) commit=\(.meta.githubCommitSha // "n/a" | .[0:8])"' 2>/dev/null | head -5
 
           # ------------------------------------------------------------------
-          # Step 1: Try Option A — ref-only payload (no gitSource) with target=preview.
-          # Per Vercel API docs, when the project has a linked git repository,
-          # you can trigger a deploy using just `ref` + `name` + `target`.
-          # We use target=preview (not production) because:
-          #   1. Preview deployments inherit DATABASE_URL (verified working on
-          #      the existing snakpass-eqkarf10s-snakzap.vercel.app preview URL).
-          #   2. Production deployments on this Vercel project cannot reach
-          #      the Supabase pooler (verified — see worklog Task 3a-workflow-fix).
-          #   3. Preview deployments have a chance of running with NODE_ENV=development
-          #      (which the evidence-setup endpoint requires).
+          # Step 1: Trigger a PREVIEW deployment (NOT production).
+          #
+          # Why preview (not production):
+          #   1. Production deployments on this Vercel project CANNOT reach
+          #      the Supabase pooler (verified — HTTP 503 'Can't reach database
+          #      server at aws-ap-northeast-1.pooler.supabase.com:6543' on the
+          #      production URL snakpass-dbp3ic55z-snakzap.vercel.app). Preview
+          #      deployments (like snakpass-eqkarf10s-snakzap.vercel.app)
+          #      CAN reach the DB — verified HTTP 200, latencyMs=12.
+          #   2. NODE_ENV=development env var was set in Step #7 above (target
+          #      preview+production). The evidence-setup endpoint guards on
+          #      `process.env.NODE_ENV === 'production'` and refuses to serve
+          #      in production mode. The new preview deployment should pick up
+          #      NODE_ENV=development (if Vercel honors the override).
+          #
+          # API note on `target` field:
+          #   - Vercel v13/deployments rejects `target=preview` with HTTP 400
+          #     "Invalid request: `target` should be 'production', 'staging',
+          #      or a custom environment identifier." (verified — see previous
+          #      workflow run 31890722345).
+          #   - To create a PREVIEW deployment, OMIT the `target` field
+          #     entirely. Vercel defaults to preview when target is absent.
+          #
+          # gitSource requirement:
+          #   - Vercel API REQUIRES gitSource.repoId (numeric GitHub repo ID)
+          #     when gitSource.type=github. The previous workflow's bug was
+          #     omitting repoId (HTTP 400 "gitSource missing required property
+          #     repoId"). We extract repoId from GET /v9/projects/$PROJECT_ID
+          #     link.repoId field (verified value: 1331058897 for zheoOviya/snakpass).
           # ------------------------------------------------------------------
           echo ""
-          echo "  === Attempting Option A: ref-only deployment trigger (target=preview) ==="
+          echo "  === Triggering PREVIEW deployment (target field omitted) ==="
+          if [ -z "$REPO_ID" ] || [ "$REPO_ID" = "null" ]; then
+            echo "  ❌ Cannot trigger deployment — project has no linked repoId."
+            exit 1
+          fi
+          PAYLOAD=$(jq -n \
+            --arg name "snakpass" \
+            --arg type "$LINK_TYPE" \
+            --arg org "$ORG" \
+            --arg repo "$REPO" \
+            --argjson repoId "$REPO_ID" \
+            --arg ref "main" \
+            '{name:$name, gitSource:{type:$type, org:$org, repo:$repo, repoId:$repoId, ref:$ref}}')
+          echo "  Payload (note: no 'target' field => preview deployment):"
+          echo "$PAYLOAD" | jq '.' | sed 's/^/    /'
+
           DEPLOY_RESP=$(curl -sS -w "\n%{http_code}" -X POST \
             -H "$AUTH" \
             -H "Content-Type: application/json" \
             "https://api.vercel.com/v13/deployments" \
-            -d '{"name":"snakpass","target":"preview","ref":"main"}')
+            -d "$PAYLOAD")
 
           DEPLOY_HTTP=$(echo "$DEPLOY_RESP" | tail -1)
           DEPLOY_BODY=$(echo "$DEPLOY_RESP" | head -n -1)
-          echo "  Option A HTTP: $DEPLOY_HTTP"
-          echo "  Option A response (first 400 chars): $(echo "$DEPLOY_BODY" | head -c 400)"
+          echo "  Deploy HTTP: $DEPLOY_HTTP"
+          echo "  Deploy response (first 600 chars): $(echo "$DEPLOY_BODY" | head -c 600)"
 
           DEPLOY_ID=$(echo "$DEPLOY_BODY" | jq -r '.id // empty')
-
-          # ------------------------------------------------------------------
-          # Step 2: If Option A failed (HTTP 400 / no DEPLOY_ID), fall back to
-          # Option B — full gitSource with numeric repoId from the project query.
-          # ------------------------------------------------------------------
-          if [ -z "$DEPLOY_ID" ] || [ "$DEPLOY_ID" = "null" ]; then
-            echo ""
-            echo "  ⚠️  Option A did not return a deployment id. Falling back to Option B..."
-            if [ -z "$REPO_ID" ] || [ "$REPO_ID" = "null" ]; then
-              echo "  ❌ Cannot fall back to Option B — project has no linked repoId."
-              echo "  ❌ Cannot trigger deployment."
-              exit 1
-            fi
-            echo "  === Attempting Option B: gitSource with repoId=$REPO_ID (target=preview) ==="
-            PAYLOAD=$(jq -n \
-              --arg name "snakpass" \
-              --arg target "preview" \
-              --arg type "$LINK_TYPE" \
-              --arg org "$ORG" \
-              --arg repo "$REPO" \
-              --argjson repoId "$REPO_ID" \
-              --arg ref "main" \
-              '{name:$name, target:$target, gitSource:{type:$type, org:$org, repo:$repo, repoId:$repoId, ref:$ref}}')
-            echo "  Option B payload: $PAYLOAD"
-            DEPLOY_RESP=$(curl -sS -w "\n%{http_code}" -X POST \
-              -H "$AUTH" \
-              -H "Content-Type: application/json" \
-              "https://api.vercel.com/v13/deployments" \
-              -d "$PAYLOAD")
-
-            DEPLOY_HTTP=$(echo "$DEPLOY_RESP" | tail -1)
-            DEPLOY_BODY=$(echo "$DEPLOY_RESP" | head -n -1)
-            echo "  Option B HTTP: $DEPLOY_HTTP"
-            echo "  Option B response (first 400 chars): $(echo "$DEPLOY_BODY" | head -c 400)"
-
-            DEPLOY_ID=$(echo "$DEPLOY_BODY" | jq -r '.id // empty')
-          fi
 
           DEPLOY_URL=$(echo "$DEPLOY_BODY" | jq -r '.url // empty')
 
