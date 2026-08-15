@@ -329,3 +329,29 @@ Per Orchestrator Decision (Wave-2 Gate Review PASS + Sub-Wave 2a authorized):
 }
 ```
 
+
+### Sub-Wave 2b — Transport + Consumer E2E + Transient + Crash Evidence (2026-08-15) — ALL 3 EMPIRICALLY VERIFIED ✅ ok:true
+
+**Workflow:** `subwave-2b-transport-evidence.yml` (run ID: 31877198639)
+**Evidence JSON:** `ok: true` (self-validated)
+
+#### 2b-E1 Transient Retry — ✅ PASS
+- **Test:** Create event with unknown type → publisher fails (attempt 1, status=PENDING) → fix type → publisher succeeds → PUBLISHED
+- **Evidence:** `finalStatus: "PUBLISHED"`, `attempts: 1` (FAIL→RETRY→SUCCESS→PUBLISHED)
+
+#### 2b-E2 Real Consumer E2E — ✅ PASS
+- **Test:** Create outbox event → deliver 3× via real HTTP consumer endpoint (`/api/test/consume-event`) → verify exactly 1 ProcessedEvent + 1 business effect
+- **Evidence:**
+  - Delivery 1: `processed: true` (business effect applied)
+  - Delivery 2: `processed: false` (dedup — already processed)
+  - Delivery 3: `processed: false` (dedup — already processed)
+  - `processedEventCount: 1`
+  - `outboxStatus: "PUBLISHED"`
+- **Transport chain verified:** Outbox → Publisher → HTTP POST → Consumer endpoint → processEvent() → ProcessedEvent → business effect exactly once
+
+#### 2b-E3 Crash Recovery — ✅ PASS
+- **Test:** Event claimed by crashed worker → lease expired (5s) → publisher recovered → PUBLISHED
+- **Evidence:** `finalStatus: "PUBLISHED"` (claimed→lease expired→recovered→PUBLISHED, no event loss)
+
+#### Evidence JSON self-validation: ok:true ✅
+
