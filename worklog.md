@@ -4589,3 +4589,166 @@ Task: Execute Orchestrator-authorized final audit of 2d implementation + evidenc
 5. Payment + Ledger atomicity (Wave-3 P0-01)
 
 STOP. Awaiting Orchestrator decision on Wave-2 closure (CONDITIONAL-GO → PASS or NO-GO).
+
+---
+Task ID: 87 — Wave-2 CLOSED + Wave-3 Gate Review Commenced
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Record Orchestrator's formal Wave-2 PASS declaration (S5 Evidence-Complete, CLOSED). Begin READ/PLAN-FIRST Sub-Wave 3 Gate Review.
+
+## Orchestrator Decision — Wave-2 CLOSED ✅
+```
+Wave-2                    ✅ PASS — S5 Evidence-Complete — CLOSED
+
+Sub-Wave 2a               ✅ PASS
+Sub-Wave 2b               ✅ PASS
+Sub-Wave 2c               ✅ PASS
+Sub-Wave 2d               ✅ PASS (with documented production prerequisite)
+
+Production prerequisites  🟡 CARRIED FORWARD
+  └─ Historical orphan baseline fix
+  └─ Production DB role
+  └─ Production realtime transport
+
+Wave-3                    🔒 LOCKED
+Sub-Wave 3 Gate Review    ⏳ READ/PLAN-FIRST ONLY
+Production                🚫 NOT AUTHORIZED
+```
+
+## Wave-2 Closure Summary
+- P0-24 (Transactional Data Integrity) fully implemented across 4 sub-waves
+- 16 test criteria empirically verified with ok:true
+- Critical invariants locked: same-txn atomicity, transport-failure≠PUBLISHED, consumer dedup
+- Open defect: orphan_business_count historical baseline (Phase-3 prerequisite)
+- Production: NOT AUTHORIZED
+
+## Wave-3 Gate Review — READ/PLAN-FIRST (Orchestrator-authorized)
+Before any implementation:
+1. Wave-3 scope and P0 requirements
+2. Existing payment/ledger infrastructure
+3. Atomicity boundaries between payment, ledger, order and outbox
+4. Existing idempotency mechanisms
+5. Failure/retry/reconciliation mechanisms reusable from Wave-2
+6. Production deployment dependencies
+7. Security/authentication requirements
+8. Database/schema changes required
+9. Evidence requirements and empirical exit gates
+
+## Governance Constraints
+- Do NOT deploy fixes to production
+- Do NOT modify production configuration
+- Do NOT switch production feature flags
+- Do NOT implement Wave-3 features yet
+- Do NOT treat historical-orphan defect as resolved
+- Next action: create SUBWAVE_3_GATE_REVIEW.md (READ/PLAN-FIRST only)
+
+---
+Task ID: WAVE3-1
+Agent: Explore
+Date: 2026-08-15
+Task: READ-ONLY Sub-Wave 3 Gate Review — comprehensive Wave-3 scope + codebase audit. Produce structured Markdown report answering 8 governance questions. NO code changes, NO deployments, NO modifications.
+
+Work Log:
+- Read in full: worklog.md (4,643 lines) — verified Wave-2 closure at Task 87 (lines 4594-4643): Wave-2 ✅ PASS — S5 Evidence-Complete — CLOSED. Wave-3 🔒 LOCKED. Sub-Wave 3 Gate Review ⏳ READ/PLAN-FIRST ONLY. Production 🚫 NOT AUTHORIZED.
+- Read in full: IMPLEMENTATION_ORDER.md (297 lines) — §3 Wave 3 (lines 118-131): 2 P0s (P0-01 Tier 1, P0-08 Tier 4). F-convergence gate: Prepaid+Reorder. P0-01 has 4 predecessors across 3 waves (P0-09 w0, P0-17 w1, P0-24 w2, P0-23 w0). P0-08 has 2 predecessors (P0-24 w2, P0-25 w1).
+- Read in full: P0_DEPENDENCY_GRAPH.md (407 lines) — §2 Node Catalog lines 50-79 (P0-01 protects I-01, I-04; P0-08 protects I-02, I-10). §4.3 B-edge table lines 166-203. §6 Failure propagation: Razorpay rows (lines 231-235). §8.2 Roots/leaves (P0-01 has 4 B-predecessors; P0-08 has 2 B-predecessors).
+- Read in full: CRITICAL_PATH.md (407 lines) — §2.A topological layering: L3 = P0-01, P0-08 (depth 3 via P0-24 max). §8.B Risk-Critical Surface: P0-01 Tier 1 (HIGHEST), P0-08 Tier 4 (lower). Critical path: P0-15→P0-25→P0-24→P0-01→P0-02→P0-04→P0-06→P0-07.
+- Read in full: SPRINT_PLAN.md (415 lines) — §2 Sprint 4 (Weeks 7-8): Wave 3 — Capture + order idempotency (F-convergence). P0-01 target `Observed`, P0-08 target `Tested`. Exit: P0-01 Observed (so P0-02/P0-05 can begin Sprint 5). §4 Convergence gate schedule (line 275): Prepaid+Reorder interaction test begins Sprint 4, must pass Sprint 6 (both Production-ready). §5 Ownership (lines 319-320): P0-01 owner Backend-lead / reviewer Full-stack 1 / approver Product owner; P0-08 owner Full-stack 1 / reviewer Backend-lead / approver Product owner.
+- Read in full: P0_TRACEABILITY_MAP.md (191 lines) — §1 Traceability table row P0-01 (line 38): failure scenarios (Gateway timeout / signature mismatch / double Pay click), tests (Idempotency test; signature-tamper test; double-submit test), S2 lifecycle. Row P0-08 (line 45): failure (Double submit / retry storm), tests (Idempotency-key test; retry-storm test), S2. §2 Coverage: I-01 has 7 protectors, I-04 has 5, I-02 has 7, I-10 has 7.
+- Read in full: WAVE2_EVIDENCE.md (511 lines) — confirmed all 4 sub-waves PASS. Sub-Wave 2a/2b/2c/2d all S5 Evidence-Complete. Deferred to Wave-3 explicitly (line 21): "Payment + Ledger atomicity (component #3 of P0-24 happy path): Deferred to Wave-3 (requires P0-01 Payment model + P0-02 Ledger). Same deferral pattern as P0-25 Case C."
+- Read: PRODUCTION_READINESS_MATRIX.md §7.1 P0 rows (lines 196-237) — P0-01 (line 210) and P0-08 (line 217) full matrix entries. §8 detailed breakdowns P0-1 (lines 295-306, 5 failure sub-scenarios) and P0-8 (lines 375-381, retry storm + recovery=N/A). §9 Invariants I-01..I-14 (lines 610-625). §10 External Dependency Failure Matrix (lines 637-656): 5 Razorpay scenarios all map to P0-01/P0-05. §14.1 launch gate 7 AND-conditions (lines 805-821). §11 lifecycle 9 states (lines 660-706). §12.1 Architectural Laws 1-6 (lines 714-728).
+- Codebase audit: prisma/schema.prisma (347 lines) — confirmed NO Payment model, NO Ledger model, NO Refund model, NO WebhookEvent model. User.walletBalance field exists at line 29 (Int paise, default 0). Existing models: User, OtpRequest, Session, OtpLockout, Restaurant, MenuItem, Order, OrderItem, AuditLog, KillSwitch, IdempotencyKey (P0-17), ExceptionQueue (P0-28), Outbox (P0-24), ProcessedEvent (P0-24 2b). MenuItem.version (line 126, P0-25 Case A) and Order.version (line 155, P0-25 Case B) already exist; no Payment.version field.
+- Codebase audit: package.json — confirmed NO razorpay dependency. Stack: Next.js 16, Prisma 6.11, PostgreSQL, Socket.io 4.8, firebase + firebase-admin, zod 4. razorpay SDK must be added in Wave-3.
+- Codebase audit: src/app/api/ — confirmed NO /api/payments/, /api/ledger/, /api/webhooks/, /api/refunds/ routes exist. Only /api/orders/, /api/kill-switches/, /api/audit-logs/, /api/exceptions/, /api/auth/*, /api/restaurants/*, /api/menu/, /api/alerts/evaluate/, /api/health/, /api/backup/, /api/admin/metrics/.
+- Reusable Wave-2 infrastructure verified: src/lib/outbox.ts (108 lines, enqueueOutboxEvent + parseOutboxPayload + EVENT_TYPE_TO_SOCKET_EVENT map). src/lib/event-consumer.ts (98 lines, processEvent() with exactly-once dedup). src/lib/idempotency.ts (99 lines, getIdempotencyKey + getCachedResponse + storeIdempotencyRecord + parseCachedResponse). src/lib/db.ts (146 lines, withTransaction retry-on-conflict + optimisticUpdate helper + TransactionConflictError). src/lib/alerting.ts (193 lines, 13 alert rules incl. payment-success-rate, reconciliation-mismatch, invariant-violation, unknown-state-detected, outbox-lag-exceeded, outbox-publish-failed, orphan-business-entity, orphan-outbox-event). src/lib/invariant-checker.ts (302 lines, reportInvariantViolation + applyFreeze 3 levels + checkAndEscalateFreeze + resolveException + listUnresolvedExceptions). mini-services/outbox-publisher/index.ts (cron-triggered, lease-based atomic claim). mini-services/alert-evaluator/index.ts (11 metric checks including payment_success_rate, reconciliation_mismatch_count, orphan_business_count, orphan_outbox_count).
+- Codebase audit: src/lib/deployment.ts (90 lines) — confirmed FEATURE_FLAGS includes `realPayments` flag at line 27 (key: 'real-payments', default OFF, description: 'Enable real Razorpay payments (vs demo)'). Flag exists but is never imported anywhere — pure scaffolding. Similarly `pickupAttributionEnforcement` (Wave-7 P0-07), `drDrillMode` (P0-26), `outboxPublisher` (P0-24, now ON in staging), `concurrencyControl` (P0-25).
+- Codebase audit: src/app/api/orders/route.ts (328 lines) — confirmed: order creation already uses withTransaction, getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, enqueueOutboxEvent. This IS the P0-08 pattern proof-of-concept (idempotency on order creation). P0-08 is therefore PARTIALLY PROVEN — needs expansion + retry-storm test + formal sign-off.
+- No Payment model means: P0-25 Case C (payment double-click) cannot be empirically closed until P0-01 lands Payment model. WAVE1_GATE_REVIEW.md line 19 already flagged this. Wave-1 closure left P0-25 Case C deferred to Wave-3.
+- No Payment model means: P0-26 post-restore reconciliation (NO-GO if any money state unresolved) cannot be empirically closed until P0-01 lands Payment model + Razorpay SDK. P0-26 reaches Production-ready only AFTER Wave-3 P0-01 lands.
+- Verified: NO SUBWAVE_3_GATE_REVIEW.md file exists yet (LS confirmed). Worklog Task 87 explicitly says "Next action: create SUBWAVE_3_GATE_REVIEW.md (READ/PLAN-FIRST only)" — but this is a future task, NOT part of WAVE3-1 scope.
+
+Stage Summary:
+- Wave-3 scope: 2 P0s (P0-01 Razorpay capture [Tier 1, critical path, depth L3] + P0-08 Order idempotency [Tier 4, depth L3]). Both in Sprint 4 (Weeks 7-8).
+- P0-24 (Wave-2) confirmed CLOSED ✅ — all 4 predecessors of P0-01 (P0-09, P0-17, P0-24, P0-23) and both predecessors of P0-08 (P0-24, P0-25) are now at S5 Evidence-Complete or higher. Wave-3 may begin.
+- Wave-3 → Wave-4 gate: SPRINT_PLAN.md §2 Sprint 4 exit (line 159): "P0-01 at Observed (so P0-02, P0-05 can begin in Sprint 5)". Plus F-convergence Prepaid+Reorder gate (line 275): interaction test begins Sprint 4, must pass Sprint 6.
+- Wave-3 schema changes required: NEW Payment model, NEW Ledger (double-entry) model, NEW Refund model (deferred to Wave-5), possibly NEW WebhookEvent model. User.walletBalance field already exists at schema.prisma line 29.
+- Wave-3 evidence requirements: P0-01 (3 tests + 5 failure sub-scenarios per §8 P0-1 detailed breakdown), P0-08 (2 tests), 5 Razorpay dependency failure scenarios per §10 (matrix launch-gate condition 3), P0-24-deferred Payment+Ledger atomicity test (WAVE2_EVIDENCE.md line 21), Prepaid+Reorder interaction test (reorder-triggered payment must not double-charge), F-convergence gate target Sprint 6.
+- Wave-3 reusable infrastructure (from Wave-2): withTransaction (db.ts), IdempotencyKey model + idempotency.ts, ProcessedEvent + event-consumer.ts, Outbox + enqueueOutboxEvent (outbox.ts), outbox-publisher worker, alert-evaluator (payment-success-rate + reconciliation-mismatch + 11 other rules), ExceptionQueue + invariant-checker.ts (P0-28), realPayments feature flag (deployment.ts:27, OFF).
+- Wave-3 partial completion: P0-08 is PARTIALLY-PROVEN via /api/orders POST route (already uses getIdempotencyKey + getCachedResponse + storeIdempotencyRecord inside withTransaction). Formal retry-storm test + reviewer sign-off still pending. P0-01 is GREENFIELD — 0% implemented (no Payment model, no Razorpay SDK, no /api/payments route).
+- 5 Phase-3 prerequisites carried forward from Wave-2 (worklog Task 86): (1) orphan_business_count historical baseline fix, (2) production DATABASE_URL → snakzap_app, (3) deploy realtime service to Fly.io, (4) switch publisher from HTTP to Socket.io for production, (5) Payment + Ledger atomicity (Wave-3 P0-01).
+- Deliverable: structured Markdown report delivered to user covering all 8 questions exhaustively with file-path + line-number + section-number citations.
+- Constraints honored: READ-ONLY audit; NO code changes, NO deployments, NO new files created, NO production modifications. Only action taken: appended this work-record to worklog.md (explicitly authorized by task instructions).
+
+---
+Task ID: 88 — Sub-Wave 3 Gate Review (READ/PLAN-FIRST, Orchestrator-Authorized)
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Execute Orchestrator-authorized READ/PLAN-FIRST Sub-Wave 3 Gate Review. Inspect Wave-3 scope, existing infrastructure, schema changes, evidence requirements.
+
+## Authorization
+- **Scope**: READ/PLAN-FIRST Sub-Wave 3 Gate Review ONLY
+- **Forbidden**: Implementation, deployments, production changes
+
+## Key Findings
+
+### Finding 1: Wave-3 = 2 P0s (P0-01 + P0-08)
+- P0-01 (Razorpay capture): Tier 1 HIGHEST, critical path, GREENFIELD (0%)
+- P0-08 (Order idempotency): Tier 4, PARTIALLY PROVEN (~40% — pattern proven in orders POST)
+
+### Finding 2: All Predecessor Gates GREEN
+- P0-09 (w0) ✅, P0-17 (w1) ✅, P0-24 (w2 CLOSED) ✅, P0-23 (w0) ✅, P0-25 (w1) ✅
+
+### Finding 3: 8 Reusable Wave-2 Infrastructure Components
+1. withTransaction() — wraps capture + ledger + outbox in single transaction
+2. IdempotencyKey model + idempotency.ts — payment double-click dedup
+3. ProcessedEvent + event-consumer.ts — exactly-once consumer-side
+4. Outbox + enqueueOutboxEvent() + publisher — atomic event persistence
+5. Alert rules + alert-evaluator (13 rules including payment-success-rate)
+6. ExceptionQueue + invariant-checker.ts — I-01/I-04 → Level 3 kill switch
+7. Feature flags (realPayments, outboxPublisher)
+8. Deployment classifier (Class-2 expand-migrate-contract)
+
+### Finding 4: Schema Changes (~55 lines)
+- Payment model (~25 lines) — Razorpay lifecycle, capture status, idempotency key FK
+- LedgerEntry model (~15 lines) — double-entry Dr/Cr pairs (append-only)
+- WebhookEvent model (~15 lines) — Razorpay webhook dedup + HMAC verification
+- Order.paymentId field (1:1 relation)
+- All Class-2 expand-migrate-contract (additive, safe rollback)
+
+### Finding 5: ~20 Empirical Test Scenarios
+- P0-01: 17 scenarios (3 matrix tests + 5 failure sub-scenarios + 5 dependency scenarios + 4 cross-P0 closure)
+- P0-08: 3 scenarios (idempotency-key test + retry-storm + F-convergence interaction)
+
+### Finding 6: Governance Gaps
+1. WAVE3_EVIDENCE.md does not exist — must be created before implementation
+2. realPayments feature flag is dead code — must be wired in Wave-3
+3. P0-26 + P0-25 Case C cross-wave dependencies — Wave-3 unblocks but does NOT close
+
+### Finding 7: Sub-Wave Strategy (3 sub-waves)
+- 3a: Payment model + capture route (behind realPayments=false)
+- 3b: P0-08 formalization (retry-storm test, reviewer sign-off)
+- 3c: Failure injection + cross-P0 closure (P0-25 Case C, P0-24 atomicity, F-convergence)
+
+### Files Written
+- `/home/z/my-project/SUBWAVE_3_GATE_REVIEW.md` (~8-section report)
+
+## Current Governance State
+```
+Wave-0                   ✅ CLOSED
+Wave-1                   ✅ CLOSED
+Wave-2                   ✅ CLOSED (S5 Evidence-Complete)
+Wave-3                   🔒 LOCKED (READ/PLAN-FIRST review complete — awaiting authorization)
+Wave-4+                  🔒 LOCKED
+Production               🚫 NOT AUTHORIZED
+```
+
+## Recommendation to Orchestrator
+Wave-3 scope is well-defined: 2 P0s (P0-01 GREENFIELD + P0-08 partially proven). All predecessor gates GREEN. 8 reusable Wave-2 infrastructure components available. ~55 lines of new schema + Razorpay SDK + capture route. ~20 empirical test scenarios.
+
+Key decisions required:
+1. Authorize creation of WAVE3_EVIDENCE.md
+2. Authorize Sub-Wave 3a first (Payment model + capture route behind realPayments=false)
+3. Razorpay test keys for staging
+4. Do NOT authorize production deployment
+
+**STOP.** Awaiting Orchestrator decision on Wave-3 implementation authorization.
