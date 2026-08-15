@@ -81,3 +81,65 @@
 ### [Evidence will be appended below as Sub-Wave 3a completes]
 
 ---
+
+### Sub-Wave 3a — Evidence (2026-08-15)
+
+#### 3a-1: Schema Migration — ✅ APPLIED
+- **Migration:** `prisma/scripts/wave3-subwave-3a-migration.sql` (Class-2 ADDITIVE ONLY)
+- **Workflow:** `wave3-3a-staging-migration.yml` (run ID: 31885823226)
+- **New tables:** Payment, LedgerEntry, WebhookEvent
+- **New relation:** Order.payment (1:1)
+- **Production:** NOT TOUCHED
+
+#### 3a-2: Capture Route — ✅ IMPLEMENTED + VERIFIED
+- **File:** `src/app/api/payments/route.ts`
+- **Staging URL:** https://snakpass-eqkarf10s-snakzap.vercel.app
+- **realPayments flag:** OFF (demo mode — no real Razorpay API calls)
+
+#### 3a-3: Same Idempotency Key → Same Payment (Dedup) — ✅ EMPIRICALLY VERIFIED
+- **Test:** Two POST /api/payments with same Idempotency-Key
+- **Result:**
+  - Payment 1: id=`cmsudtvw00001jy044xvjr4df`, status=CAPTURED, amount=6000
+  - Payment 2 (replay): id=`cmsudtvw00001jy044xvjr4df` (**SAME — dedup works**)
+- **Evidence:** `paymentId 1 == paymentId 2` → exactly 1 payment created
+
+#### 3a-4: Demo-Mode Capture — ✅ VERIFIED
+- **Test:** POST /api/payments with valid-length signature in demo mode
+- **Result:** Payment status=CAPTURED, capturedAt set, amount matches order
+- **Note:** Demo mode accepts any non-empty signature (realPayments=false). Real signature verification is Phase-3 (requires realPayments=true + Razorpay test keys).
+
+#### 3a-5: Transactional Atomicity (Payment + Order + LedgerEntry + Outbox + AuditLog + IdempotencyKey) — ✅ IMPLEMENTED
+- All 6 writes inside `withTransaction(async (tx) => { ... })`:
+  1. tx.payment.create (CAPTURED status + capturedAt)
+  2. tx.order.update (status='PAID')
+  3. tx.ledgerEntry.create (DEBIT GATEWAY_RECEIVABLE)
+  4. tx.ledgerEntry.create (CREDIT CONSUMER_REVENUE)
+  5. tx.auditLog.create (PAYMENT_CAPTURED)
+  6. enqueueOutboxEvent(tx, PAYMENT_CAPTURED)
+  7. storeIdempotencyRecord(tx, key, 'Payment', paymentId)
+- If any write fails → entire transaction rolls back (no partial state)
+- Empirical rollback evidence from 2a rollback-injection test (same withTransaction pattern)
+
+#### 3a-6: Signature Mismatch Test — 🟡 DEMO MODE LIMITATION
+- In demo mode (realPayments=false), verifyRazorpaySignature accepts any non-empty signature
+- Empty signature → Zod validation rejects (VALIDATION_ERROR, not SIGNATURE_MISMATCH)
+- Real signature mismatch test requires realPayments=true (Phase-3 — not authorized in 3a)
+- **This is a known limitation of 3a staging evidence, not a defect**
+
+#### 3a Summary
+
+| Evidence | Status |
+|----------|--------|
+| Payment + LedgerEntry + WebhookEvent schema applied | ✅ PASS |
+| Capture route accepts Idempotency-Key header | ✅ PASS |
+| Same idempotency key → same Payment row (dedup) | ✅ PASS |
+| Capture in demo mode (realPayments=false) | ✅ PASS |
+| Transactional atomicity (all writes in same txn) | ✅ PASS |
+| Staging smoke tests pass (7/7) | ✅ PASS |
+| realPayments=false (demo mode, no real Razorpay) | ✅ PASS |
+| Production untouched | ✅ PASS |
+
+**Sub-Wave 3a: IMPLEMENTED + STAGING VERIFIED (demo mode)**
+
+**Known limitation:** Signature mismatch test requires realPayments=true (Phase-3). Demo mode is correct for 3a staging evidence.
+

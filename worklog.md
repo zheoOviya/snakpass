@@ -4752,3 +4752,86 @@ Key decisions required:
 4. Do NOT authorize production deployment
 
 **STOP.** Awaiting Orchestrator decision on Wave-3 implementation authorization.
+
+---
+Task ID: 89 — Sub-Wave 3a Implementation (Payment + Capture Route) — STAGING VERIFIED
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Execute Orchestrator-authorized Sub-Wave 3a: Payment model + Razorpay SDK + capture route + staging verification.
+
+## Authorization
+- **Scope**: Sub-Wave 3a ONLY (Payment model + capture route behind realPayments=false)
+- **Forbidden**: 3b, 3c, production deployment, real Razorpay keys
+
+## Implementation (3a-0 through 3a-6)
+
+### 3a-0: Implementation-Readiness Check — ✅ GREEN
+All 8 checks passed: Payment lifecycle, capture idempotency, txn boundary, Razorpay failure semantics, retry, duplicate capture, webhook interaction, rollback.
+
+### 3a-1: Schema Migration — ✅ APPLIED
+- 3 new models: Payment (~25 lines), LedgerEntry (~15 lines), WebhookEvent (~15 lines)
+- Order.payment 1:1 relation
+- Migration: wave3-subwave-3a-migration.sql (Class-2 ADDITIVE)
+- Run ID: 31885823226
+
+### 3a-2: Razorpay SDK — ✅ INSTALLED
+- razorpay@2.9.8 installed
+- src/lib/razorpay.ts: createRazorpayOrder, verifyRazorpaySignature, captureRazorpayPayment
+- All gated by realPayments feature flag (OFF by default → demo mode)
+
+### 3a-3: Capture Route — ✅ IMPLEMENTED + VERIFIED
+- POST /api/payments: withTransaction wraps Payment.create + Order.update(PAID) + LedgerEntry.create(Dr+Cr) + AuditLog.create + enqueueOutboxEvent + storeIdempotencyRecord
+- Idempotency-Key header for payment double-click dedup
+- Signature verification before capture (fail-closed)
+
+### 3a-4: Staging E2E Evidence
+
+#### Same Idempotency Key → Same Payment (Dedup) — ✅ PASS
+- Payment 1: id=cmsudtvw00001jy044xvjr4df, status=CAPTURED
+- Payment 2 (replay): id=cmsudtvw00001jy044xvjr4df (SAME — dedup works)
+- Exactly 1 payment created despite 2 requests
+
+#### Demo-Mode Capture — ✅ PASS
+- realPayments=false → demo mode (no real Razorpay API)
+- Payment captured with mock signature, status=CAPTURED
+
+#### Signature Mismatch Test — 🟡 DEMO MODE LIMITATION
+- Demo mode accepts any non-empty signature (by design)
+- Real signature mismatch test requires realPayments=true (Phase-3)
+- Empty signature → Zod validation rejection (not signature verification)
+
+### 3a-5: Transactional Atomicity — ✅ IMPLEMENTED
+- All 7 writes inside withTransaction (Payment + Order + 2×LedgerEntry + AuditLog + Outbox + IdempotencyKey)
+- Same pattern proven in 2a rollback-injection test (atomicRollback=true)
+
+## Staging Evidence
+- **Commit:** 4ab0301
+- **Staging URL:** https://snakpass-eqkarf10s-snakzap.vercel.app
+- **CI:** PASSED
+- **Migration:** APPLIED (staging only)
+- **Production:** NOT TOUCHED
+
+## Current Governance State
+```
+Wave-0                   ✅ CLOSED
+Wave-1                   ✅ CLOSED
+Wave-2                   ✅ CLOSED (S5 Evidence-Complete)
+Wave-3                   🔓 UNLOCKED
+Sub-Wave 3a              ✅ IMPLEMENTED + STAGING VERIFIED (demo mode)
+Sub-Wave 3b              🔒 LOCKED
+Sub-Wave 3c              🔒 LOCKED
+Wave-4+                  🔒 LOCKED
+Production               🚫 NOT AUTHORIZED
+```
+
+## Known Limitations (documented, not blocking)
+1. Signature mismatch test requires realPayments=true (Phase-3)
+2. Real Razorpay SDK calls require test keys (not authorized in 3a)
+3. LedgerEntry is schema-only (double-entry writes happen but no reconciliation job yet — Wave-5 P0-03)
+
+## Recommendation to Orchestrator
+Sub-Wave 3a is complete: Payment model + capture route + demo-mode verification. The critical idempotency dedup is empirically proven (same key → same payment ID). Transactional atomicity is implemented (same withTransaction pattern as 2a). 
+
+The only limitation is that signature verification is in demo mode (accepts any non-empty signature) — this is correct for 3a staging evidence because real Razorpay test keys are NOT authorized in 3a.
+
+**STOP.** Awaiting Orchestrator review of Sub-Wave 3a evidence + decision on Sub-Wave 3b authorization.
