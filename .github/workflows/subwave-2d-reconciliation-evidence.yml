@@ -71,34 +71,26 @@ jobs:
           EVAL_OUTPUT=$(run_evaluator)
           echo "$EVAL_OUTPUT" | tail -5
 
-          ORPHAN_BUSINESS_FIRED=$(echo "$EVAL_OUTPUT" | grep -c "orphan-business-entity" || echo "0")
-          ORPHAN_OUTBOX_FIRED=$(echo "$EVAL_OUTPUT" | grep -c "orphan-outbox-event" || echo "0")
+          ORPHAN_BUSINESS_FIRED=$(echo "$EVAL_OUTPUT" | grep '"type":"ALERT"' | grep -c "orphan-business-entity" || echo "0")
+          ORPHAN_OUTBOX_FIRED=$(echo "$EVAL_OUTPUT" | grep '"type":"ALERT"' | grep -c "orphan-outbox-event" || echo "0")
           echo ""
-          echo "orphan-business-entity fired: $ORPHAN_BUSINESS_FIRED"
-          echo "orphan-outbox-event fired: $ORPHAN_OUTBOX_FIRED"
+          echo "orphan-business-entity ALERT fired: $ORPHAN_BUSINESS_FIRED"
+          echo "orphan-outbox-event ALERT fired: $ORPHAN_OUTBOX_FIRED"
+
+          # Negative control: check the evaluator cycle JSON for actual orphan_outbox_count
+          ORPHAN_OB_COUNT=$(echo "$EVAL_OUTPUT" | grep 'cycleNumber' | jq -r '.results[] | select(.ruleId == "orphan-outbox-event") | .value' 2>/dev/null | tail -1)
+          echo "orphan_outbox_count value: $ORPHAN_OB_COUNT"
 
           # Negative control logic: The evaluator should detect pre-existing orphans
-          # (orders created before outbox feature). This is CORRECT behavior —
-          # the reconciliation is working. The "negative control" for 2d means:
-          # no FALSE POSITIVES (alert fires when there are NO orphans).
-          # Since there ARE pre-existing orphans, the alert SHOULD fire.
-          # The true negative control is: after we verify orphan detection works
-          # (2d-4a + 2d-4b PASS), and we clean up all test orphans, the alert
-          # should return to its baseline state (same count as before the test).
-          #
-          # For this evidence, we accept the negative control as PASS if:
-          # - orphan-business-entity fired (because there ARE pre-existing orphans)
-          # - orphan-outbox-event did NOT fire (because there are no orphan outbox
-          #   events in the baseline — all outbox events have corresponding orders)
+          # (orders created before outbox feature). This is CORRECT behavior.
+          # For orphan-outbox-event: there should be NO orphan outbox events in baseline
+          # (all outbox events should have corresponding orders).
           NEGATIVE_OK="false"
-          if [ "$ORPHAN_BUSINESS_FIRED" -gt 0 ] && [ "$ORPHAN_OUTBOX_FIRED" = "0" ]; then
+          if [ "$ORPHAN_OB_COUNT" = "0" ]; then
             NEGATIVE_OK="true"
-            echo "PASS: negative control — orphan-business fires (pre-existing orphans detected), orphan-outbox does not fire (no orphan outbox events)"
-          elif [ "$ORPHAN_BUSINESS_FIRED" = "0" ] && [ "$ORPHAN_OUTBOX_FIRED" = "0" ]; then
-            NEGATIVE_OK="true"
-            echo "PASS: negative control — no orphans at all (clean state)"
+            echo "PASS: negative control — orphan_outbox_count=0 (no orphan outbox events in baseline)"
           else
-            echo "FAIL: unexpected orphan-outbox-event in baseline state"
+            echo "FAIL: orphan_outbox_count=$ORPHAN_OB_COUNT (unexpected orphan outbox events)"
           fi
 
           echo ""
