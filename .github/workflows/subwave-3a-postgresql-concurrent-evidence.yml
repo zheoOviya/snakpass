@@ -559,7 +559,8 @@ jobs:
           LEDGER_CR_COUNT=$(echo "$LEDGER_RESULT" | jq -r '[.[] | select(.entryType == "CREDIT") | .count] | add // 0')
 
           # Query Outbox count
-          OUTBOX_SQL="SELECT COUNT(*) as count FROM \"Outbox\" WHERE \"aggregateType\" = '\''Payment'\'' AND \"aggregateId\" IN (SELECT \"id\" FROM \"Payment\" WHERE \"orderId\" = '\''$ORDER_ID'\'');"
+          # Use printf to build the SQL with proper single-quote escaping
+          OUTBOX_SQL=$(printf 'SELECT COUNT(*) as count FROM "Outbox" WHERE "aggregateType" = '\''Payment'\'' AND "aggregateId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\'');' "$ORDER_ID")
           OUTBOX_RESULT=$(curl -sS -X POST \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
@@ -571,7 +572,7 @@ jobs:
           OUTBOX_COUNT=$(echo "$OUTBOX_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
 
           # Query IdempotencyKey count
-          IDEM_SQL="SELECT COUNT(*) as count FROM \"IdempotencyKey\" WHERE \"key\" = '\''$IDEMPOTENCY_KEY'\'';'
+          IDEM_SQL=$(printf 'SELECT COUNT(*) as count FROM "IdempotencyKey" WHERE "key" = '\''%s'\'';' "$IDEMPOTENCY_KEY")
           IDEM_RESULT=$(curl -sS -X POST \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
@@ -581,7 +582,7 @@ jobs:
           IDEM_COUNT=$(echo "$IDEM_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
 
           # Query AuditLog count for PAYMENT_CAPTURED for this order
-          AUDIT_SQL="SELECT COUNT(*) as count FROM \"AuditLog\" WHERE \"action\" = '\''PAYMENT_CAPTURED'\'' AND \"metadata\" LIKE '\''%$ORDER_ID%'\'';'
+          AUDIT_SQL=$(printf 'SELECT COUNT(*) as count FROM "AuditLog" WHERE "action" = '\''PAYMENT_CAPTURED'\'' AND "metadata" LIKE '\''%s%'\'';' "$ORDER_ID")
           AUDIT_RESULT=$(curl -sS -X POST \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
@@ -750,7 +751,7 @@ jobs:
           echo "=== Step 9: Cleanup test data ==="
           # Delete the test Payment, LedgerEntries, Outbox event, IdempotencyKey, AuditLog, Order
           # (Leave the test user for reuse)
-          CLEANUP_SQL="DELETE FROM \"LedgerEntry\" WHERE \"paymentId\" IN (SELECT \"id\" FROM \"Payment\" WHERE \"orderId\" = '\''$ORDER_ID'\''); DELETE FROM \"Outbox\" WHERE \"aggregateId\" IN (SELECT \"id\" FROM \"Payment\" WHERE \"orderId\" = '\''$ORDER_ID'\''); DELETE FROM \"IdempotencyKey\" WHERE \"key\" = '\''$IDEMPOTENCY_KEY'\''; DELETE FROM \"Payment\" WHERE \"orderId\" = '\''$ORDER_ID'\''; DELETE FROM \"OrderItem\" WHERE \"orderId\" = '\''$ORDER_ID'\''; DELETE FROM \"Order\" WHERE \"id\" = '\''$ORDER_ID'\''; DELETE FROM \"AuditLog\" WHERE \"metadata\" LIKE '\''%$ORDER_ID%'\'' AND \"action\" = '\''PAYMENT_CAPTURED'\'';"
+          CLEANUP_SQL=$(printf 'DELETE FROM "LedgerEntry" WHERE "paymentId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "Outbox" WHERE "aggregateId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "IdempotencyKey" WHERE "key" = '\''%s'\''; DELETE FROM "Payment" WHERE "orderId" = '\''%s'\''; DELETE FROM "OrderItem" WHERE "orderId" = '\''%s'\''; DELETE FROM "Order" WHERE "id" = '\''%s'\''; DELETE FROM "AuditLog" WHERE "metadata" LIKE '\''%s%'\'' AND "action" = '\''PAYMENT_CAPTURED'\'';' "$ORDER_ID" "$ORDER_ID" "$IDEMPOTENCY_KEY" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID")
           echo "Cleaning up test data..."
           curl -sS -X POST \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
