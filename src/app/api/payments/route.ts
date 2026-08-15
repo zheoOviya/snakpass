@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db, withTransaction, TransactionConflictError } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { validateBody } from '@/lib/validation'
-import { withErrorHandler, apiError, AppError } from '@/lib/errors'
+import { withErrorHandler, apiError, AppError, IdempotencyKeyReuseError } from '@/lib/errors'
 import { info as logInfo, newTraceId } from '@/lib/logger'
-import { getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, parseCachedResponse } from '@/lib/idempotency'
+import { getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, parseCachedResponse, computeRequestHash } from '@/lib/idempotency'
 import { enqueueOutboxEvent } from '@/lib/outbox'
 import { createRazorpayOrder, verifyRazorpaySignature, captureRazorpayPayment } from '@/lib/razorpay'
 import { z } from 'zod'
@@ -60,6 +60,11 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
   const body = await validateBody(req, captureBodySchema)
   const idempotencyKey = getIdempotencyKey(req)
 
+  // Sub-Wave 3c: Compute request hash (always computed + stored, enforced only when flag ON)
+  // The hash is computed ONCE here (outside the txn) so retry re-uses the same hash
+  // (deterministic — same input → same hash). This prevents hash mismatch on retry.
+  const requestHash = idempotencyKey ? computeRequestHash(body) : null
+
   // Evidence failure-injection header (ignored unless EVIDENCE_TEST_MODE=true)
   const evidenceFailAfterStep = EVIDENCE_TEST_MODE
     ? req.headers.get('x-evidence-fail-after')
@@ -74,7 +79,7 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
     const result = await withTransaction(async (tx) => {
       // P0-17: Check idempotency cache FIRST (inside txn)
       if (idempotencyKey) {
-        const cached = await getCachedResponse(tx, idempotencyKey)
+        const cached = await getCachedResponse(tx, idempotencyKey, requestHash)
         if (cached) {
           logInfo('payment-idempotency-dedup-hit', { key: idempotencyKey }, traceId)
           return { type: 'cached' as const, status: cached.status, body: cached.body }
@@ -264,9 +269,10 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
       }
 
       // Store idempotency record
+      // Sub-Wave 3c: Also store the request hash (for future enforcement).
       if (idempotencyKey) {
-        await storeIdempotencyRecord(tx, idempotencyKey, 'Payment', payment.id, 200, JSON.stringify(responseBody))
-        logInfo('payment-idempotency-key-stored', { key: idempotencyKey, paymentId: payment.id }, traceId)
+        await storeIdempotencyRecord(tx, idempotencyKey, 'Payment', payment.id, 200, JSON.stringify(responseBody), requestHash)
+        logInfo('payment-idempotency-key-stored', { key: idempotencyKey, paymentId: payment.id, requestHashStored: requestHash !== null }, traceId)
       }
 
       // === EVIDENCE CHECKPOINT: idempotency (just before commit) ===
@@ -287,6 +293,12 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
     logInfo('payment-captured', { orderId: body.orderId, paymentId: result.payment.id }, traceId)
     return NextResponse.json(result.body)
   } catch (error) {
+    // Sub-Wave 3c: IdempotencyKeyReuseError — same key + materially different request body
+    // NON-retryable — propagate to client (withErrorHandler converts to 422).
+    if (error instanceof IdempotencyKeyReuseError) {
+      logInfo('payment-idempotency-key-reuse', { key: idempotencyKey, code: error.code }, traceId)
+      throw error
+    }
     if (error instanceof TransactionConflictError) {
       logInfo('payment-capture-conflict', { attempts: error.attempts }, traceId)
       return apiError('CONFLICT', 'Payment capture conflicted with a concurrent request. Please retry.', 409, undefined, traceId)

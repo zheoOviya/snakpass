@@ -218,6 +218,11 @@ model IdempotencyKey {
   // Cached response payload (status + body) so retries return the exact same response.
   responseStatus  Int      // HTTP status code
   responseBody    String   // JSON-serialized response body
+  // Sub-Wave 3c: Request body hash (SHA-256 hex) for materially-different-request detection.
+  // Nullable for backward compatibility — pre-3c records have null (hash check skipped).
+  // When requestHashEnforcement flag is ON and this is non-null, a mismatch with the
+  // incoming request hash throws IdempotencyKeyReuseError (HTTP 422).
+  requestHash     String?
   createdAt       DateTime @default(now())
   expiresAt       DateTime // TTL (default 24h); old keys are safe to delete
 

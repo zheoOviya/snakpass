@@ -86,6 +86,7 @@ export async function GET(req: Request) {
         resourceType: true,
         resourceId: true,
         responseStatus: true,
+        requestHash: true,
         createdAt: true,
       },
     })
@@ -157,6 +158,7 @@ export async function GET(req: Request) {
     idempotencyRecordId: idempotencyRecord?.id ?? null,
     idempotencyResourceId: idempotencyRecord?.resourceId ?? null,
     idempotencyResponseStatus: idempotencyRecord?.responseStatus ?? null,
+    idempotencyRequestHash: idempotencyRecord?.requestHash ?? null,
     totalOrdersByUser,
     orderResourceCount,
     // Invariant flags (computed server-side for self-validation)

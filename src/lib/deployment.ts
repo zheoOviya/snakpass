@@ -23,7 +23,7 @@ function getFlag(key: string, defaultValue: boolean): boolean {
 
 // Defined feature flags. New features default to OFF and are gated until tested.
 export const FEATURE_FLAGS = {
-  // Payment (P0-01 — not yet implemented; flag for when it is)
+  // Payment (P0-01 — Wave-3a S5 PASS / CLOSED)
   realPayments: { key: 'real-payments', enabled: getFlag('real-payments', false), description: 'Enable real Razorpay payments (vs demo)' },
 
   // Pickup attribution enforcement (P0-07 — not yet implemented)
@@ -32,11 +32,19 @@ export const FEATURE_FLAGS = {
   // DR drill (P0-26 — not yet implemented)
   drDrillMode: { key: 'dr-drill-mode', enabled: getFlag('dr-drill-mode', false), description: 'Run in DR drill mode (simulates restore)' },
 
-  // Outbox publisher (P0-24 — not yet implemented)
+  // Outbox publisher (P0-24 — Wave-2b S5 PASS)
   outboxPublisher: { key: 'outbox-publisher', enabled: getFlag('outbox-publisher', false), description: 'Enable outbox event publisher worker' },
 
-  // Concurrency control (P0-25 — not yet implemented)
+  // Concurrency control (P0-25 — Wave-1 S5 PASS)
   concurrencyControl: { key: 'concurrency-control', enabled: getFlag('concurrency-control', false), description: 'Enable optimistic locking on critical writes' },
+
+  // Sub-Wave 3c: Request hash enforcement (default OFF — backward-compatible)
+  // When OFF: IdempotencyKey.requestHash is computed + stored, but NOT enforced
+  //           (null-hash records + non-null-hash records both return cached response).
+  // When ON:  If stored requestHash is non-null AND differs from incoming hash,
+  //           throw IdempotencyKeyReuseError (HTTP 422).
+  // Production enablement requires separate Orchestrator authorization.
+  requestHashEnforcement: { key: 'request-hash-enforcement', enabled: getFlag('request-hash-enforcement', false), description: 'Enforce request body hash match on idempotency key reuse (422 on mismatch)' },
 } as const
 
 export function isFeatureEnabled(key: keyof typeof FEATURE_FLAGS): boolean {

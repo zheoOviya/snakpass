@@ -3,9 +3,9 @@ import { db, withTransaction, TransactionConflictError } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { emitOrderCreated } from '@/lib/realtime'
 import { validateBody, createOrderBodySchema } from '@/lib/validation'
-import { apiError, withErrorHandler, AppError } from '@/lib/errors'
+import { apiError, withErrorHandler, AppError, IdempotencyKeyReuseError } from '@/lib/errors'
 import { info as logInfo, newTraceId } from '@/lib/logger'
-import { getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, parseCachedResponse } from '@/lib/idempotency'
+import { getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, parseCachedResponse, computeRequestHash } from '@/lib/idempotency'
 import { enqueueOutboxEvent } from '@/lib/outbox'
 import { isFeatureEnabled } from '@/lib/deployment'
 
@@ -108,6 +108,11 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
   // (to prevent phantom-block), but we extract the key here first.
   const idempotencyKey = getIdempotencyKey(req)
 
+  // Sub-Wave 3c: Compute request hash (always computed + stored, enforced only when flag ON)
+  // The hash is computed ONCE here (outside the txn) so retry re-uses the same hash
+  // (deterministic — same input → same hash). This prevents hash mismatch on retry.
+  const requestHash = idempotencyKey ? computeRequestHash(body) : null
+
   // Evidence failure-injection header (ignored unless EVIDENCE_TEST_MODE=true)
   const evidenceFailAfterStep = EVIDENCE_TEST_MODE
     ? req.headers.get('x-evidence-fail-after')
@@ -141,7 +146,7 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
       // P0-17: Check for cached idempotency response FIRST (inside txn).
       // If found, return it without executing any business logic.
       if (idempotencyKey) {
-        const cached = await getCachedResponse(tx, idempotencyKey)
+        const cached = await getCachedResponse(tx, idempotencyKey, requestHash)
         if (cached) {
           logInfo('idempotency-dedup-hit', { key: idempotencyKey }, traceId)
           // Return a sentinel so the outer code knows to return the cached response
@@ -301,6 +306,7 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
       // P0-17: Store the idempotency key + cached response (inside same txn).
       // This prevents phantom-block: if the txn commits, the key is stored;
       // if it rolls back, the key is NOT stored (so retry is safe).
+      // Sub-Wave 3c: Also store the request hash (for future enforcement).
       if (idempotencyKey) {
         await storeIdempotencyRecord(
           tx,
@@ -309,8 +315,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
           order.id,
           200,
           JSON.stringify(responseBody),
+          requestHash,
         )
-        logInfo('idempotency-key-stored', { key: idempotencyKey, orderId: order.id }, traceId)
+        logInfo('idempotency-key-stored', { key: idempotencyKey, orderId: order.id, requestHashStored: requestHash !== null }, traceId)
       }
 
       // === EVIDENCE CHECKPOINT: idempotency-record (KEY TEST POINT — phantom-block) ===
@@ -364,6 +371,14 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
 
     return NextResponse.json(result.body)
   } catch (error) {
+    // Sub-Wave 3c: IdempotencyKeyReuseError — same key + materially different request body
+    // This is thrown inside getCachedResponse when requestHashEnforcement is ON and
+    // the stored hash mismatches the incoming hash. NON-retryable — propagate to client.
+    if (error instanceof IdempotencyKeyReuseError) {
+      logInfo('order-idempotency-key-reuse', { key: idempotencyKey, code: error.code }, traceId)
+      // withErrorHandler will convert this AppError to the 422 response
+      throw error
+    }
     // P0-25: Transaction conflict (concurrent order on same inventory)
     if (error instanceof TransactionConflictError) {
       logInfo('order-create-conflict', { attempts: error.attempts, code: error.code }, traceId)

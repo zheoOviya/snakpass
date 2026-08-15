@@ -17,6 +17,7 @@ export type ErrorCode =
   | 'INVARIANT_VIOLATION'
   | 'UNKNOWN_STATE'
   | 'INTERNAL_ERROR'
+  | 'IDEMPOTENCY_KEY_REUSE' // Sub-Wave 3c: same key + materially different request body (422)
 
 export interface ApiError {
   error: {
@@ -36,6 +37,44 @@ export class AppError extends Error {
   ) {
     super(message)
     this.name = 'AppError'
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Sub-Wave 3c — IdempotencyKeyReuseError
+// ----------------------------------------------------------------------------
+// Thrown when an idempotency key is reused with a materially different request
+// body (hash mismatch). This is a NON-retryable error — the client must either:
+//   1. Use a NEW idempotency key for the new request, OR
+//   2. Send the SAME request body to retrieve the cached response.
+//
+// This error is thrown INSIDE the withTransaction body (from getCachedResponse)
+// and propagates out of the retry loop (it is NOT in isRetryableConflict).
+// The route handler catches it and returns HTTP 422.
+// ----------------------------------------------------------------------------
+export class IdempotencyKeyReuseError extends AppError {
+  constructor(
+    key: string,
+    storedRequestHash: string | null,
+    receivedRequestHash: string,
+    resourceType: string,
+    resourceId: string,
+  ) {
+    super(
+      'IDEMPOTENCY_KEY_REUSE',
+      `Idempotency-Key '${key.slice(0, 8)}...' was already used for a different request. Use a new Idempotency-Key or send the same request body.`,
+      422,
+      {
+        idempotencyKey: key,
+        resourceType,
+        resourceId,
+        storedRequestHash,
+        receivedRequestHash,
+        retryStrategy: 'new-key',
+        hint: 'This key was previously used with a different request body. To retrieve the original response, send the same request body. To create a new resource, use a new Idempotency-Key.',
+      },
+    )
+    this.name = 'IdempotencyKeyReuseError'
   }
 }
 

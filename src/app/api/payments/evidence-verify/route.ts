@@ -102,6 +102,7 @@ export async function GET(req: Request) {
         resourceType: true,
         resourceId: true,
         responseStatus: true,
+        requestHash: true,
         createdAt: true,
       },
     })
@@ -158,6 +159,7 @@ export async function GET(req: Request) {
     idempotencyRecordExists: !!idempotencyRecord,
     idempotencyRecordId: idempotencyRecord?.id ?? null,
     idempotencyResourceId: idempotencyRecord?.resourceId ?? null,
+    idempotencyRequestHash: idempotencyRecord?.requestHash ?? null,
     // Invariant flags (computed server-side for self-validation)
     atomicRollback,
     exactlyOneCapture,
