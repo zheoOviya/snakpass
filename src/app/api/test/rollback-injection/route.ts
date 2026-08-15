@@ -28,7 +28,12 @@ import { newTraceId } from '@/lib/logger'
 
 export const POST = (req: NextRequest) => withErrorHandler(async () => {
   // Guard: prevent production access
-  if (process.env.NODE_ENV === 'production') {
+  // Vercel sets VERCEL_ENV=production for production deployments and
+  // VERCEL_ENV=preview for preview deployments. We allow this endpoint
+  // on preview (staging) but NOT on production.
+  // Also allow in development (local).
+  const vercelEnv = process.env.VERCEL_ENV ?? 'development'
+  if (vercelEnv === 'production') {
     return apiError('FORBIDDEN', 'Test endpoint not available in production', 403)
   }
 
