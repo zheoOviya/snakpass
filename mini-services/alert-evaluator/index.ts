@@ -42,6 +42,8 @@ const ALERT_RULES: AlertRule[] = [
   { id: 'otp-brute-force', name: 'OTP Brute Force Detected', severity: 'warning', metric: 'otp_lockout_count', threshold: 0, comparison: 'gt', cooldownMs: 300000 },
   { id: 'outbox-lag-exceeded', name: 'Outbox Lag Exceeded', severity: 'warning', metric: 'outbox_lag_seconds', threshold: 60, comparison: 'gt', cooldownMs: 60000 },
   { id: 'outbox-publish-failed', name: 'Outbox Publish Failed', severity: 'critical', metric: 'outbox_failed_count', threshold: 0, comparison: 'gt', cooldownMs: 0 },
+  { id: 'orphan-business-entity', name: 'Orphan Business Entity', severity: 'critical', metric: 'orphan_business_count', threshold: 0, comparison: 'gt', cooldownMs: 60000 },
+  { id: 'orphan-outbox-event', name: 'Orphan Outbox Event', severity: 'critical', metric: 'orphan_outbox_count', threshold: 0, comparison: 'gt', cooldownMs: 60000 },
 ]
 
 const lastFired = new Map<string, number>()
@@ -174,6 +176,34 @@ async function evaluateAlertRules(): Promise<EvaluationCycle> {
     outboxFailedCount = 0 // can't check
   }
   evaluateAndFire(results, 'outbox-publish-failed', 'outbox_failed_count', outboxFailedCount, 0, 'gt')
+
+  // 10. Orphan business entities (orders without corresponding outbox events)
+  let orphanBusinessCount = 0
+  try {
+    const orphanOrders = await db.$queryRaw`
+      SELECT COUNT(*)::int as count FROM "Order" o
+      LEFT JOIN "Outbox" ob ON ob."aggregateId" = o.id AND ob."aggregateType" = 'Order'
+      WHERE ob.id IS NULL
+    ` as Array<{ count: number }>
+    orphanBusinessCount = orphanOrders[0]?.count ?? 0
+  } catch {
+    orphanBusinessCount = 0 // can't check
+  }
+  evaluateAndFire(results, 'orphan-business-entity', 'orphan_business_count', orphanBusinessCount, 0, 'gt')
+
+  // 11. Orphan outbox events (outbox events without corresponding business entities)
+  let orphanOutboxCount = 0
+  try {
+    const orphanOutbox = await db.$queryRaw`
+      SELECT COUNT(*)::int as count FROM "Outbox" ob
+      LEFT JOIN "Order" o ON o.id = ob."aggregateId"
+      WHERE ob."aggregateType" = 'Order' AND o.id IS NULL
+    ` as Array<{ count: number }>
+    orphanOutboxCount = orphanOutbox[0]?.count ?? 0
+  } catch {
+    orphanOutboxCount = 0 // can't check
+  }
+  evaluateAndFire(results, 'orphan-outbox-event', 'orphan_outbox_count', orphanOutboxCount, 0, 'gt')
 
   const alertsTriggered = results.filter((r) => r.alertFired).length
   const cleanBaseline = alertsTriggered === 0

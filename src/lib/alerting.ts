@@ -132,6 +132,26 @@ export const ALERT_RULES: AlertRule[] = [
     comparison: 'gt',
     cooldownMs: 0, // no cooldown — every failure alerts
   },
+  {
+    id: 'orphan-business-entity',
+    name: 'Orphan Business Entity Detected',
+    description: 'A business record (Order) exists without a corresponding Outbox event — transactional integrity violation',
+    severity: 'critical',
+    metric: 'orphan_business_count',
+    threshold: 0,
+    comparison: 'gt',
+    cooldownMs: 60_000,
+  },
+  {
+    id: 'orphan-outbox-event',
+    name: 'Orphan Outbox Event Detected',
+    description: 'An Outbox event exists without a corresponding business record — orphan event detected',
+    severity: 'critical',
+    metric: 'orphan_outbox_count',
+    threshold: 0,
+    comparison: 'gt',
+    cooldownMs: 60_000,
+  },
 ]
 
 // Fire an alert. In dev: log to stderr. In production: send to PagerDuty/Opsgenie.
