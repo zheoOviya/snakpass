@@ -5036,3 +5036,33 @@ Stage Summary:
 - STOP: IDE is not starting 3b or 3c. Awaiting Orchestrator S5 decision.
 - Production NOT touched. realPayments OFF. Webhook schema-only. 3b/3c LOCKED.
 
+
+---
+Task ID: 3a-s5-closure
+Agent: IDE (main)
+Task: Sub-Wave 3a S5 PASS / CLOSED — Orchestrator decision formalization
+
+Work Log:
+- Received Orchestrator S5 PASS decision for Sub-Wave 3a.
+- Option B (PostgreSQL-native concurrency evidence) fulfilled:
+  - Workflow run 31896343466 — ALL STEPS PASSED
+  - 5 concurrent requests → exactly 1 Payment, 1 ledger pair, 1 outbox, 1 idempotency record, 1 audit log
+  - ok: true, database: postgresql, exactlyOneCapture: true
+- Updated WAVE3_EVIDENCE.md:
+  - Status: 🟢 Sub-Wave 3a — S5 PASS / CLOSED
+  - P0-01 status: ✅ S5 PASS / CLOSED
+  - Sub-Wave 3a status: ✅ S5 PASS / CLOSED
+  - Sub-Wave 3b status: 🔒 LOCKED (awaiting READ/PLAN-FIRST Gate Review)
+  - Added §8 "Sub-Wave 3a — S5 PASS / CLOSED (Orchestrator Decision)" section with decisive evidence, final governance state, and important decisions.
+- Formalized governance state:
+  - 3a will NOT reopen for evidence (PostgreSQL concurrency gap closed)
+  - 3b does NOT auto-unlock (each Sub-Wave requires its own authorization)
+  - Next gate: 3b READ/PLAN-FIRST Gate Review (P0-08 Order Idempotency formalization)
+
+Stage Summary:
+- Sub-Wave 3a: ✅ S5 PASS / EVIDENCE-COMPLETE / CLOSED
+- 15/15 evidence criteria PASS (SQLite + PostgreSQL)
+- Self-validating evidence: ok:true
+- IDE is STOPPING. Not starting 3b or 3c. Awaiting Orchestrator authorization for 3b READ/PLAN-FIRST Gate Review.
+- Production NOT touched. realPayments OFF. Webhook schema-only. 3b/3c LOCKED.
+

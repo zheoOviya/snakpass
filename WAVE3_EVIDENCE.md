@@ -1,8 +1,9 @@
 # Wave-3 Evidence Document
 
-**Status:** 🟡 AUTHORIZED / IN PROGRESS
+**Status:** 🟢 Sub-Wave 3a — S5 PASS / CLOSED
 **Created:** 2026-08-15
-**Authorization:** Orchestrator Decision (Sub-Wave 3a authorized)
+**Sub-Wave 3a Closure:** 2026-08-15 (Orchestrator S5 PASS decision)
+**Authorization:** Orchestrator Decision (Sub-Wave 3a authorized → S5 PASS)
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence.
 > It contains gate criteria, acceptance criteria, evidence requirements, owner/task
@@ -27,14 +28,14 @@
 
 | P0 | Title | Risk Tier | Wave-2 Pred | Sub-Wave | Status | Evidence |
 |----|-------|-----------|-------------|----------|--------|----------|
-| P0-01 | Razorpay capture | Tier 1 (HIGHEST) | P0-09/17/24/23 | 3a | 🟡 IN EXECUTION | §7 |
+| P0-01 | Razorpay capture | Tier 1 (HIGHEST) | P0-09/17/24/23 | 3a | ✅ S5 PASS / CLOSED | §7, 3a-E1..3a-PG-E1 |
 | P0-08 | Order idempotency | Tier 4 | P0-24/25 | 3b | 🔒 LOCKED | — |
 
 ### Sub-Wave Status
 | Sub-Wave | Scope | Status |
 |----------|-------|--------|
-| 3a | Payment model + capture route + LedgerEntry + WebhookEvent | 🟢 AUTHORIZED |
-| 3b | P0-08 formalization (retry-storm, sign-off) | 🔒 LOCKED |
+| 3a | Payment model + capture route + LedgerEntry + WebhookEvent | ✅ S5 PASS / CLOSED |
+| 3b | P0-08 formalization (retry-storm, sign-off) | 🔒 LOCKED (awaiting READ/PLAN-FIRST Gate Review) |
 | 3c | Failure injection + cross-P0 closure | 🔒 LOCKED |
 
 ---
@@ -600,4 +601,85 @@ realPayments  🚫 OFF
 ```
 
 **STOP — IDE is not starting 3b or 3c. Awaiting Orchestrator S5 decision.**
+
+---
+
+## 8. Sub-Wave 3a — S5 PASS / CLOSED (Orchestrator Decision)
+
+> **ORCHESTRATOR DECISION — Sub-Wave 3a = S5 PASS / EVIDENCE-COMPLETE / CLOSED.**
+
+**Date:** 2026-08-15
+**Decision:** Option B (PostgreSQL-native concurrency evidence) fulfilled.
+Sub-Wave 3a is declared **S5 PASS** and **CLOSED**.
+
+### Decisive Evidence
+
+- **Workflow:** GitHub Actions run `31896343466`
+- **Database:** PostgreSQL / Supabase staging (project ref `zmzqqcyapcezmaqvuzzd`)
+- **Evidence JSON:** `evidence/wave3-3a/evidence-postgresql-3a-pg-ev.json`
+
+### Proven (PostgreSQL-native)
+
+```text
+5 concurrent requests
+      ↓
+same idempotency key
+      ↓
+exactly 1 Payment             ✅ paymentCount: 1
+exactly 1 capture             ✅ paymentStatus: CAPTURED
+exactly 1 DEBIT LedgerEntry   ✅ ledgerEntries.debit: 1
+exactly 1 CREDIT LedgerEntry  ✅ ledgerEntries.credit: 1
+exactly 1 Outbox event        ✅ outboxEventCount: 1
+exactly 1 IdempotencyRecord   ✅ idempotencyRecordCount: 1
+exactly 1 AuditLog            ✅ auditLogCount: 1
+      ↓
+all 5 requests → HTTP 200
+all 5 → SAME paymentId
+exactlyOneCapture = true
+self-validation → ok: true
+```
+
+### Final Governance State (Post-S5)
+
+```text
+Wave-3        🔓 UNLOCKED
+
+Sub-Wave 3a   ✅ S5 PASS — EVIDENCE-COMPLETE / CLOSED
+              ├─ SQLite application invariants       ✅
+              ├─ PostgreSQL concurrency              ✅
+              ├─ Atomicity                           ✅
+              ├─ Idempotency                         ✅
+              ├─ Exactly-one capture                 ✅
+              ├─ Ledger pair                         ✅
+              ├─ Outbox                              ✅
+              ├─ IdempotencyRecord                   ✅
+              ├─ AuditLog                            ✅
+              └─ Self-validating evidence            ✅ ok:true
+
+Sub-Wave 3b   🔒 LOCKED — NOT YET AUTHORIZED
+              (requires READ/PLAN-FIRST Gate Review before any implementation)
+Sub-Wave 3c   🔒 LOCKED — NOT YET AUTHORIZED
+
+Production    🚫 NOT AUTHORIZED
+realPayments  🚫 OFF
+```
+
+### Important Decisions
+
+1. **3a will NOT reopen for evidence.** The PostgreSQL concurrency gap is closed.
+2. **3b does NOT auto-unlock.** Each Sub-Wave requires its own Orchestrator authorization.
+3. **Next potential gate:** Sub-Wave 3b — P0-08 Order Idempotency formalization.
+   This requires a **READ/PLAN-FIRST Gate Review** before any code/test implementation.
+   Direct implementation is NOT authorized yet.
+
+### Orchestrator Verdict
+
+> **Sub-Wave 3a = PASS / S5 Evidence-Complete / CLOSED.**
+> **Sub-Wave 3b = LOCKED.**
+> **Sub-Wave 3c = LOCKED.**
+> **Production = NOT AUTHORIZED.**
+> **realPayments = OFF.**
+
+**IDE: STOP. Await next Orchestrator authorization for Sub-Wave 3b READ/PLAN-FIRST Gate Review.**
+
 
