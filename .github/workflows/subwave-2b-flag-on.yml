@@ -1,4 +1,4 @@
-name: Sub-Wave 2b-7 — Flag ON + Post-Flag Regression
+name: "Sub-Wave 2b-7 - Flag ON + Post-Flag Regression"
 
 on:
   workflow_dispatch:
@@ -33,7 +33,7 @@ jobs:
       - name: Install deps
         run: bun install
 
-      - name: Step 1 — Pre-flag baseline
+      - name: "Step 1 - Pre-flag baseline"
         run: |
           echo "=== Pre-flag baseline ==="
           echo "--- Current env vars on Vercel ---"
@@ -53,7 +53,7 @@ jobs:
               -d @-)
           echo "Outbox counts: $BASELINE"
 
-      - name: Step 2 — Set FEATURE_OUTBOX_PUBLISHER=ON on preview
+      - name: "Step 2 - Set FEATURE_OUTBOX_PUBLISHER=ON on preview"
         run: |
           echo "=== Setting FEATURE_OUTBOX_PUBLISHER=ON on preview ==="
           # Check if already exists
@@ -81,7 +81,7 @@ jobs:
             echo "  ⚠️  Response: $(echo $RESULT | head -c 200)"
           fi
 
-      - name: Step 3 — Deploy staging
+      - name: "Step 3 - Deploy staging"
         run: |
           echo "=== Triggering staging deploy ==="
           # Deploy is triggered separately — just wait for it
@@ -89,7 +89,7 @@ jobs:
           echo "Waiting 10s for env var propagation..."
           sleep 10
 
-      - name: Step 4 — Post-flag Test A: Normal business flow
+      - name: "Step 4 - Post-flag Test A: Normal business flow"
         env:
           STAGING_URL: ${{ inputs.staging_url }}
         run: |
@@ -166,7 +166,7 @@ jobs:
           rm -f "$COOKIE_JAR"
           echo "TEST_A_OK=$TEST_A_OK" >> $GITHUB_ENV
 
-      - name: Step 5 — Post-flag Test B: Duplicate delivery
+      - name: "Step 5 - Post-flag Test B: Duplicate delivery"
         env:
           STAGING_URL: ${{ inputs.staging_url }}
         run: |
@@ -211,7 +211,7 @@ jobs:
 
           echo "TEST_B_OK=$TEST_B_OK" >> $GITHUB_ENV
 
-      - name: Step 6 — Post-flag Test C: Transport failure → NOT PUBLISHED
+      - name: "Step 6 - Post-flag Test C: Transport failure NOT PUBLISHED"
         env:
           STAGING_URL: ${{ inputs.staging_url }}
         run: |
@@ -264,7 +264,7 @@ jobs:
 
           echo "TEST_C_OK=$TEST_C_OK" >> $GITHUB_ENV
 
-      - name: Step 7 — Security check: /api/test/* VERCEL_ENV guard
+      - name: "Step 7 - Security check test endpoints"
         env:
           STAGING_URL: ${{ inputs.staging_url }}
         run: |
@@ -282,7 +282,7 @@ jobs:
           fi
           echo "STAGING_OK=$STAGING_OK" >> $GITHUB_ENV
 
-      - name: Step 8 — Summary + evidence JSON
+      - name: "Step 8 - Summary + evidence JSON"
         run: |
           echo "═══════════════════════════════════════════════════════════════"
           echo "  2b-7 POST-FLAG EVIDENCE SUMMARY"
