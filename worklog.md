@@ -3665,3 +3665,149 @@ All 10 exit gate criteria now have empirical evidence:
 **Sub-Wave 2a: S5 / EVIDENCE-COMPLETE → Ready for Orchestrator review + Sub-Wave 2b unlock**
 
 STOP. Awaiting Orchestrator review of rollback injection evidence + decision on Sub-Wave 2b.
+
+---
+Task ID: 74 — Sub-Wave 2a PASS Declared + Sub-Wave 2b Gate Review Commenced
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Record Orchestrator's formal Sub-Wave 2a PASS declaration (S5 Evidence-Complete). Begin READ/PLAN-FIRST Sub-Wave 2b Gate Review.
+
+## Orchestrator Decision — Sub-Wave 2a PASS ✅
+```
+Sub-Wave 2a
+  Implementation       ✅ S4
+  Staging verification ✅ S5
+  Positive transaction evidence ✅
+  Failure/rollback evidence    ✅
+  Governance evidence          ✅
+  Production                   🚫 untouched
+Decision: PASS
+```
+
+## Sub-Wave 2b — GATED (requires separate READ/PLAN-FIRST review)
+The Orchestrator explicitly stated that 2a PASS does NOT auto-authorize 2b. A separate gate review is required, covering:
+1. Publisher PENDING → PUBLISHED/FAILED semantics
+2. Retry and crash recovery
+3. Consumer-side eventId deduplication
+4. Duplicate delivery → business effect applied once
+5. Poison event / permanent failure handling
+6. Outbox lag measurement + alert
+7. Production safety evidence for /api/test/rollback-injection endpoint
+8. FEATURE_OUTBOX_PUBLISHER=ON staging evidence (before flipping flag)
+
+## Governance State
+```
+Wave-2                    🔓 UNLOCKED
+Sub-Wave 2a               ✅ PASS (S5 Evidence-Complete)
+Sub-Wave 2b               🔒 GATED (READ/PLAN-FIRST review required)
+Sub-Wave 2c               🔒 GATED
+Sub-Wave 2d               🔒 GATED
+Wave-3                    🔒 LOCKED
+Production                🚫 NOT AUTHORIZED
+```
+
+---
+Task ID: 75 — Sub-Wave 2b Gate Review (READ/PLAN-FIRST, Orchestrator-Authorized)
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Execute Orchestrator-required READ/PLAN-FIRST Sub-Wave 2b Gate Review. Address 8 Orchestrator-identified concerns before any implementation.
+
+## Authorization
+- **Scope**: READ/PLAN-FIRST Sub-Wave 2b Gate Review ONLY
+- **Forbidden**: Code changes, deployments, migrations, production modifications
+
+## Orchestrator-Identified Concerns (8)
+1. Publisher PENDING→PUBLISHED/FAILED semantics
+2. Retry + crash recovery
+3. Consumer-side eventId deduplication
+4. Duplicate delivery → business effect once
+5. Poison event / permanent failure handling
+6. Outbox lag measurement + alert
+7. Production safety of /api/test/rollback-injection endpoint
+8. FEATURE_OUTBOX_PUBLISHER=ON staging evidence
+
+## Review Results — All 8 Concerns Addressed
+
+### 1. Publisher PENDING→PUBLISHED/FAILED Semantics
+- 3-state machine: PENDING → PUBLISHED (emit succeeds) or FAILED (5 retries exhausted)
+- Attempts incremented on each failure; lastError stored
+- Acceptance: PENDING→PUBLISHED on success, PENDING→FAILED after 5 failures
+
+### 2. Retry + Crash Recovery
+- Exponential backoff: 1s, 5s, 30s, 5min, 15min
+- Max retries: 5 (then FAILED)
+- Crash-safe: outbox rows persist in DB; publisher re-reads PENDING on restart
+- At-least-once delivery: consumer dedup handles duplicates
+
+### 3. Consumer-Side eventId Deduplication
+- New ProcessedEvent model (eventId @id, eventType, processedAt)
+- Consumer checks ProcessedEvent BEFORE applying business effect
+- If exists → skip; if not → apply + insert ProcessedEvent (same transaction)
+
+### 4. Duplicate Delivery → Business Effect Once
+- Socket.io emit is fire-and-forget (may deliver duplicates)
+- Browser-side: order status updates are idempotent (setting PREPARING twice = no-op)
+- Future consumers (payment webhook): use ProcessedEvent table
+- Test: 3× delivery → 1× business effect (verified via ProcessedEvent)
+
+### 5. Poison Event / Permanent Failure
+- After 5 failed attempts → status=FAILED + alert fires
+- No infinite retry
+- Other events continue processing (no blocking)
+
+### 6. Outbox Lag Measurement + Alert
+- Metric: outbox_lag_seconds = age of oldest PENDING row
+- Alert: outbox-lag-exceeded (lag > 60s → warning; > 5min → critical)
+- New alert rule to be added to src/lib/alerting.ts
+
+### 7. Production Safety of /api/test/rollback-injection
+- Code-level guard: VERCEL_ENV === 'production' → 403
+- Since production deployment is NOT authorized, the endpoint cannot be accessed in production
+- Additional mitigation: vercel.json route-level block for /api/test/* (optional)
+- Explicit evidence: production URL returns 403 (requires production deploy — deferred)
+
+### 8. FEATURE_OUTBOX_PUBLISHER=ON Staging Evidence
+- Flag remains OFF in 2a (verified)
+- 2b will: implement publisher → deploy → flip ON → verify end-to-end
+- Acceptance: events flow (order → outbox → publisher → Socket.io), lag metric produced, consumer dedup works
+
+## Sub-Wave 2b Implementation Plan (6 Steps)
+1. ProcessedEvent model + migration
+2. Outbox publisher worker (mini-services/outbox-publisher/)
+3. Consumer-side dedup library (src/lib/event-consumer.ts)
+4. Outbox lag alert rule (outbox-lag-exceeded + outbox-publish-failed)
+5. Refactor emitOrderCreated/emitOrderUpdated (flag-gated)
+6. Staging evidence (deploy + flip ON + verify + idempotent-replay test)
+
+## Sub-Wave 2b Exit Gate Criteria (12 items)
+- ProcessedEvent model + migration
+- Publisher worker running
+- PENDING→PUBLISHED transition
+- PENDING→FAILED transition (5 retries)
+- Consumer-side dedup (3×→1×)
+- Outbox lag metric
+- Outbox-lag-exceeded alert
+- Crash recovery (kill→restart→no loss)
+- FEATURE_OUTBOX_PUBLISHER=ON
+- Smoke tests pass (7/7)
+- Production untouched
+- WAVE2_EVIDENCE.md updated
+
+### Files Written
+- `/home/z/my-project/SUBWAVE_2B_GATE_REVIEW.md` (~8-section report)
+
+### Current Governance State
+```
+Wave-2                    🔓 UNLOCKED
+Sub-Wave 2a               ✅ PASS (S5 Evidence-Complete)
+Sub-Wave 2b               🔒 GATED (READ/PLAN-FIRST review complete — awaiting authorization)
+Sub-Wave 2c               🔒 GATED
+Sub-Wave 2d               🔒 GATED
+Wave-3                    🔒 LOCKED
+Production                🚫 NOT AUTHORIZED
+```
+
+### Recommendation to Orchestrator
+Sub-Wave 2b scope is well-defined. All 8 Orchestrator-identified concerns are addressed in the review. The implementation plan is 6 steps. The key decision is the publisher hosting strategy (Vercel Cron for Phase 2 staging vs Fly.io for Phase 3 production).
+
+**STOP.** Awaiting Orchestrator's explicit authorization to implement Sub-Wave 2b.
