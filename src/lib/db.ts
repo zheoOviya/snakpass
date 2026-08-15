@@ -36,8 +36,13 @@ if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = db
 // and writes inside the transaction so they share the same snapshot + locks.
 // ----------------------------------------------------------------------------
 
-const MAX_RETRIES = 3
-const INITIAL_BACKOFF_MS = 10
+const MAX_RETRIES = 5
+const INITIAL_BACKOFF_MS = 50
+// Default transaction timeout. On SQLite, concurrent write transactions
+// serialize via a database-level lock, so they need more time. On PostgreSQL,
+// row-level locks make this less of an issue.
+const DEFAULT_TX_TIMEOUT_MS = 30000
+const DEFAULT_MAX_WAIT_MS = 10000
 
 /**
  * Error thrown when a transaction conflicts after exhausting all retries.
@@ -56,9 +61,23 @@ export class TransactionConflictError extends Error {
 
 function isRetryableConflict(error: unknown): boolean {
   if (error instanceof Prisma.PrismaClientKnownRequestError) {
-    // P2034: Transaction failed due to a write conflict or a deadlock.
+    // P2034: Transaction failed due to a write conflict or a deadlock (PostgreSQL).
     // P2036: Transaction timeout (rare; treat as retryable).
-    return error.code === 'P2034' || error.code === 'P2036'
+    // P1008: Socket timeout — database failed to respond within the configured
+    //        timeout. On SQLite with concurrent write transactions, this happens
+    //        when transactions queue for the write lock. Retrying is safe: the
+    //        retry re-runs the entire transaction body, and the early
+    //        idempotency-cache check (getCachedResponse) will return the cached
+    //        response if another transaction committed first.
+    // P2002: Unique constraint violation. For idempotency-keyed writes, this
+    //        means another concurrent transaction committed the same key first.
+    //        Retrying will find the cached response via getCachedResponse.
+    //        This is ONLY safe for routes that check the idempotency cache at
+    //        the start of the transaction body (the standard pattern).
+    // P2024: Timed out fetching a connection from the pool (transient).
+    return error.code === 'P2034' || error.code === 'P2036' ||
+           error.code === 'P1008' || error.code === 'P2002' ||
+           error.code === 'P2024'
   }
   return false
 }
@@ -67,16 +86,27 @@ async function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+export interface WithTransactionOptions {
+  maxRetries?: number
+  timeout?: number
+  maxWait?: number
+}
+
 export async function withTransaction<T>(
   fn: (tx: Prisma.TransactionClient) => Promise<T>,
-  options?: { maxRetries?: number },
+  options?: WithTransactionOptions,
 ): Promise<T> {
   const maxRetries = options?.maxRetries ?? MAX_RETRIES
+  const timeout = options?.timeout ?? DEFAULT_TX_TIMEOUT_MS
+  const maxWait = options?.maxWait ?? DEFAULT_MAX_WAIT_MS
   let lastError: unknown
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      return await db.$transaction(fn)
+      return await db.$transaction(fn, {
+        timeout,
+        maxWait,
+      })
     } catch (error) {
       lastError = error
       if (isRetryableConflict(error) && attempt < maxRetries) {

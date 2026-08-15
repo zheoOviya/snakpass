@@ -90,7 +90,7 @@ export function middleware(req: NextRequest) {
   }
 
   // Skip test endpoints
-  if (pathname.includes('/verify-test') || pathname.includes('/audit-integrity-test') || pathname.includes('/rollback-injection') || pathname.includes('/consume-event')) {
+  if (pathname.includes('/verify-test') || pathname.includes('/audit-integrity-test') || pathname.includes('/rollback-injection') || pathname.includes('/consume-event') || pathname.includes('/evidence-setup') || pathname.includes('/evidence-verify')) {
     return NextResponse.next()
   }
 

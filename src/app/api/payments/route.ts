@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db, withTransaction, TransactionConflictError } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { validateBody } from '@/lib/validation'
-import { withErrorHandler, apiError } from '@/lib/errors'
+import { withErrorHandler, apiError, AppError } from '@/lib/errors'
 import { info as logInfo, newTraceId } from '@/lib/logger'
 import { getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, parseCachedResponse } from '@/lib/idempotency'
 import { enqueueOutboxEvent } from '@/lib/outbox'
@@ -15,6 +15,41 @@ const captureBodySchema = z.object({
   razorpaySignature: z.string().min(1),
 })
 
+// ----------------------------------------------------------------------------
+// Sub-Wave 3a Evidence — env-gated failure injection
+// ----------------------------------------------------------------------------
+// When EVIDENCE_TEST_MODE=true and the request includes an
+// `X-Evidence-Fail-After` header, the capture transaction will deliberately
+// throw AFTER the designated write step but BEFORE the transaction commits.
+// This proves that ALL writes inside the transaction roll back atomically.
+//
+// Gate: EVIDENCE_TEST_MODE env var (set ONLY during evidence test runs,
+// never in staging or production). The header is ignored if the env gate
+// is off, so this code is dead in any non-test environment.
+//
+// Valid X-Evidence-Fail-After values (in execution order):
+//   "capture"     — fail after captureRazorpayPayment() (before any DB write)
+//   "payment"     — fail after tx.payment.create
+//   "order"       — fail after tx.order.update (status=PAID)
+//   "ledger-dr"   — fail after 1st LedgerEntry (DEBIT)
+//   "ledger-cr"   — fail after 2nd LedgerEntry (CREDIT)  ← KEY TEST POINT
+//   "audit"       — fail after tx.auditLog.create
+//   "outbox"      — fail after enqueueOutboxEvent
+//   "idempotency" — fail after storeIdempotencyRecord (just before commit)
+// ----------------------------------------------------------------------------
+const EVIDENCE_TEST_MODE = process.env.EVIDENCE_TEST_MODE === 'true'
+
+function evidenceFailAfter(step: string, failAfterStep: string | null): void {
+  if (EVIDENCE_TEST_MODE && failAfterStep === step) {
+    throw new AppError(
+      'INTERNAL_ERROR',
+      `EVIDENCE: deliberate failure after "${step}" — testing transaction rollback`,
+      500,
+      { evidenceFailureInjection: true, failedAfterStep: step },
+    )
+  }
+}
+
 // POST /api/payments — capture payment for an order
 // P0-01: Razorpay capture route with full transactional atomicity:
 //   Payment + Order + LedgerEntry + AuditLog + Outbox + IdempotencyKey in SAME transaction
@@ -24,6 +59,11 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
   const traceId = newTraceId()
   const body = await validateBody(req, captureBodySchema)
   const idempotencyKey = getIdempotencyKey(req)
+
+  // Evidence failure-injection header (ignored unless EVIDENCE_TEST_MODE=true)
+  const evidenceFailAfterStep = EVIDENCE_TEST_MODE
+    ? req.headers.get('x-evidence-fail-after')
+    : null
 
   const session = await getSessionUser()
   if (!session) {
@@ -122,6 +162,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         }
       }
 
+      // === EVIDENCE CHECKPOINT: capture ===
+      evidenceFailAfter('capture', evidenceFailAfterStep)
+
       // Create Payment record (CAPTURED status)
       const payment = await tx.payment.create({
         data: {
@@ -138,11 +181,17 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         },
       })
 
+      // === EVIDENCE CHECKPOINT: payment ===
+      evidenceFailAfter('payment', evidenceFailAfterStep)
+
       // Update Order status to PAID
       await tx.order.update({
         where: { id: order.id },
         data: { status: 'PAID' },
       })
+
+      // === EVIDENCE CHECKPOINT: order ===
+      evidenceFailAfter('order', evidenceFailAfterStep)
 
       // Create LedgerEntry Dr (debit gateway receivable)
       await tx.ledgerEntry.create({
@@ -155,6 +204,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         },
       })
 
+      // === EVIDENCE CHECKPOINT: ledger-dr ===
+      evidenceFailAfter('ledger-dr', evidenceFailAfterStep)
+
       // Create LedgerEntry Cr (credit consumer revenue)
       await tx.ledgerEntry.create({
         data: {
@@ -166,6 +218,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         },
       })
 
+      // === EVIDENCE CHECKPOINT: ledger-cr (KEY TEST POINT — all 4 writes done) ===
+      evidenceFailAfter('ledger-cr', evidenceFailAfterStep)
+
       // Audit log
       await tx.auditLog.create({
         data: {
@@ -175,6 +230,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
           metadata: JSON.stringify({ orderId: order.id, paymentId: payment.id, amount: order.totalAmount }),
         },
       })
+
+      // === EVIDENCE CHECKPOINT: audit ===
+      evidenceFailAfter('audit', evidenceFailAfterStep)
 
       // Outbox event (atomic with payment)
       await enqueueOutboxEvent(tx, {
@@ -188,6 +246,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
           status: 'CAPTURED',
         },
       })
+
+      // === EVIDENCE CHECKPOINT: outbox ===
+      evidenceFailAfter('outbox', evidenceFailAfterStep)
 
       // Build response body
       const responseBody = {
@@ -208,6 +269,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         logInfo('payment-idempotency-key-stored', { key: idempotencyKey, paymentId: payment.id }, traceId)
       }
 
+      // === EVIDENCE CHECKPOINT: idempotency (just before commit) ===
+      evidenceFailAfter('idempotency', evidenceFailAfterStep)
+
       return { type: 'captured' as const, status: 200, body: responseBody, payment }
     })
 
@@ -227,6 +291,8 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
       logInfo('payment-capture-conflict', { attempts: error.attempts }, traceId)
       return apiError('CONFLICT', 'Payment capture conflicted with a concurrent request. Please retry.', 409, undefined, traceId)
     }
+    // Evidence failure-injection errors are AppError(INTERNAL_ERROR) — rethrow
+    // so withErrorHandler returns a 500 with the evidence details.
     throw error
   }
 })
