@@ -34,7 +34,7 @@ jobs:
       - name: Authenticated order creation + outbox E2E verification
         env:
           STAGING_URL: ${{ inputs.staging_url }}
-          DATABASE_URL: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
         run: |
           STAGING_URL="${STAGING_URL%/}"
           COOKIE_JAR=$(mktemp)
@@ -86,20 +86,18 @@ jobs:
 
           echo ""
           echo "=== Step 4: Run publisher (claims + publishes + marks PUBLISHED) ==="
-          # Run the publisher from the workflow runner
-          # It needs DATABASE_URL to connect to Supabase
-          # Construct the DATABASE_URL (same as fix-preview-database-url pattern)
-          ENCODED_PW=$(jq -rn --arg pw "$DATABASE_URL" '$pw|@uri')
+          # The snakzap_app password is the placeholder from create-roles.sql
+          # (executed verbatim via dev-001-sql-execution.yml Management API)
+          APP_PASSWORD="CHANGE_ME_IN_PRODUCTION_USE_SECRET_MANAGER"
+          ENCODED_PW=$(jq -rn --arg pw "$APP_PASSWORD" '$pw|@uri')
           PUBLISHER_DB_URL="postgresql://snakzap_app.zmzqqcyapcezmaqvuzzd:$ENCODED_PW@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
-          REALTIME_URL="$STAGING_URL"
 
-          # Run publisher once (publishPendingEvents)
           export DATABASE_URL="$PUBLISHER_DB_URL"
           export REALTIME_URL="$STAGING_URL"
           export OUTBOX_PUBLISHER_PORT=3009
           export OUTBOX_PUBLISHER_AUTO_RUN=true
 
-          # Run publisher for 10 seconds (it runs once on startup then stays alive for health checks)
+          # Run publisher for 15 seconds (it runs once on startup then stays alive for health checks)
           timeout 15 bun run mini-services/outbox-publisher/index.ts 2>&1 || true
 
           echo ""
