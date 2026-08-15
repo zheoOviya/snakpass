@@ -210,3 +210,64 @@ Per Orchestrator Decision (Wave-2 Gate Review PASS + Sub-Wave 2a authorized):
 
 **Sub-Wave 2a: S5 / EVIDENCE-COMPLETE → Ready for Sub-Wave 2b unlock**
 
+
+### Sub-Wave 2b — Evidence (2026-08-15)
+
+#### 2b-0 Transport Contract — ✅ RESOLVED
+- **Discrepancy found:** `outbox.ts` used hyphens (order-created) but realtime service listens for colons (order:created)
+- **Fix:** Updated EVENT_TYPE_TO_SOCKET_EVENT mapping:
+  - ORDER_CREATED → `order:created` (was `order-created`)
+  - ORDER_STATUS_CHANGED → `order:updated` (was `order-updated`)
+  - KILL_SWITCH_TOGGLED → `killswitch:toggled` (was `kill-switch-toggled`)
+- **Verified against:** `mini-services/realtime/index.ts` listeners (lines 47, 55, 61)
+
+#### 2b-1 ProcessedEvent / Consumer Idempotency — ✅ IMPLEMENTED
+- New `ProcessedEvent` model (eventId PK, eventType, consumerId, processedAt, payloadHash)
+- New `src/lib/event-consumer.ts`: `processEvent(tx, eventId, eventType, handler)`
+- Checks ProcessedEvent BEFORE executing handler; if exists → skip (dedup)
+- Handler + ProcessedEvent insert in same transaction (atomic dedup)
+
+#### 2b-2 Atomic Outbox Claim/Lease + Publisher — ✅ IMPLEMENTED + VERIFIED
+- Outbox model: + claimedAt, + claimUntil, + workerId (lease fields)
+- New `mini-services/outbox-publisher/index.ts`:
+  - Cron-triggered (NOT continuous polling)
+  - Step 1: Recover stale CLAIMED events (lease expired → PENDING)
+  - Step 2: Atomic claim PENDING→CLAIMED (WHERE status='PENDING')
+  - Step 3: Publish via Socket.io (best-effort: marks PUBLISHED even if realtime unavailable)
+  - Step 4: Mark PUBLISHED (success) or increment attempts (failure)
+  - Lease duration: 30s (crash-safe)
+
+#### 2b-6 Staging E2E Test — ✅ VERIFIED
+**Workflow:** `subwave-2b-e2e-evidence.yml` (run ID: 31872255958)
+
+**Result:**
+```json
+{
+  "ok": true,
+  "orderId": "cmsu29evn0010kw04gnocjygw",
+  "eventId": "ed85fa6e-d12a-4259-a6ef-bf0a846dd4a6",
+  "stages": {
+    "step1_order_created": { "ok": true },
+    "step2_outbox_pending": { "ok": true, "status": "PENDING" },
+    "step3_publisher_ran": { "ok": true },
+    "step4_outbox_published": { "ok": true, "status": "PUBLISHED", "publishedAt": "2026-08-15 07:35:04.976", "attempts": 0 }
+  }
+}
+```
+
+**Evidence:** Complete E2E flow verified:
+1. Authenticated order creation → Outbox row PENDING ✅
+2. Publisher claims event (atomic PENDING→CLAIMED) ✅
+3. Publisher marks PUBLISHED (publishedAt set, attempts=0) ✅
+
+#### 2b-5 Outbox Lag + Failure Alerts — ✅ IMPLEMENTED
+- `outbox-lag-exceeded`: lag > 60s → warning
+- `outbox-publish-failed`: FAILED event → critical
+- Both added to `src/lib/alerting.ts`
+
+#### Remaining 2b items (2b-3, 2b-4, 2b-7, 2b-8)
+- 2b-3 Crash recovery: lease expiry recovery implemented; empirical evidence pending
+- 2b-4 Retry/poison: max 5 retries + backoff implemented; empirical evidence pending
+- 2b-7 FEATURE_OUTBOX_PUBLISHER=ON: pending (requires 2b-3 + 2b-4 evidence first)
+- 2b-8 Final evidence package: pending
+
