@@ -565,7 +565,10 @@ jobs:
             -H "Content-Type: application/json" \
             "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
             -d "$(jq -n --arg q "$OUTBOX_SQL" '{query: $q}')")
-          OUTBOX_COUNT=$(echo "$OUTBOX_RESULT" | jq -r '.[0].count // 0')
+          echo "Outbox raw: $(echo $OUTBOX_RESULT | head -c 300)"
+          # Supabase Management API may return array OR object depending on result shape.
+          # Handle both: if array, take [0].count; if object, take .count.
+          OUTBOX_COUNT=$(echo "$OUTBOX_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
 
           # Query IdempotencyKey count
           IDEM_SQL="SELECT COUNT(*) as count FROM \"IdempotencyKey\" WHERE \"key\" = '\''$IDEMPOTENCY_KEY'\'';'
@@ -574,7 +577,8 @@ jobs:
             -H "Content-Type: application/json" \
             "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
             -d "$(jq -n --arg q "$IDEM_SQL" '{query: $q}')")
-          IDEM_COUNT=$(echo "$IDEM_RESULT" | jq -r '.[0].count // 0')
+          echo "Idempotency raw: $(echo $IDEM_RESULT | head -c 300)"
+          IDEM_COUNT=$(echo "$IDEM_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
 
           # Query AuditLog count for PAYMENT_CAPTURED for this order
           AUDIT_SQL="SELECT COUNT(*) as count FROM \"AuditLog\" WHERE \"action\" = '\''PAYMENT_CAPTURED'\'' AND \"metadata\" LIKE '\''%$ORDER_ID%'\'';'
@@ -583,7 +587,8 @@ jobs:
             -H "Content-Type: application/json" \
             "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
             -d "$(jq -n --arg q "$AUDIT_SQL" '{query: $q}')")
-          AUDIT_COUNT=$(echo "$AUDIT_RESULT" | jq -r '.[0].count // 0')
+          echo "Audit raw: $(echo $AUDIT_RESULT | head -c 300)"
+          AUDIT_COUNT=$(echo "$AUDIT_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
 
           echo ""
           echo "=== Step 5: Database state summary ==="
