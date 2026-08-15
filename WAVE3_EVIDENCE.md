@@ -1,9 +1,10 @@
 # Wave-3 Evidence Document
 
-**Status:** 🟢 Sub-Wave 3a — S5 PASS / CLOSED
+**Status:** 🟢 Sub-Wave 3a — S5 PASS / CLOSED | 🟡 Sub-Wave 3b — Evidence-Complete (awaiting Orchestrator S5 review)
 **Created:** 2026-08-15
 **Sub-Wave 3a Closure:** 2026-08-15 (Orchestrator S5 PASS decision)
-**Authorization:** Orchestrator Decision (Sub-Wave 3a authorized → S5 PASS)
+**Sub-Wave 3b Evidence Complete:** 2026-08-15 (SQLite 5/5 PASS + PostgreSQL PASS)
+**Authorization:** Orchestrator Decision (3a S5 PASS + 3b implementation authorized)
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence.
 > It contains gate criteria, acceptance criteria, evidence requirements, owner/task
@@ -29,13 +30,13 @@
 | P0 | Title | Risk Tier | Wave-2 Pred | Sub-Wave | Status | Evidence |
 |----|-------|-----------|-------------|----------|--------|----------|
 | P0-01 | Razorpay capture | Tier 1 (HIGHEST) | P0-09/17/24/23 | 3a | ✅ S5 PASS / CLOSED | §7, 3a-E1..3a-PG-E1 |
-| P0-08 | Order idempotency | Tier 4 | P0-24/25 | 3b | 🔒 LOCKED | — |
+| P0-08 | Order idempotency | Tier 4 | P0-24/25 | 3b | 🟡 Evidence-Complete (awaiting S5) | §9, 3b-E1..3b-PG-E1 |
 
 ### Sub-Wave Status
 | Sub-Wave | Scope | Status |
 |----------|-------|--------|
 | 3a | Payment model + capture route + LedgerEntry + WebhookEvent | ✅ S5 PASS / CLOSED |
-| 3b | P0-08 formalization (retry-storm, sign-off) | 🔒 LOCKED (awaiting READ/PLAN-FIRST Gate Review) |
+| 3b | P0-08 formalization (Order POST idempotency) | 🟡 Evidence-Complete (awaiting Orchestrator S5 review) |
 | 3c | Failure injection + cross-P0 closure | 🔒 LOCKED |
 
 ---
@@ -682,4 +683,187 @@ realPayments  🚫 OFF
 
 **IDE: STOP. Await next Orchestrator authorization for Sub-Wave 3b READ/PLAN-FIRST Gate Review.**
 
+---
+
+## 9. Sub-Wave 3b — Order POST Idempotency Formalization (P0-08)
+
+> **Context:** Orchestrator authorized Sub-Wave 3b implementation after Gate Review
+> (CONDITIONAL-GO). Bounded scope: C5 (evidence endpoints) + C6 (failure injection)
+> + C2 (actionable 409 message) + required Order-specific evidence scenarios +
+> PostgreSQL-native concurrency (Option B precedent from 3a).
+
+### Implementation Summary
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| C5: Evidence setup endpoint | `src/app/api/orders/evidence-setup/route.ts` | Creates test user + session + provides restaurant/menuItem info (dev-only, EVIDENCE_TEST_MODE gated) |
+| C5: Evidence verify endpoint | `src/app/api/orders/evidence-verify/route.ts` | Returns full state of all Order-creation writes (dev-only, EVIDENCE_TEST_MODE gated) |
+| C6: Failure injection | `src/app/api/orders/route.ts` | `EVIDENCE_TEST_MODE` + `X-Evidence-Fail-After` header with 5 checkpoints: menu-item-decrement, order-create, audit-log, idempotency-record, outbox |
+| C2: Actionable 409 message | `src/app/api/orders/route.ts` | `retryStrategy: same-key/new-key` + `idempotencyKeyHint` (backward-compatible additive) |
+| Rate limiting skip | `src/middleware.ts` | Skip rate limiting during EVIDENCE_TEST_MODE (so concurrent tests don't get rate-limited) |
+| Evidence runner (SQLite) | `scripts/wave3-3b-evidence.mjs` | Runs 5 tests + generates self-validating JSON |
+| Evidence wrapper | `scripts/run-3b-evidence.sh` | Starts dev server with EVIDENCE_TEST_MODE=true + SQLite + runs evidence script |
+| PostgreSQL workflow | `.github/workflows/subwave-3b-postgresql-concurrent-evidence.yml` | Mirrors 3a-PG-E1 pattern for Order POST concurrency |
+
+### SQLite Evidence (Local) — 5/5 PASS
+
+- **Run ID:** `3b-ev-1786832887563-41ed55ac`
+- **Script:** `scripts/wave3-3b-evidence.mjs` + `scripts/run-3b-evidence.sh`
+- **Self-validating JSON:** `evidence/wave3-3b/evidence-3b-ev-1786832887563-41ed55ac.json`
+- **Result:** `ok: true` (all 5 tests PASSED)
+
+#### 3b-E1: Order POST Transaction Rollback — ✅ PASS
+- **Test:** POST /api/orders with `X-Evidence-Fail-After: idempotency-record`
+- **Result:** Deliberate failure (HTTP 500, `evidenceFailureInjection: true`, `failedAfterStep: idempotency-record`). All writes rolled back: 0 IdempotencyKey stored, `atomicRollback: true`.
+- **Proves:** Phantom-block prevention — failed txn does NOT store the IdempotencyKey.
+
+#### 3b-E2: Idempotency Replay Integrity — ✅ PASS
+- **Test:** Two POST /api/orders with same `Idempotency-Key` + same body.
+- **Result:** Both returned 200 with same orderId. Exactly 1 Order (CONFIRMED), 1 AuditLog, 1 Outbox, 1 IdempotencyRecord. `exactlyOneOrder: true`.
+- **Proves:** Same key → same Order row (dedup works).
+
+#### 3b-E3: Idempotency Conflict (same key + materially different request) — ✅ PASS
+- **Test:** Request A (qty=1) + Request B (qty=3, materially different) with same key.
+- **Result:** Both returned 200 with same orderId. Only 1 Order created. `cachedResponseReturned: true`, `exactlyOneOrder: true`.
+- **Proves:** Option A (Orchestrator D1) — cached response returned, no 2nd order created.
+
+#### 3b-E4: Concurrent Duplicate Requests — ✅ PASS
+- **Test:** 5 concurrent POST /api/orders with same `Idempotency-Key` + same body.
+- **Result:** All 5 returned 200 with same orderId. `uniqueOrderIds: 1`. Exactly 1 Order, 1 Outbox, 1 IdempotencyRecord. `exactlyOneOrder: true`.
+- **Proves:** 5 concurrent → exactly 1 Order/outbox/idempotency.
+
+#### 3b-E5: Phantom-Block Prevention — ✅ PASS
+- **Test:** (1) POST with `X-Evidence-Fail-After: order-create` → 500. (2) Verify no IdempotencyKey stored. (3) Retry with SAME key + valid body → 200, order created.
+- **Result:** `idempotencyRecordExists: false` after failed txn. Retry succeeded (200 + Order created + key stored). `phantomBlockPrevented: true`, `retrySucceeded: true`.
+- **Proves:** Failed txn does NOT store IdempotencyKey; retry with same key succeeds.
+
+### PostgreSQL-Native Concurrent Evidence — ✅ PASS
+
+- **Workflow:** `.github/workflows/subwave-3b-postgresql-concurrent-evidence.yml`
+- **Run ID:** `31912679504` (GitHub Actions run)
+- **Database:** PostgreSQL (Supabase staging, project ref `zmzqqcyapcezmaqvuzzd`)
+- **Staging URL:** Fresh Vercel preview deployment (EVIDENCE_TEST_MODE=true)
+- **Timestamp:** 2026-08-15T22:40:36Z
+- **Evidence JSON:** `evidence/wave3-3b/evidence-postgresql-3b-pg-ev.json`
+- **Result:** `ok: true` ✅
+
+#### 3b-PG-E1: 5 Concurrent Order POST on PostgreSQL — ✅ PASS
+
+**Test:** 5 concurrent POST /api/orders with same `Idempotency-Key` + same body, against staging PostgreSQL.
+
+**Orchestrator-required proof:**
+
+```text
+5 concurrent requests
+      ↓
+same idempotency key
+      ↓
+exactly 1 Order              ✅ (orderCount: 1)
+exactly 1 capture            ✅ (orderStatus: CONFIRMED)
+exactly 1 OrderItem          ✅ (orderItemCount: 1)
+exactly 1 Outbox event       ✅ (outboxEventCount: 1)
+exactly 1 IdempotencyRecord  ✅ (idempotencyRecordCount: 1)
+exactly 1 AuditLog           ✅ (auditLogCount: 1)
+      ↓
+all 5 requests return HTTP 200 with the SAME orderId
+```
+
+**Actual results (from evidence JSON):**
+
+```json
+{
+  "ok": true,
+  "database": "postgresql",
+  "runId": "3b-pg-ev-1786833627-j5jg",
+  "orchestratorRequiredFields": {
+    "database": "postgresql",
+    "concurrentRequests": 5,
+    "uniqueOrderIds": 1,
+    "orderCount": 1,
+    "orderItemCount": 1,
+    "outboxEventCount": 1,
+    "idempotencyRecordCount": 1,
+    "auditLogCount": 1
+  },
+  "invariant": { "exactlyOneOrder": true },
+  "databaseState": {
+    "orderCount": 1,
+    "orderId": "cmsuylvu80002lc04sv0kwuwi",
+    "orderStatus": "CONFIRMED",
+    "orderItemCount": 1,
+    "outboxEventCount": 1,
+    "idempotencyRecordCount": 1,
+    "auditLogCount": 1,
+    "totalOrdersByUser": 1
+  },
+  "responseSummary": {
+    "successCount": 5,
+    "errorCount": 0,
+    "uniqueOrderIdsInResponses": 1,
+    "responsesReturningWinningOrderId": 5
+  }
+}
+```
+
+### 3b Evidence Summary (Orchestrator Criteria)
+
+| # | Criterion | Status | Evidence Source |
+|---|-----------|--------|-----------------|
+| 1 | Order POST failure → rollback (phantom-block prevention) | ✅ PASS | SQLite 3b-E1 + 3b-E5 |
+| 2 | Same idempotency key → same Order (dedup) | ✅ PASS | SQLite 3b-E2 |
+| 3 | Same key + materially different request → cached response (Option A) | ✅ PASS | SQLite 3b-E3 |
+| 4 | 5 concurrent → exactly 1 Order/outbox/idempotency | ✅ PASS | SQLite 3b-E4 + PostgreSQL 3b-PG-E1 |
+| 5 | PostgreSQL-native concurrency proof | ✅ PASS | `evidence/wave3-3b/evidence-postgresql-3b-pg-ev.json` (run 31912679504) |
+| 6 | C2: Actionable 409 conflict message | ✅ PASS | `retryStrategy: same-key/new-key` implemented |
+| 7 | realPayments not enabled | ✅ PASS | `realPayments=false` throughout |
+| 8 | No production Razorpay credentials | ✅ PASS | Demo mode (no payment changes) |
+| 9 | No Webhook handler implementation | ✅ PASS | WebhookEvent model only (schema-only, unchanged) |
+| 10 | 3c not started | ✅ PASS | Not started |
+| 11 | Production untouched | ✅ PASS | Staging PostgreSQL only |
+| 12 | Lint PASS | ✅ PASS | `bun run lint` clean |
+| 13 | Schema/env restored to production state | ✅ PASS | postgresql provider + clean .env |
+| 14 | C1 requestHash NOT implemented (deferred to 3c) | ✅ PASS | Not implemented per Orchestrator D1 |
+
+**Sub-Wave 3b: ALL EVIDENCE CRITERIA PASS. PostgreSQL-native concurrency PROVEN for Order POST.**
+
+### Governance Compliance
+
+| Criterion | Status |
+|-----------|--------|
+| C1 requestHash NOT implemented | ✅ PASS (deferred to 3c per Orchestrator D1) |
+| 422 materially-different-request NOT implemented | ✅ PASS (Option A — cached response) |
+| 3c NOT started | ✅ PASS |
+| Production NOT touched | ✅ PASS |
+| realPayments OFF | ✅ PASS |
+| Webhook schema-only (unchanged) | ✅ PASS |
+| db.ts NOT modified | ✅ PASS (withTransaction already proven safe) |
+| idempotency.ts NOT modified | ✅ PASS |
+| Schema NOT modified | ✅ PASS (backward-compatible) |
+| Migration NOT created | ✅ PASS |
+
+### Governance State (awaiting Orchestrator S5 decision)
+
+```text
+Wave-0        ✅ CLOSED
+Wave-1        ✅ CLOSED
+Wave-2        ✅ CLOSED — S5
+
+Wave-3        🔓 UNLOCKED
+
+Sub-Wave 3a   ✅ S5 PASS / CLOSED
+
+Sub-Wave 3b   🟢 EVIDENCE-COMPLETE — PostgreSQL concurrency PROVEN
+              ├─ SQLite application invariants: ✅ PROVEN (5/5 PASS)
+              ├─ PostgreSQL concurrency: ✅ PROVEN (staging PostgreSQL)
+              ├─ C2 actionable 409: ✅ IMPLEMENTED
+              ├─ C5 evidence endpoints: ✅ IMPLEMENTED
+              ├─ C6 failure injection: ✅ IMPLEMENTED
+              └─ C1 requestHash: ✅ DEFERRED to 3c (per Orchestrator D1)
+
+Sub-Wave 3c   🔒 LOCKED — NOT AUTHORIZED
+Production    🚫 NOT AUTHORIZED
+realPayments  🚫 OFF
+```
+
+**STOP — IDE is not starting 3c. Awaiting Orchestrator S5 decision for 3b.**
 
