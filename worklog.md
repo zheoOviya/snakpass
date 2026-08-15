@@ -4178,3 +4178,94 @@ Production                🚫 NOT AUTHORIZED
 Remaining: 2b-5 alert evidence (empirical proof that lag/failure alerts fire). This is the last gap before 2b final S5 closure.
 
 **STOP.** Awaiting Orchestrator review of 2b-7 evidence + decision on 2b-5 alert evidence + 2b final closure.
+
+---
+Task ID: 81 — Sub-Wave 2b-5 Alert Evidence (Alert-E1 + Alert-E2) — ALL 2 PASS ok:true
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Execute Orchestrator-authorized empirical alert evidence for 2b-5 (outbox-lag-exceeded + outbox-publish-failed).
+
+## Authorization
+- **Scope**: Alert-E1 (lag alert) + Alert-E2 (failure alert) on staging
+- **Forbidden**: 2c, Wave-3, production changes
+
+## Evidence Results — ALL 2 PASS, ok:true ✅
+
+### Alert-E1 — outbox-lag-exceeded — ✅ PASS
+- Created PENDING outbox event → waited 65 seconds → ran alert evaluator
+- Alert evaluator detected oldest PENDING event age > 60s threshold
+- `outbox-lag-exceeded` alert fired (warning severity)
+- Evidence: `fired: true`
+
+### Alert-E2 — outbox-publish-failed — ✅ PASS
+- Created poison event (unknown type) → ran publisher 5× (all failed) → event FAILED (attempts=5)
+- Ran alert evaluator → detected FAILED outbox events (count > 0)
+- `outbox-publish-failed` alert fired (critical severity)
+- Evidence: `eventStatus: "FAILED"`, `attempts: 5`, `fired: true`
+
+## Implementation Fix
+- Added `outbox-lag-exceeded` + `outbox-publish-failed` alert rules to `mini-services/alert-evaluator/index.ts` (were only in `src/lib/alerting.ts`)
+- Alert evaluator now queries Outbox table:
+  - `outbox_lag_seconds`: age of oldest PENDING row
+  - `outbox_failed_count`: count of FAILED rows
+
+## Evidence Artifacts
+- **Workflow:** `subwave-2b5-alert-evidence.yml` (run ID: 31881226496)
+- **Artifact:** `subwave-2b5-alert-evidence` (2b5-alert-evidence.json, 90-day retention)
+- **Staging URL:** https://snakpass-zy6k0erry-snakzap.vercel.app
+- **Production:** NOT TOUCHED
+
+## Current Governance State
+```
+Wave-2                    🔓 UNLOCKED
+Sub-Wave 2a               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2b               ✅ ALL EVIDENCE COMPLETE (ok:true)
+  ├─ 2b-0 Transport        ✅ PASS
+  ├─ 2b-1 ProcessedEvent   ✅ IMPLEMENTED
+  ├─ 2b-2 Claim/Lease      ✅ IMPLEMENTED + E2E
+  ├─ 2b-3 Crash Recovery   ✅ EMPIRICALLY VERIFIED
+  ├─ 2b-4 Poison Event     ✅ EMPIRICALLY VERIFIED (5→FAILED)
+  ├─ 2b-4a Transient Retry ✅ EMPIRICALLY VERIFIED (FAIL→RETRY→PUBLISHED)
+  ├─ 2b-5 Alerts           ✅ EMPIRICALLY VERIFIED (lag + failure alerts fire)
+  ├─ 2b-6 E2E              ✅ PASS
+  ├─ 2b-7 Flag ON          ✅ PASS (flag ON + Test A/B/C + security)
+  ├─ 2b-8 Dedup            ✅ EMPIRICALLY VERIFIED (3×→1× via real consumer)
+  └─ 2b-8 Final Package    ✅ ALL EVIDENCE COMPLETE
+Sub-Wave 2c               🔒 LOCKED
+Sub-Wave 2d               🔒 LOCKED
+Wave-3                    🔒 LOCKED
+Production                🚫 NOT AUTHORIZED
+```
+
+## 2b Final Exit Gate Matrix
+```
+2b-0   Transport contract                 ✅
+2b-1   ProcessedEvent                     ✅
+2b-2   Atomic claim/lease + publisher     ✅
+2b-3   Crash recovery                    ✅ empirical
+2b-4   Poison / 5 attempts                ✅ empirical
+2b-4a  Transient retry                    ✅ empirical
+2b-5   Lag alert                         ✅ empirical
+       Failure alert                     ✅ empirical
+2b-6   Staging E2E                        ✅
+2b-7   Flag ON + regression              ✅
+2b-8   Duplicate delivery 3×→1×         ✅ empirical
+```
+
+**ALL 2b EXIT GATE CRITERIA PASS. Sub-Wave 2b is ready for S5 / Evidence-Complete declaration.**
+
+## Recommendation to Orchestrator
+All Orchestrator-required empirical evidence tests for Sub-Wave 2b are now COMPLETE with `ok: true`:
+1. ✅ Transport contract resolved
+2. ✅ ProcessedEvent consumer dedup (3×→1× via real consumer)
+3. ✅ Crash recovery (lease expired → recovered → PUBLISHED)
+4. ✅ Poison event (5 attempts → FAILED, no infinite retry)
+5. ✅ Transient retry (FAIL→RETRY→SUCCESS→PUBLISHED)
+6. ✅ Lag alert (PENDING > 60s → alert fires)
+7. ✅ Failure alert (FAILED → alert fires)
+8. ✅ Flag ON + regression (Test A/B/C + security)
+9. ✅ Transport failure → NOT PUBLISHED (critical invariant)
+
+**Sub-Wave 2b is ready for S5 / Evidence-Complete → Orchestrator review for 2b final PASS.**
+
+STOP. Awaiting Orchestrator decision on Sub-Wave 2b final closure + 2c authorization.

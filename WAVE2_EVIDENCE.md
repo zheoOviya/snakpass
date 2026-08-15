@@ -378,3 +378,19 @@ Per Orchestrator Decision (Wave-2 Gate Review PASS + Sub-Wave 2a authorized):
 
 #### Evidence JSON self-validation: ok:true ✅
 
+
+### Sub-Wave 2b-5 — Alert Evidence (2026-08-15) — ALL 2 PASS ok:true ✅
+
+**Workflow:** `subwave-2b5-alert-evidence.yml` (run ID: 31881226496)
+**Evidence JSON:** `ok: true`
+
+#### Alert-E1 — outbox-lag-exceeded — ✅ PASS
+- **Test:** Created PENDING outbox event → waited 65 seconds (exceeds 60s threshold) → ran alert evaluator → `outbox-lag-exceeded` alert fired
+- **Evidence:** `fired: true`, alert evaluator output contained `outbox-lag-exceeded`
+
+#### Alert-E2 — outbox-publish-failed — ✅ PASS
+- **Test:** Created poison event (unknown type) → ran publisher 5× (all failed) → event reached FAILED status (attempts=5) → ran alert evaluator → `outbox-publish-failed` alert fired
+- **Evidence:** `eventStatus: "FAILED"`, `attempts: 5`, alert evaluator output contained `outbox-publish-failed`
+
+#### Evidence JSON self-validation: ok:true ✅
+
