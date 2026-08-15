@@ -3,11 +3,44 @@ import { db, withTransaction, TransactionConflictError } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { emitOrderCreated } from '@/lib/realtime'
 import { validateBody, createOrderBodySchema } from '@/lib/validation'
-import { apiError, withErrorHandler } from '@/lib/errors'
+import { apiError, withErrorHandler, AppError } from '@/lib/errors'
 import { info as logInfo, newTraceId } from '@/lib/logger'
 import { getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, parseCachedResponse } from '@/lib/idempotency'
 import { enqueueOutboxEvent } from '@/lib/outbox'
 import { isFeatureEnabled } from '@/lib/deployment'
+
+// ----------------------------------------------------------------------------
+// Sub-Wave 3b Evidence — env-gated failure injection
+// ----------------------------------------------------------------------------
+// When EVIDENCE_TEST_MODE=true and the request includes an
+// `X-Evidence-Fail-After` header, the order-creation transaction will
+// deliberately throw AFTER the designated write step but BEFORE the
+// transaction commits. This proves that ALL writes inside the transaction
+// roll back atomically (phantom-block prevention + outbox atomicity).
+//
+// Gate: EVIDENCE_TEST_MODE env var (set ONLY during evidence test runs,
+// never in staging or production). The header is ignored if the env gate
+// is off, so this code is dead in any non-test environment.
+//
+// Valid X-Evidence-Fail-After values (in execution order):
+//   "menu-item-decrement" — fail after tx.menuItem.updateMany (inventory race guard)
+//   "order-create"        — fail after tx.order.create (before audit log)
+//   "audit-log"           — fail after tx.auditLog.create (before idempotency record)
+//   "idempotency-record"  — fail after storeIdempotencyRecord (before outbox)  ← KEY TEST POINT
+//   "outbox"              — fail after enqueueOutboxEvent (just before commit)
+// ----------------------------------------------------------------------------
+const EVIDENCE_TEST_MODE = process.env.EVIDENCE_TEST_MODE === 'true'
+
+function evidenceFailAfter(step: string, failAfterStep: string | null): void {
+  if (EVIDENCE_TEST_MODE && failAfterStep === step) {
+    throw new AppError(
+      'INTERNAL_ERROR',
+      `EVIDENCE: deliberate failure after "${step}" — testing transaction rollback`,
+      500,
+      { evidenceFailureInjection: true, failedAfterStep: step },
+    )
+  }
+}
 
 // GET /api/orders?role=consumer|vendor|admin&restaurantId=&status=&limit=
 export async function GET(req: NextRequest) {
@@ -74,6 +107,11 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
   // The actual cached-response lookup happens INSIDE the transaction below
   // (to prevent phantom-block), but we extract the key here first.
   const idempotencyKey = getIdempotencyKey(req)
+
+  // Evidence failure-injection header (ignored unless EVIDENCE_TEST_MODE=true)
+  const evidenceFailAfterStep = EVIDENCE_TEST_MODE
+    ? req.headers.get('x-evidence-fail-after')
+    : null
 
   // Kill switch guard: ordering (outside txn — read-only check, safe to race)
   const orderingKs = await db.killSwitch.findUnique({ where: { key: 'ordering' } })
@@ -178,6 +216,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         }
       }
 
+      // === EVIDENCE CHECKPOINT: menu-item-decrement ===
+      evidenceFailAfter('menu-item-decrement', evidenceFailAfterStep)
+
       const restaurant = await tx.restaurant.findUnique({ where: { id: body.restaurantId } })
       if (!restaurant || !restaurant.isActive || restaurant.isSuspended) {
         return {
@@ -217,6 +258,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         include: { orderItems: true, restaurant: { select: { id: true, name: true } } },
       })
 
+      // === EVIDENCE CHECKPOINT: order-create ===
+      evidenceFailAfter('order-create', evidenceFailAfterStep)
+
       await tx.auditLog.create({
         data: {
           actorId: consumerId,
@@ -225,6 +269,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
           metadata: JSON.stringify({ orderId: order.id, total, restaurantId: body.restaurantId }),
         },
       })
+
+      // === EVIDENCE CHECKPOINT: audit-log ===
+      evidenceFailAfter('audit-log', evidenceFailAfterStep)
 
       // Build the success response body
       const responseBody = {
@@ -266,6 +313,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         logInfo('idempotency-key-stored', { key: idempotencyKey, orderId: order.id }, traceId)
       }
 
+      // === EVIDENCE CHECKPOINT: idempotency-record (KEY TEST POINT — phantom-block) ===
+      evidenceFailAfter('idempotency-record', evidenceFailAfterStep)
+
       // P0-24: Write outbox event INSIDE the same transaction (behind feature flag).
       // When outboxPublisher flag is ON, the publisher worker (Sub-Wave 2b) will
       // pick up this event and deliver it via Socket.io.
@@ -285,6 +335,9 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
           pickupOtp: order.pickupOtp,
         },
       })
+
+      // === EVIDENCE CHECKPOINT: outbox (just before commit) ===
+      evidenceFailAfter('outbox', evidenceFailAfterStep)
 
       return { type: 'created' as const, status: 200, body: responseBody, order }
     })
@@ -314,14 +367,28 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
     // P0-25: Transaction conflict (concurrent order on same inventory)
     if (error instanceof TransactionConflictError) {
       logInfo('order-create-conflict', { attempts: error.attempts, code: error.code }, traceId)
+      // Sub-Wave 3b C2: Actionable conflict message — distinguish retry-with-same-key
+      // (P2002/P1008/P2024 — idempotency cache will return cached response) from
+      // retry-with-new-key (P2034/P2036 — business state may have changed).
+      // The client SHOULD retry with the SAME Idempotency-Key if one was provided.
+      const retryStrategy = idempotencyKey ? 'same-key' : 'new-key'
       return apiError(
         'CONFLICT',
-        'Order could not be processed due to a concurrent modification. Please retry.',
+        idempotencyKey
+          ? 'Order could not be processed due to a concurrent modification. Retry with the SAME Idempotency-Key to receive the cached response.'
+          : 'Order could not be processed due to a concurrent modification. Please retry.',
         409,
-        undefined,
+        {
+          retryStrategy,
+          conflictCode: error.code,
+          attempts: error.attempts,
+          ...(idempotencyKey ? { idempotencyKeyHint: 'Your Idempotency-Key was NOT consumed. Retrying with the same key will return the original response if the first transaction committed.' } : {}),
+        },
         traceId,
       )
     }
+    // Evidence failure-injection errors are AppError(INTERNAL_ERROR) — rethrow
+    // so withErrorHandler returns a 500 with the evidence details.
     throw error
   }
 })

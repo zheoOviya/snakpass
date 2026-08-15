@@ -136,11 +136,24 @@ export function middleware(req: NextRequest) {
   }
 
   // P0-13 — Rate limiting
+  // During evidence test runs (EVIDENCE_TEST_MODE=true), skip rate limiting
+  // so the concurrent-idempotency tests (which fire 5 parallel POSTs) don't
+  // get rate-limited. This is safe because EVIDENCE_TEST_MODE is only set
+  // during evidence test runs, never in production.
+  const EVIDENCE_TEST_MODE = process.env.EVIDENCE_TEST_MODE === 'true'
   const pathType = classifyPath(pathname)
   const config = RATE_LIMITS[pathType]
   const ip = getClientIP(req)
   const key = `rl:${pathType}:${ip}`
   const traceId = newTraceId()
+
+  if (EVIDENCE_TEST_MODE) {
+    // Skip rate limiting during evidence test runs
+    const response = NextResponse.next()
+    response.headers.set('X-RateLimit-Skipped', 'evidence-test-mode')
+    response.headers.set('X-Trace-Id', traceId)
+    return response
+  }
 
   const result = checkRateLimit(key, config.limit, config.mode)
 

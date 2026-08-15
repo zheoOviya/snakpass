@@ -1,0 +1,241 @@
+{
+  "ok": true,
+  "runId": "3b-ev-1786832887563-41ed55ac",
+  "wave": "3",
+  "subWave": "3b",
+  "evidenceType": "order-post-idempotency",
+  "generatedAt": "2026-08-15T22:28:29.726Z",
+  "environment": {
+    "baseUrl": "http://127.0.0.1:3000",
+    "evidenceTestMode": true,
+    "realPaymentsFlag": false,
+    "database": "sqlite (local dev — staging/production use PostgreSQL)",
+    "note": "Transaction rollback + unique-constraint semantics are identical on SQLite and PostgreSQL. Concurrency test on SQLite uses database-level locking; the same invariant (exactly 1 Order) holds on PostgreSQL via row-level locks + unique constraints. PostgreSQL-native concurrency proof is captured by 3b-PG-E1 in a separate workflow."
+  },
+  "orchestratorCriteria": {
+    "1-rollback": "Order POST failure → no partial Order/AuditLog/IdempotencyKey/Outbox state (rollback + phantom-block prevention)",
+    "2-replay": "Same idempotency key → same Order row (dedup works)",
+    "3-conflict": "Same key + materially different request → existing cached-response semantics (Option A)",
+    "4-concurrent": "5 parallel same key → exactly 1 Order/outbox/idempotency",
+    "5-phantom-block": "Failed txn does NOT store IdempotencyKey; retry with same key succeeds"
+  },
+  "tests": [
+    {
+      "testId": "test-1-rollback",
+      "testName": "Order POST Transaction Rollback (deliberate mid-tx failure)",
+      "criterion": "Order POST failure → no partial Order/AuditLog/IdempotencyKey/Outbox state (rollback + phantom-block prevention)",
+      "passed": true,
+      "setup": {
+        "idempotencyKey": "ev-3b-rollback-d9866440-207",
+        "failAfterStep": "idempotency-record",
+        "userId": "cmsuy603d0000qfjby1r49e3z"
+      },
+      "orderResponse": {
+        "status": 500,
+        "errorDetails": {
+          "evidenceFailureInjection": true,
+          "failedAfterStep": "idempotency-record"
+        },
+        "errorMessage": "EVIDENCE: deliberate failure after \"idempotency-record\" — testing transaction rollback"
+      },
+      "verification": {
+        "orderResourceCount": 0,
+        "idempotencyRecordExists": false,
+        "atomicRollback": true
+      },
+      "expected": {
+        "orderResourceCount": 0,
+        "idempotencyRecordExists": false,
+        "atomicRollback": true
+      }
+    },
+    {
+      "testId": "test-2-replay",
+      "testName": "Idempotency Replay Integrity (same key + same request → exactly 1 Order)",
+      "criterion": "Same idempotency key → same Order row (dedup works)",
+      "passed": true,
+      "setup": {
+        "idempotencyKey": "ev-3b-replay-c9e06c37-8cb",
+        "orderId": "cmsuy61390009qfjbhlgawoqv",
+        "userId": "cmsuy603d0000qfjby1r49e3z"
+      },
+      "orderResponse1": {
+        "status": 200,
+        "orderId": "cmsuy61390009qfjbhlgawoqv"
+      },
+      "orderResponse2": {
+        "status": 200,
+        "orderId": "cmsuy61390009qfjbhlgawoqv"
+      },
+      "sameOrderId": true,
+      "verification": {
+        "orderExists": true,
+        "orderStatus": "CONFIRMED",
+        "orderId": "cmsuy61390009qfjbhlgawoqv",
+        "auditLogExists": true,
+        "outboxExists": true,
+        "idempotencyRecordExists": true,
+        "exactlyOneOrder": true
+      },
+      "expected": {
+        "sameOrderId": true,
+        "exactlyOneOrder": true
+      }
+    },
+    {
+      "testId": "test-3-conflict",
+      "testName": "Idempotency Conflict (same key + materially different request → cached response, no 2nd order)",
+      "criterion": "Same key + materially different request → existing cached-response semantics (Option A)",
+      "passed": true,
+      "setup": {
+        "idempotencyKey": "ev-3b-conflict-7ab73f3c-278",
+        "restaurantId": "cmsuy5xzk0003qfig7znzax8t",
+        "menuItemId": "cmsuy5xzn0008qfigbsl0oxa6",
+        "differentBodies": true,
+        "bodyASummary": "qty=1",
+        "bodyBSummary": "qty=3 (materially different)"
+      },
+      "orderResponseA": {
+        "status": 200,
+        "orderId": "cmsuy6162000hqfjbtfu8p9tq"
+      },
+      "orderResponseB": {
+        "status": 200,
+        "orderId": "cmsuy6162000hqfjbtfu8p9tq"
+      },
+      "sameOrderId": true,
+      "cachedResponseReturned": true,
+      "verificationA": {
+        "orderExists": true,
+        "orderStatus": "CONFIRMED",
+        "exactlyOneOrder": true
+      },
+      "verificationB": {
+        "orderExists": false
+      },
+      "expected": {
+        "cachedResponseReturned": true,
+        "orderBExists": false,
+        "exactlyOneOrder": true
+      }
+    },
+    {
+      "testId": "test-4-concurrent",
+      "testName": "Concurrent Duplicate Requests (N parallel same key → exactly 1 Order)",
+      "criterion": "Multiple simultaneous requests same key → exactly one Order, one outbox event, one idempotency record",
+      "passed": true,
+      "setup": {
+        "idempotencyKey": "ev-3b-concurrent-a5e4a30d-a5f",
+        "userId": "cmsuy603d0000qfjby1r49e3z",
+        "concurrency": 5
+      },
+      "concurrentResponses": [
+        {
+          "requestIndex": 1,
+          "status": 200,
+          "orderId": "cmsuy655r000pqfjbopfwfkd1",
+          "errorCode": null
+        },
+        {
+          "requestIndex": 2,
+          "status": 200,
+          "orderId": "cmsuy655r000pqfjbopfwfkd1",
+          "errorCode": null
+        },
+        {
+          "requestIndex": 3,
+          "status": 200,
+          "orderId": "cmsuy655r000pqfjbopfwfkd1",
+          "errorCode": null
+        },
+        {
+          "requestIndex": 4,
+          "status": 200,
+          "orderId": "cmsuy655r000pqfjbopfwfkd1",
+          "errorCode": null
+        },
+        {
+          "requestIndex": 5,
+          "status": 200,
+          "orderId": "cmsuy655r000pqfjbopfwfkd1",
+          "errorCode": null
+        }
+      ],
+      "summary": {
+        "successCount": 5,
+        "errorCount": 0,
+        "uniqueOrderIdsCount": 1,
+        "winningOrderId": "cmsuy655r000pqfjbopfwfkd1"
+      },
+      "verification": {
+        "orderExists": true,
+        "orderStatus": "CONFIRMED",
+        "orderId": "cmsuy655r000pqfjbopfwfkd1",
+        "auditLogExists": true,
+        "outboxExists": true,
+        "idempotencyRecordExists": true,
+        "exactlyOneOrder": true
+      },
+      "expected": {
+        "uniqueOrderIdsCount": 1,
+        "exactlyOneOrder": true
+      }
+    },
+    {
+      "testId": "test-5-phantom-block",
+      "testName": "Phantom-Block Prevention (failed txn + retry with same key → succeeds)",
+      "criterion": "Failed order POST does NOT store IdempotencyKey; retry with same key creates a new order successfully",
+      "passed": true,
+      "setup": {
+        "idempotencyKey": "ev-3b-phantom-a6c3d1ce-155",
+        "userId": "cmsuy603d0000qfjby1r49e3z",
+        "failAfterStep": "order-create"
+      },
+      "firstPostResponse": {
+        "status": 500,
+        "errorDetails": {
+          "evidenceFailureInjection": true,
+          "failedAfterStep": "order-create"
+        }
+      },
+      "phantomBlockVerification": {
+        "idempotencyRecordExists": false,
+        "atomicRollback": true
+      },
+      "retryPostResponse": {
+        "status": 200,
+        "orderId": "cmsuy6gzp0011qfjby9evmdjr"
+      },
+      "retryVerification": {
+        "orderExists": true,
+        "orderStatus": "CONFIRMED",
+        "idempotencyRecordExists": true,
+        "exactlyOneOrder": true
+      },
+      "expected": {
+        "phantomBlockPrevented": true,
+        "retrySucceeded": true,
+        "exactlyOneOrder": true
+      }
+    }
+  ],
+  "summary": {
+    "totalTests": 5,
+    "passed": 5,
+    "failed": 0,
+    "allPassed": true
+  },
+  "atomicBoundaryProof": {
+    "description": "Order POST writes 6 entities in a single transaction. A deliberate mid-transaction failure rolls back ALL writes including the IdempotencyKey (phantom-block prevention).",
+    "writes": [
+      "MenuItem availableCount decrement (if availableCount set)",
+      "Order (CONFIRMED status)",
+      "OrderItem (1+ rows)",
+      "AuditLog (ORDER_CREATED)",
+      "IdempotencyKey (cached response)",
+      "Outbox (ORDER_CREATED event)"
+    ],
+    "failurePath": "mid-tx failure → ROLLBACK → no partial order/auditlog/idempotency/orphan outbox",
+    "provenBy": "test-1-rollback (deliberate failure after idempotency-record → 0 IdempotencyKey, 0 Order)"
+  }
+}
