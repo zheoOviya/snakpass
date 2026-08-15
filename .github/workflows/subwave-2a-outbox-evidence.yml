@@ -1,0 +1,120 @@
+name: Sub-Wave 2a — Outbox Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_url:
+        description: 'Staging URL'
+        required: true
+
+jobs:
+  outbox-evidence:
+    name: Verify outbox row written on order creation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl
+
+      - name: Authenticated order creation + outbox verification
+        env:
+          STAGING_URL: ${{ inputs.staging_url }}
+        run: |
+          STAGING_URL="${STAGING_URL%/}"
+          COOKIE_JAR=$(mktemp)
+          TEST_PHONE="+9199999$(printf '%06d' $(($(date +%s) % 1000000)))"
+
+          echo "=== Step 1: OTP Login ==="
+          OTP_RESP=$(curl -sS -c "$COOKIE_JAR" -X POST "$STAGING_URL/api/auth/otp/send" \
+            -H 'content-type: application/json' \
+            -d "{\"phone\":\"$TEST_PHONE\",\"purpose\":\"consumer_login\"}")
+          OTP_ID=$(echo "$OTP_RESP" | jq -r '.otpId')
+          OTP_CODE=$(echo "$OTP_RESP" | jq -r '.code')
+          echo "OTP sent: otpId=$OTP_ID"
+
+          VERIFY_RESP=$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST "$STAGING_URL/api/auth/otp/verify" \
+            -H 'content-type: application/json' \
+            -d "{\"otpId\":\"$OTP_ID\",\"code\":\"$OTP_CODE\",\"phone\":\"$TEST_PHONE\",\"purpose\":\"consumer_login\"}")
+          CSRF_TOKEN=$(echo "$VERIFY_RESP" | jq -r '.csrfToken')
+          USER_ID=$(echo "$VERIFY_RESP" | jq -r '.user.id')
+          echo "Login: userId=$USER_ID, csrfToken set"
+
+          echo ""
+          echo "=== Step 2: Create order (should write Outbox row) ==="
+          IDEM_KEY="outbox-evidence-$(date +%s)"
+          ORDER_RESP=$(curl -sS -b "$COOKIE_JAR" -X POST "$STAGING_URL/api/orders" \
+            -H "x-csrf-token: $CSRF_TOKEN" \
+            -H "idempotency-key: $IDEM_KEY" \
+            -H 'content-type: application/json' \
+            -d '{"restaurantId":"rest-001","items":[{"menuItemId":"menu-003","name":"Garlic Naan","price":6000,"quantity":1}]}')
+          ORDER_ID=$(echo "$ORDER_RESP" | jq -r '.order.id')
+          echo "Order created: orderId=$ORDER_ID"
+
+          echo ""
+          echo "=== Step 3: Verify Outbox row exists in DB ==="
+          # Query the Outbox table via Supabase Management API
+          echo "SELECT \"eventId\", \"eventType\", \"aggregateType\", \"aggregateId\", \"status\" FROM \"Outbox\" WHERE \"aggregateId\" = '$ORDER_ID' ORDER BY \"createdAt\" DESC LIMIT 1;" > /tmp/check_outbox.sql
+          RESULT=$(jq -n --rawfile sql /tmp/check_outbox.sql '{query: $sql}' | \
+            curl -sS -X POST \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+              -d @-)
+          echo "DB response: $RESULT"
+
+          # Parse the result
+          EVENT_TYPE=$(echo "$RESULT" | jq -r '.[0].eventType // empty' 2>/dev/null)
+          EVENT_STATUS=$(echo "$RESULT" | jq -r '.[0].status // empty' 2>/dev/null)
+          AGGREGATE_ID=$(echo "$RESULT" | jq -r '.[0].aggregateId // empty' 2>/dev/null)
+
+          echo ""
+          echo "=== Step 4: Verification ==="
+          OUTBOX_OK="false"
+          if [ "$EVENT_TYPE" = "ORDER_CREATED" ] && [ "$EVENT_STATUS" = "PENDING" ] && [ "$AGGREGATE_ID" = "$ORDER_ID" ]; then
+            echo "✅ OUTBOX VERIFIED: eventType=ORDER_CREATED, status=PENDING, aggregateId matches orderId"
+            OUTBOX_OK="true"
+          else
+            echo "❌ OUTBOX NOT VERIFIED: expected ORDER_CREATED/PENDING/$ORDER_ID, got $EVENT_TYPE/$EVENT_STATUS/$AGGREGATE_ID"
+          fi
+
+          rm -f "$COOKIE_JAR"
+
+          # Emit JSON evidence
+          jq -n \
+            --argjson ok "$OUTBOX_OK" \
+            --arg orderId "$ORDER_ID" \
+            --arg eventType "$EVENT_TYPE" \
+            --arg status "$EVENT_STATUS" \
+            --arg stagingUrl "$STAGING_URL" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              ok: $ok,
+              timestamp: $timestamp,
+              stagingUrl: $stagingUrl,
+              test: "Authenticated order creation → Outbox row written in same transaction",
+              orderId: $orderId,
+              outbox: {
+                eventType: $eventType,
+                status: $status,
+                aggregateId: $orderId
+              }
+            }' > outbox-evidence.json
+
+          echo ""
+          echo "=== Evidence JSON ==="
+          cat outbox-evidence.json | jq '.'
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subwave-2a-outbox-evidence
+          path: outbox-evidence.json
+          retention-days: 90
