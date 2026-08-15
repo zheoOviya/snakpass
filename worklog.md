@@ -4518,3 +4518,74 @@ P0-24 ALL TEST CRITERIA:
 **Wave-2 is ready for closure. Awaiting Orchestrator decision on Wave-2 PASS + Wave-3 Gate Review.**
 
 STOP. Awaiting Orchestrator decision on Wave-2 final closure.
+
+---
+Task ID: 86 — Wave-2 Final Audit (READ/VERIFY-ONLY, Orchestrator-Authorized)
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Execute Orchestrator-authorized final audit of 2d implementation + evidence + Wave-2 closure readiness. No code changes, no deployment.
+
+## Audit Results — 9 Items
+
+### Audit 1: Exact SQL — ✅ Verified
+- orphan_business_count: `SELECT COUNT(*) FROM "Order" o LEFT JOIN "Outbox" ob ON ... WHERE ob.id IS NULL` (no timestamp filter)
+- orphan_outbox_count: `SELECT COUNT(*) FROM "Outbox" ob LEFT JOIN "Order" o ON ... WHERE o.id IS NULL`
+
+### Audit 2: Historical Pre-Outbox Orders — 🟡 DEFECT IDENTIFIED
+- Query does NOT exclude orders created before outbox feature
+- 71 staging orders (pre-2a) correctly detected as orphans
+- Architecture defect: production would have continuous alert storm on historical orders
+
+### Audit 3: Production Alert Storm Risk — 🟡 HIGH (if deployed to production)
+- Threshold=0, cooldown=60s → re-fires every minute for same 71 orders
+- NOT blocking Wave-2 closure (production not authorized)
+- Must be fixed BEFORE production deployment
+- Fix: `WHERE o."createdAt" >= (SELECT MIN("createdAt") FROM "Outbox")`
+
+### Audit 4: Raw Alert Payloads — ✅ Verified
+- orphan-business-entity: ruleId, severity=critical, value=71, threshold=0, triggered=true, alertFired=true
+- orphan-outbox-event: ruleId, severity=critical, value=1, threshold=0, triggered=true, alertFired=true
+- Negative control: orphan_outbox_count=0 (not triggered), orphan_business_count=71 (triggered)
+
+### Audit 5: /api/test/* Production Guards — ✅ Verified
+- VERCEL_ENV === 'production' → 403 FORBIDDEN in both test endpoints
+- CSRF skip list includes rollback-injection + consume-event
+
+### Audit 6: Detection-Only — ✅ Verified
+- Reconciliation queries are pure SELECT ($queryRaw)
+- No DELETE/UPDATE/INSERT in orphan detection code path
+
+### Audit 7: Production Untouched — ✅ Verified
+- FEATURE_OUTBOX_PUBLISHER set on preview only
+- Staging-only migrations
+- No production deployments triggered
+
+### Audit 8: WAVE2_EVIDENCE.md vs Implementation — ✅ Verified
+- All 9 implementation claims match actual code files
+- All 6 evidence workflow files exist
+
+### Audit 9: "No False Positives" Claim — 🟡 CORRECTED
+- Original claim: "Negative control (no false positives) ✅" — INACCURATE
+- Corrected: "no UNEXPECTED orphan outbox events detected (orphan_outbox_count=0). Pre-existing orphan business entities (71 orders) are correctly detected as known historical baseline."
+
+## Final Recommendation: CONDITIONAL-GO
+
+**Conditions for Wave-2 closure:**
+1. orphan_business_count defect documented as known issue (not blocking — production not authorized)
+2. Fix (timestamp exclusion) recorded as Phase-3 production-launch prerequisite
+3. "No false positives" claim corrected in WAVE2_EVIDENCE.md
+4. Wave-2 closure explicitly notes: historical baseline handling must be fixed before production
+
+**If conditions accepted: Wave-2 = PASS / S5 Evidence-Complete / CLOSED**
+
+### Files Written
+- `/home/z/my-project/WAVE2_FINAL_AUDIT.md` (9-section audit report + CONDITIONAL-GO recommendation)
+
+### Phase-3 Prerequisites (carried forward)
+1. Fix orphan_business_count query (timestamp filter for historical orders)
+2. Fix production DATABASE_URL → snakzap_app
+3. Deploy realtime service to Fly.io
+4. Switch publisher from HTTP to Socket.io transport for production
+5. Payment + Ledger atomicity (Wave-3 P0-01)
+
+STOP. Awaiting Orchestrator decision on Wave-2 closure (CONDITIONAL-GO → PASS or NO-GO).
