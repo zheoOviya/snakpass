@@ -413,7 +413,11 @@ jobs:
 
       - name: Run 5-concurrent-request test + verify PostgreSQL state
         env:
-          STAGING_URL: ${{ inputs.staging_url }}
+          # Use STAGING_URL from GITHUB_ENV (set by the deploy-trigger step to
+          # the newly-deployed preview URL). Do NOT use inputs.staging_url here
+          # because that is the stale default URL that doesn't have the
+          # evidence endpoints deployed.
+          STAGING_URL: ${{ env.STAGING_URL }}
         run: |
           STAGING_URL="${STAGING_URL%/}"
           RUN_ID="3a-pg-ev-$(date +%s)-$(echo $RANDOM | base64 | tr -dc 'a-z0-9' | head -c 8)"
