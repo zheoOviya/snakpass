@@ -582,7 +582,8 @@ jobs:
           IDEM_COUNT=$(echo "$IDEM_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
 
           # Query AuditLog count for PAYMENT_CAPTURED for this order
-          AUDIT_SQL=$(printf 'SELECT COUNT(*) as count FROM "AuditLog" WHERE "action" = '\''PAYMENT_CAPTURED'\'' AND "metadata" LIKE '\''%s%'\'';' "$ORDER_ID")
+          # NOTE: printf interprets % as format spec — use %% to emit a literal %
+          AUDIT_SQL=$(printf 'SELECT COUNT(*) as count FROM "AuditLog" WHERE "action" = '\''PAYMENT_CAPTURED'\'' AND "metadata" LIKE '\''%%%s%%'\'';' "$ORDER_ID")
           AUDIT_RESULT=$(curl -sS -X POST \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
@@ -751,7 +752,7 @@ jobs:
           echo "=== Step 9: Cleanup test data ==="
           # Delete the test Payment, LedgerEntries, Outbox event, IdempotencyKey, AuditLog, Order
           # (Leave the test user for reuse)
-          CLEANUP_SQL=$(printf 'DELETE FROM "LedgerEntry" WHERE "paymentId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "Outbox" WHERE "aggregateId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "IdempotencyKey" WHERE "key" = '\''%s'\''; DELETE FROM "Payment" WHERE "orderId" = '\''%s'\''; DELETE FROM "OrderItem" WHERE "orderId" = '\''%s'\''; DELETE FROM "Order" WHERE "id" = '\''%s'\''; DELETE FROM "AuditLog" WHERE "metadata" LIKE '\''%s%'\'' AND "action" = '\''PAYMENT_CAPTURED'\'';' "$ORDER_ID" "$ORDER_ID" "$IDEMPOTENCY_KEY" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID")
+          CLEANUP_SQL=$(printf 'DELETE FROM "LedgerEntry" WHERE "paymentId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "Outbox" WHERE "aggregateId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "IdempotencyKey" WHERE "key" = '\''%s'\''; DELETE FROM "Payment" WHERE "orderId" = '\''%s'\''; DELETE FROM "OrderItem" WHERE "orderId" = '\''%s'\''; DELETE FROM "Order" WHERE "id" = '\''%s'\''; DELETE FROM "AuditLog" WHERE "metadata" LIKE '\''%%%s%%'\'' AND "action" = '\''PAYMENT_CAPTURED'\'';' "$ORDER_ID" "$ORDER_ID" "$IDEMPOTENCY_KEY" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID")
           echo "Cleaning up test data..."
           curl -sS -X POST \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
