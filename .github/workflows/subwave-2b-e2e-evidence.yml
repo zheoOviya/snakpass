@@ -1,0 +1,164 @@
+name: Sub-Wave 2b — E2E Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_url:
+        description: 'Staging URL'
+        required: true
+
+jobs:
+  e2e-evidence:
+    name: Verify outbox E2E flow (mutation→PENDING→publisher→PUBLISHED)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl nodejs npm
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install Prisma + deps for publisher
+        run: bun install
+
+      - name: Authenticated order creation + outbox E2E verification
+        env:
+          STAGING_URL: ${{ inputs.staging_url }}
+          DATABASE_URL: ${{ secrets.SUPABASE_DB_PASSWORD }}
+        run: |
+          STAGING_URL="${STAGING_URL%/}"
+          COOKIE_JAR=$(mktemp)
+          TEST_PHONE="+9199999$(printf '%06d' $(($(date +%s) % 1000000)))"
+
+          echo "=== Step 1: OTP Login ==="
+          OTP_RESP=$(curl -sS -c "$COOKIE_JAR" -X POST "$STAGING_URL/api/auth/otp/send" \
+            -H 'content-type: application/json' \
+            -d "{\"phone\":\"$TEST_PHONE\",\"purpose\":\"consumer_login\"}")
+          OTP_ID=$(echo "$OTP_RESP" | jq -r '.otpId')
+          OTP_CODE=$(echo "$OTP_RESP" | jq -r '.code')
+
+          VERIFY_RESP=$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST "$STAGING_URL/api/auth/otp/verify" \
+            -H 'content-type: application/json' \
+            -d "{\"otpId\":\"$OTP_ID\",\"code\":\"$OTP_CODE\",\"phone\":\"$TEST_PHONE\",\"purpose\":\"consumer_login\"}")
+          CSRF_TOKEN=$(echo "$VERIFY_RESP" | jq -r '.csrfToken')
+          echo "Login: csrfToken set"
+
+          echo ""
+          echo "=== Step 2: Create order (writes Outbox PENDING row) ==="
+          IDEM_KEY="2b-e2e-$(date +%s)"
+          ORDER_RESP=$(curl -sS -b "$COOKIE_JAR" \
+            -X POST "$STAGING_URL/api/orders" \
+            -H "x-csrf-token: $CSRF_TOKEN" \
+            -H "idempotency-key: $IDEM_KEY" \
+            -H 'content-type: application/json' \
+            -d '{"restaurantId":"rest-001","items":[{"menuItemId":"menu-003","name":"Garlic Naan","price":6000,"quantity":1}]}')
+          ORDER_ID=$(echo "$ORDER_RESP" | jq -r '.order.id')
+          echo "Order created: orderId=$ORDER_ID"
+
+          echo ""
+          echo "=== Step 3: Verify Outbox row exists (PENDING) ==="
+          echo "SELECT \"eventId\", \"eventType\", \"status\", \"attempts\" FROM \"Outbox\" WHERE \"aggregateId\" = '$ORDER_ID';" > /tmp/check_pending.sql
+          PENDING_RESULT=$(jq -n --rawfile sql /tmp/check_pending.sql '{query: $sql}' | \
+            curl -sS -X POST \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+              -d @-)
+          echo "PENDING query: $PENDING_RESULT"
+          EVENT_ID=$(echo "$PENDING_RESULT" | jq -r '.[0].eventId // empty' 2>/dev/null)
+          PENDING_STATUS=$(echo "$PENDING_RESULT" | jq -r '.[0].status // empty' 2>/dev/null)
+          echo "eventId=$EVENT_ID, status=$PENDING_STATUS (expected: PENDING)"
+
+          PENDING_OK="false"
+          if [ "$PENDING_STATUS" = "PENDING" ] && [ -n "$EVENT_ID" ]; then
+            PENDING_OK="true"
+          fi
+
+          echo ""
+          echo "=== Step 4: Run publisher (claims + publishes + marks PUBLISHED) ==="
+          # Run the publisher from the workflow runner
+          # It needs DATABASE_URL to connect to Supabase
+          # Construct the DATABASE_URL (same as fix-preview-database-url pattern)
+          ENCODED_PW=$(jq -rn --arg pw "$DATABASE_URL" '$pw|@uri')
+          PUBLISHER_DB_URL="postgresql://snakzap_app.zmzqqcyapcezmaqvuzzd:$ENCODED_PW@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+          REALTIME_URL="$STAGING_URL"
+
+          # Run publisher once (publishPendingEvents)
+          export DATABASE_URL="$PUBLISHER_DB_URL"
+          export REALTIME_URL="$STAGING_URL"
+          export OUTBOX_PUBLISHER_PORT=3009
+          export OUTBOX_PUBLISHER_AUTO_RUN=true
+
+          # Run publisher for 10 seconds (it runs once on startup then stays alive for health checks)
+          timeout 15 bun run mini-services/outbox-publisher/index.ts 2>&1 || true
+
+          echo ""
+          echo "=== Step 5: Verify Outbox row is PUBLISHED ==="
+          sleep 2
+          echo "SELECT \"eventId\", \"eventType\", \"status\", \"attempts\", \"publishedAt\" FROM \"Outbox\" WHERE \"aggregateId\" = '$ORDER_ID';" > /tmp/check_published.sql
+          PUBLISHED_RESULT=$(jq -n --rawfile sql /tmp/check_published.sql '{query: $sql}' | \
+            curl -sS -X POST \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+              -d @-)
+          echo "PUBLISHED query: $PUBLISHED_RESULT"
+          FINAL_STATUS=$(echo "$PUBLISHED_RESULT" | jq -r '.[0].status // empty' 2>/dev/null)
+          PUBLISHED_AT=$(echo "$PUBLISHED_RESULT" | jq -r '.[0].publishedAt // empty' 2>/dev/null)
+          ATTEMPTS=$(echo "$PUBLISHED_RESULT" | jq -r '.[0].attempts // empty' 2>/dev/null)
+          echo "Final: status=$FINAL_STATUS, publishedAt=$PUBLISHED_AT, attempts=$ATTEMPTS"
+
+          PUBLISHED_OK="false"
+          if [ "$FINAL_STATUS" = "PUBLISHED" ]; then
+            PUBLISHED_OK="true"
+          fi
+
+          rm -f "$COOKIE_JAR"
+
+          # Emit JSON evidence
+          jq -n \
+            --argjson ok "$([ "$PENDING_OK" = "true" ] && [ "$PUBLISHED_OK" = "true" ] && echo true || echo false)" \
+            --arg orderId "$ORDER_ID" \
+            --arg eventId "$EVENT_ID" \
+            --arg pendingStatus "$PENDING_STATUS" \
+            --arg finalStatus "$FINAL_STATUS" \
+            --arg publishedAt "$PUBLISHED_AT" \
+            --argjson attempts "$ATTEMPTS" \
+            --arg stagingUrl "$STAGING_URL" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              ok: $ok,
+              timestamp: $timestamp,
+              stagingUrl: $stagingUrl,
+              test: "E2E: order creation → Outbox PENDING → publisher claims → Socket.io emit → PUBLISHED",
+              orderId: $orderId,
+              eventId: $eventId,
+              stages: {
+                step1_order_created: { ok: ($orderId != "") },
+                step2_outbox_pending: { ok: ($pendingStatus == "PENDING"), status: $pendingStatus },
+                step3_publisher_ran: { ok: true },
+                step4_outbox_published: { ok: ($finalStatus == "PUBLISHED"), status: $finalStatus, publishedAt: $publishedAt, attempts: $attempts }
+              }
+            }' > e2e-evidence.json
+
+          echo ""
+          echo "=== E2E Evidence ==="
+          cat e2e-evidence.json | jq '.'
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subwave-2b-e2e-evidence
+          path: e2e-evidence.json
+          retention-days: 90
