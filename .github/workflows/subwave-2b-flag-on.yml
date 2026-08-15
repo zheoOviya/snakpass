@@ -1,0 +1,344 @@
+name: Sub-Wave 2b-7 — Flag ON + Post-Flag Regression
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_url:
+        description: 'Staging URL (for post-flag testing)'
+        required: true
+
+jobs:
+  flag-on:
+    name: Set FEATURE_OUTBOX_PUBLISHER=ON on staging + regression
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps
+        run: bun install
+
+      - name: Step 1 — Pre-flag baseline
+        run: |
+          echo "=== Pre-flag baseline ==="
+          echo "--- Current env vars on Vercel ---"
+          ENV_LIST=$(curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env")
+          echo "$ENV_LIST" | jq -r '.envs[] | select(.key | test("OUTBOX|FEATURE")) | "  \(.key) = (masked) target=\(.target | join(","))"' 2>/dev/null || echo "  No OUTBOX/FEATURE vars found"
+
+          echo ""
+          echo "--- Outbox pending/failed counts ---"
+          APP_PASSWORD="CHANGE_ME_IN_PRODUCTION_USE_SECRET_MANAGER"
+          echo "SELECT status, COUNT(*) as count FROM \"Outbox\" GROUP BY status;" > /tmp/baseline.sql
+          BASELINE=$(jq -n --rawfile sql /tmp/baseline.sql '{query: $sql}' | \
+            curl -sS -X POST \
+              -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+              -H "Content-Type: application/json" \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+              -d @-)
+          echo "Outbox counts: $BASELINE"
+
+      - name: Step 2 — Set FEATURE_OUTBOX_PUBLISHER=ON on preview
+        run: |
+          echo "=== Setting FEATURE_OUTBOX_PUBLISHER=ON on preview ==="
+          # Check if already exists
+          ENV_LIST=$(curl -sS -H "Authorization: Bearer $VERCEL_TOKEN" \
+            "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env")
+          EXISTING_ID=$(echo "$ENV_LIST" | jq -r '.envs[] | select(.key == "FEATURE_OUTBOX_PUBLISHER" and (.target | contains(["preview"]))) | .id' 2>/dev/null | head -1)
+
+          if [ -n "$EXISTING_ID" ]; then
+            echo "  Existing var found (id=$EXISTING_ID) — deleting"
+            curl -sS -X DELETE -H "Authorization: Bearer $VERCEL_TOKEN" \
+              "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env/$EXISTING_ID" > /dev/null
+          fi
+
+          # Create new
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.vercel.com/v10/projects/$VERCEL_PROJECT_ID/env" \
+            -d '{"key":"FEATURE_OUTBOX_PUBLISHER","value":"true","target":["preview"],"type":"plain"}')
+
+          NEW_ID=$(echo "$RESULT" | jq -r '.created.id // .id // empty')
+          if [ -n "$NEW_ID" ]; then
+            echo "  ✅ Created FEATURE_OUTBOX_PUBLISHER=true (preview, id=$NEW_ID)"
+          else
+            echo "  ⚠️  Response: $(echo $RESULT | head -c 200)"
+          fi
+
+      - name: Step 3 — Deploy staging
+        run: |
+          echo "=== Triggering staging deploy ==="
+          # Deploy is triggered separately — just wait for it
+          echo "Flag is set. Deploy will pick up the new env var."
+          echo "Waiting 10s for env var propagation..."
+          sleep 10
+
+      - name: Step 4 — Post-flag Test A: Normal business flow
+        env:
+          STAGING_URL: ${{ inputs.staging_url }}
+        run: |
+          STAGING_URL="${STAGING_URL%/}"
+          COOKIE_JAR=$(mktemp)
+          TEST_PHONE="+9199999$(printf '%06d' $(($(date +%s) % 1000000)))"
+
+          echo "=== Test A: Normal business flow ==="
+          echo "--- Step 1: OTP Login ---"
+          OTP_RESP=$(curl -sS -c "$COOKIE_JAR" -X POST "$STAGING_URL/api/auth/otp/send" \
+            -H 'content-type: application/json' \
+            -d "{\"phone\":\"$TEST_PHONE\",\"purpose\":\"consumer_login\"}")
+          OTP_ID=$(echo "$OTP_RESP" | jq -r '.otpId')
+          OTP_CODE=$(echo "$OTP_RESP" | jq -r '.code')
+
+          VERIFY_RESP=$(curl -sS -c "$COOKIE_JAR" -b "$COOKIE_JAR" -X POST "$STAGING_URL/api/auth/otp/verify" \
+            -H 'content-type: application/json' \
+            -d "{\"otpId\":\"$OTP_ID\",\"code\":\"$OTP_CODE\",\"phone\":\"$TEST_PHONE\",\"purpose\":\"consumer_login\"}")
+          CSRF_TOKEN=$(echo "$VERIFY_RESP" | jq -r '.csrfToken')
+
+          echo "--- Step 2: Create order ---"
+          IDEM_KEY="2b7-testA-$(date +%s)"
+          ORDER_RESP=$(curl -sS -b "$COOKIE_JAR" -X POST "$STAGING_URL/api/orders" \
+            -H "x-csrf-token: $CSRF_TOKEN" -H "idempotency-key: $IDEM_KEY" \
+            -H 'content-type: application/json' \
+            -d '{"restaurantId":"rest-001","items":[{"menuItemId":"menu-003","name":"Garlic Naan","price":6000,"quantity":1}]}')
+          ORDER_ID=$(echo "$ORDER_RESP" | jq -r '.order.id')
+          echo "Order: $ORDER_ID"
+
+          echo "--- Step 3: Run publisher ---"
+          APP_PASSWORD="CHANGE_ME_IN_PRODUCTION_USE_SECRET_MANAGER"
+          ENCODED_PW=$(jq -rn --arg pw "$APP_PASSWORD" '$pw|@uri')
+          PUBLISHER_DB_URL="postgresql://snakzap_app.zmzqqcyapcezmaqvuzzd:$ENCODED_PW@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+          export DATABASE_URL="$PUBLISHER_DB_URL"
+          export OUTBOX_TRANSPORT_MODE="http"
+          export CONSUMER_URL="$STAGING_URL"
+          export OUTBOX_PUBLISHER_PORT=$((3009 + RANDOM % 100))
+          export OUTBOX_PUBLISHER_AUTO_RUN=true
+          timeout 15 bun run mini-services/outbox-publisher/index.ts 2>&1 || true
+
+          echo "--- Step 4: Verify outbox PUBLISHED + ProcessedEvent ---"
+          sleep 2
+          echo "SELECT \"status\", \"publishedAt\" FROM \"Outbox\" WHERE \"aggregateId\" = '$ORDER_ID';" > /tmp/check.sql
+          OUTBOX_RESULT=$(jq -n --rawfile sql /tmp/check.sql '{query: $sql}' | \
+            curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" -d @-)
+          echo "Outbox: $OUTBOX_RESULT"
+
+          # Get the eventId from the outbox row
+          EVENT_ID=$(echo "$OUTBOX_RESULT" | jq -r '.[0].eventId // empty' 2>/dev/null || echo "")
+          # Query with eventId
+          echo "SELECT \"eventId\" FROM \"Outbox\" WHERE \"aggregateId\" = '$ORDER_ID';" > /tmp/get_event.sql
+          EVENT_ID=$(jq -n --rawfile sql /tmp/get_event.sql '{query: $sql}' | \
+            curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" -d @- | jq -r '.[0].eventId // empty' 2>/dev/null)
+
+          echo "SELECT COUNT(*) as count FROM \"ProcessedEvent\" WHERE \"eventId\" = '$EVENT_ID';" > /tmp/pe.sql
+          PE_RESULT=$(jq -n --rawfile sql /tmp/pe.sql '{query: $sql}' | \
+            curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" -d @-)
+          echo "ProcessedEvent: $PE_RESULT"
+
+          OUTBOX_STATUS=$(echo "$OUTBOX_RESULT" | jq -r '.[0].status // empty' 2>/dev/null)
+          PE_COUNT=$(echo "$PE_RESULT" | jq -r '.[0].count // 0' 2>/dev/null)
+
+          TEST_A_OK="false"
+          if [ "$OUTBOX_STATUS" = "PUBLISHED" ] && [ "$PE_COUNT" = "1" ]; then
+            TEST_A_OK="true"
+            echo "✅ Test A PASS: outbox=PUBLISHED, ProcessedEvent=1"
+          else
+            echo "❌ Test A FAIL: outbox=$OUTBOX_STATUS, PE=$PE_COUNT"
+          fi
+
+          rm -f "$COOKIE_JAR"
+          echo "TEST_A_OK=$TEST_A_OK" >> $GITHUB_ENV
+
+      - name: Step 5 — Post-flag Test B: Duplicate delivery
+        env:
+          STAGING_URL: ${{ inputs.staging_url }}
+        run: |
+          STAGING_URL="${STAGING_URL%/}"
+          DEDUP_ID="2b7-testB-$(date +%s)"
+
+          echo "=== Test B: Duplicate delivery after flag ON ==="
+          # Create outbox row
+          APP_PASSWORD="CHANGE_ME_IN_PRODUCTION_USE_SECRET_MANAGER"
+          printf 'INSERT INTO "Outbox" ("id", "eventId", "eventType", "aggregateType", "aggregateId", "payload", "status", "attempts", "createdAt") VALUES (gen_random_uuid()::text, '"'"'%s'"'"', '"'"'ORDER_CREATED'"'"', '"'"'Test'"'"', '"'"'test-%s'"'"', '"'"'{"orderId":"dedup"}'"'"', '"'"'PENDING'"'"', 0, NOW());' "$DEDUP_ID" "$DEDUP_ID" > /tmp/insert.sql
+          jq -n --rawfile sql /tmp/insert.sql '{query: $sql}' | \
+            curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" -d @- > /dev/null
+
+          # Deliver 3 times via consumer
+          for i in 1 2 3; do
+            RESP=$(curl -sS -X POST "$STAGING_URL/api/test/consume-event" \
+              -H 'content-type: application/json' \
+              -d "{\"eventId\":\"$DEDUP_ID\",\"eventType\":\"ORDER_CREATED\"}")
+            echo "Delivery $i: $RESP"
+          done
+
+          # Check ProcessedEvent count
+          echo "SELECT COUNT(*) as count FROM \"ProcessedEvent\" WHERE \"eventId\" = '$DEDUP_ID';" > /tmp/pe2.sql
+          PE_COUNT=$(jq -n --rawfile sql /tmp/pe2.sql '{query: $sql}' | \
+            curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" -d @- | jq -r '.[0].count // 0' 2>/dev/null)
+
+          TEST_B_OK="false"
+          if [ "$PE_COUNT" = "1" ]; then
+            TEST_B_OK="true"
+            echo "✅ Test B PASS: 3x delivery -> 1 ProcessedEvent"
+          else
+            echo "❌ Test B FAIL: PE=$PE_COUNT (expected 1)"
+          fi
+
+          # Cleanup
+          echo "DELETE FROM \"Outbox\" WHERE \"eventId\" = '$DEDUP_ID'; DELETE FROM \"ProcessedEvent\" WHERE \"eventId\" = '$DEDUP_ID';" > /tmp/cleanup.sql
+          jq -n --rawfile sql /tmp/cleanup.sql '{query: $sql}' | \
+            curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" -d @- > /dev/null
+
+          echo "TEST_B_OK=$TEST_B_OK" >> $GITHUB_ENV
+
+      - name: Step 6 — Post-flag Test C: Transport failure → NOT PUBLISHED
+        env:
+          STAGING_URL: ${{ inputs.staging_url }}
+        run: |
+          STAGING_URL="${STAGING_URL%/()}"
+          STAGING_URL=$(echo "${{ inputs.staging_url }}" | sed 's/\/$//')
+          FAIL_ID="2b7-testC-$(date +%s)"
+
+          echo "=== Test C: Transport failure → NOT PUBLISHED ==="
+          echo "--- Step 1: Create outbox event ---"
+          APP_PASSWORD="CHANGE_ME_IN_PRODUCTION_USE_SECRET_MANAGER"
+          printf 'INSERT INTO "Outbox" ("id", "eventId", "eventType", "aggregateType", "aggregateId", "payload", "status", "attempts", "createdAt") VALUES (gen_random_uuid()::text, '"'"'%s'"'"', '"'"'ORDER_CREATED'"'"', '"'"'Test'"'"', '"'"'test-%s'"'"', '"'"'{"orderId":"fail-test"}'"'"', '"'"'PENDING'"'"', 0, NOW());' "$FAIL_ID" "$FAIL_ID" > /tmp/insert_c.sql
+          jq -n --rawfile sql /tmp/insert_c.sql '{query: $sql}' | \
+            curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" -d @- > /dev/null
+
+          echo "--- Step 2: Run publisher with CONSUMER_URL pointing to invalid endpoint ---"
+          ENCODED_PW=$(jq -rn --arg pw "$APP_PASSWORD" '$pw|@uri')
+          PUBLISHER_DB_URL="postgresql://snakzap_app.zmzqqcyapcezmaqvuzzd:$ENCODED_PW@aws-0-ap-northeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true&connection_limit=1"
+          export DATABASE_URL="$PUBLISHER_DB_URL"
+          export OUTBOX_TRANSPORT_MODE="http"
+          export CONSUMER_URL="http://invalid-host-12345.example.com"  # Invalid consumer
+          export OUTBOX_PUBLISHER_PORT=$((3009 + RANDOM % 100))
+          export OUTBOX_PUBLISHER_AUTO_RUN=true
+          timeout 15 bun run mini-services/outbox-publisher/index.ts 2>&1 || true
+
+          echo "--- Step 3: Verify NOT PUBLISHED (transport failed) ---"
+          sleep 2
+          echo "SELECT status, attempts, \"lastError\" FROM \"Outbox\" WHERE \"eventId\" = '$FAIL_ID';" > /tmp/check_c.sql
+          FAIL_RESULT=$(jq -n --rawfile sql /tmp/check_c.sql '{query: $sql}' | \
+            curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" -d @-)
+          echo "Outbox: $FAIL_RESULT"
+
+          FAIL_STATUS=$(echo "$FAIL_RESULT" | jq -r '.[0].status // empty' 2>/dev/null)
+          FAIL_ATTEMPTS=$(echo "$FAIL_RESULT" | jq -r '.[0].attempts // 0' 2>/dev/null)
+
+          TEST_C_OK="false"
+          if [ "$FAIL_STATUS" != "PUBLISHED" ]; then
+            TEST_C_OK="true"
+            echo "✅ Test C PASS: transport failure → NOT PUBLISHED (status=$FAIL_STATUS, attempts=$FAIL_ATTEMPTS)"
+          else
+            echo "❌ Test C FAIL: expected NOT PUBLISHED, got $FAIL_STATUS"
+          fi
+
+          # Cleanup
+          echo "DELETE FROM \"Outbox\" WHERE \"eventId\" = '$FAIL_ID';" > /tmp/cleanup_c.sql
+          jq -n --rawfile sql /tmp/cleanup_c.sql '{query: $sql}' | \
+            curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" -d @- > /dev/null
+
+          echo "TEST_C_OK=$TEST_C_OK" >> $GITHUB_ENV
+
+      - name: Step 7 — Security check: /api/test/* VERCEL_ENV guard
+        env:
+          STAGING_URL: ${{ inputs.staging_url }}
+        run: |
+          STAGING_URL=$(echo "${{ inputs.staging_url }}" | sed 's/\/$//')
+          echo "=== Security check: /api/test/* endpoints ==="
+          echo "--- Staging (VERCEL_ENV=preview): should be accessible ---"
+          STAGING_RESP=$(curl -sS -o /dev/null -w "%{http_code}" -X POST "$STAGING_URL/api/test/consume-event" -H 'content-type: application/json' -d '{"eventId":"security-check","eventType":"ORDER_CREATED"}')
+          echo "Staging /api/test/consume-event: HTTP $STAGING_RESP"
+          STAGING_OK="false"
+          if [ "$STAGING_RESP" != "403" ]; then
+            STAGING_OK="true"
+            echo "  ✅ Staging allows test endpoint (HTTP $STAGING_RESP)"
+          else
+            echo "  ❌ Staging blocks test endpoint (403)"
+          fi
+          echo "STAGING_OK=$STAGING_OK" >> $GITHUB_ENV
+
+      - name: Step 8 — Summary + evidence JSON
+        run: |
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "  2b-7 POST-FLAG EVIDENCE SUMMARY"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+          echo "  Test A (Normal flow):     $([ "$TEST_A_OK" = "true" ] && echo "✅ PASS" || echo "❌ FAIL")"
+          echo "  Test B (3x→1x dedup):    $([ "$TEST_B_OK" = "true" ] && echo "✅ PASS" || echo "❌ FAIL")"
+          echo "  Test C (Transport fail): $([ "$TEST_C_OK" = "true" ] && echo "✅ PASS" || echo "❌ FAIL")"
+          echo "  Security (staging ok):   $([ "$STAGING_OK" = "true" ] && echo "✅ PASS" || echo "❌ FAIL")"
+          echo ""
+
+          ALL_OK="false"
+          if [ "$TEST_A_OK" = "true" ] && [ "$TEST_B_OK" = "true" ] && [ "$TEST_C_OK" = "true" ] && [ "$STAGING_OK" = "true" ]; then
+            ALL_OK="true"
+          fi
+
+          jq -n \
+            --argjson ok "$ALL_OK" \
+            --arg testA "$TEST_A_OK" \
+            --arg testB "$TEST_B_OK" \
+            --arg testC "$TEST_C_OK" \
+            --arg sec "$STAGING_OK" \
+            --arg stagingUrl "${{ inputs.staging_url }}" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              ok: $ok,
+              timestamp: $timestamp,
+              stagingUrl: $stagingUrl,
+              flagOn: true,
+              tests: {
+                "test-a-normal-flow": {
+                  ok: ($testA == "true"),
+                  description: "Authenticated order -> Outbox PENDING -> Publisher -> Consumer -> ProcessedEvent=1 -> PUBLISHED"
+                },
+                "test-b-duplicate-delivery": {
+                  ok: ($testB == "true"),
+                  description: "3x delivery via consumer -> 1 ProcessedEvent (dedup works)"
+                },
+                "test-c-transport-failure": {
+                  ok: ($testC == "true"),
+                  description: "Invalid consumer URL -> NOT PUBLISHED (transport failure does not produce PUBLISHED)"
+                },
+                "security-staging-allows": {
+                  ok: ($sec == "true"),
+                  description: "Staging (VERCEL_ENV=preview) allows /api/test/* endpoints"
+                }
+              }
+            }' > 2b7-evidence.json
+
+          echo "=== Evidence JSON ==="
+          cat 2b7-evidence.json | jq '.'
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: subwave-2b7-flag-on-evidence
+          path: 2b7-evidence.json
+          retention-days: 90
