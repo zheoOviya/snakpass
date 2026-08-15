@@ -196,8 +196,9 @@ jobs:
           DEDUP_EVENT_ID="dedup-test-$(date +%s)"
 
           echo "=== Step 1: Simulate 3× delivery of eventId=$DEDUP_EVENT_ID ==="
-          echo 'import { PrismaClient } from "@prisma/client"
-          import { processEvent } from "./src/lib/event-consumer"
+          cat > dedup-test.mjs << 'DEDUP_SCRIPT'
+          import { PrismaClient } from "@prisma/client"
+          import { processEvent } from "./src/lib/event-consumer.js"
 
           const db = new PrismaClient()
           const eventId = process.argv[2]
@@ -221,14 +222,10 @@ jobs:
           console.log(JSON.stringify({ processedEventCount: peCount, businessEffectCount: processedCount }))
 
           await db.$disconnect()
-          ' > /tmp/dedup-test.mjs
+          DEDUP_SCRIPT
 
-          # Note: processEvent uses Prisma TransactionClient, but for this test
-          # we pass db (PrismaClient) which IS a valid TransactionClient.
-          # The $transaction wrapper is internal to processEvent's expected usage,
-          # but for testing we can call it directly.
-
-          DEDUP_RESULT=$(bun run /tmp/dedup-test.mjs "$DEDUP_EVENT_ID" 2>&1 || echo '{"error":"bun run failed"}')
+          # Run from project root so imports resolve correctly
+          DEDUP_RESULT=$(bun run dedup-test.mjs "$DEDUP_EVENT_ID" 2>&1 || echo '{"error":"bun run failed"}')
           echo "Dedup test result: $DEDUP_RESULT"
 
           PROCESSED_COUNT=$(echo "$DEDUP_RESULT" | grep -o '"processedEventCount":[0-9]*' | grep -o '[0-9]*' || echo "0")
