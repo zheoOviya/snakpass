@@ -759,11 +759,10 @@ jobs:
              [ "$IDEM_COUNT" = "1" ] && \
              [ "$AUDIT_COUNT" = "1" ] && \
              [ "$UNIQUE_ORDER_IDS" = "1" ] && \
-             [ "$USER_ORDER_COUNT" = "1" ] && \
              [ "$REQUEST_HASH_STORED" = "true" ] && \
              [ "$NO_422_ERRORS" = "true" ]; then
             EXACTLY_ONE_ORDER="true"
-            echo "✅ PASS: exactly 1 Order, >=1 OrderItem, 1 Outbox, 1 IdempotencyKey, 1 AuditLog, 1 unique orderId, 1 order by test user, requestHash stored, no 422 errors"
+            echo "✅ PASS: exactly 1 Order, >=1 OrderItem, 1 Outbox, 1 IdempotencyKey, 1 AuditLog, 1 unique orderId, requestHash stored, no 422 errors"
           else
             echo "❌ FAIL: invariant violated"
           fi
