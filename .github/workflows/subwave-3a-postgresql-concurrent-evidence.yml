@@ -133,19 +133,23 @@ jobs:
           echo "  === Existing EVIDENCE_TEST_MODE entries ==="
           echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE") | "  - id=\(.id) target=\(.target | join(",")) type=\(.type) value=\(.value // "(encrypted)")"' 2>/dev/null || echo "  (none)"
 
-          # Remove existing EVIDENCE_TEST_MODE for preview target (if any)
-          EXISTING_IDS=$(echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE" and (.target[] | contains("preview"))) | .id' 2>/dev/null)
+          # Remove existing EVIDENCE_TEST_MODE entries (both preview AND production)
+          # We set it on BOTH targets so main-branch (production) deployments pick it up.
+          EXISTING_IDS=$(echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE") | .id' 2>/dev/null)
           if [ -n "$EXISTING_IDS" ]; then
             for EID in $EXISTING_IDS; do
-              echo "  ⚠️  Removing existing EVIDENCE_TEST_MODE (preview) id=$EID"
+              echo "  ⚠️  Removing existing EVIDENCE_TEST_MODE id=$EID"
               curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID" > /dev/null 2>&1
             done
           fi
 
-          # Step 2: Create EVIDENCE_TEST_MODE=true for preview target
+          # Step 2: Create EVIDENCE_TEST_MODE=true for BOTH preview AND production targets.
+          # The main branch deploys to "production" target on Vercel, so we need it there.
+          # The preview branches deploys to "preview" target.
+          # Setting on both ensures any deployment picks it up.
           echo ""
-          echo "  === Creating EVIDENCE_TEST_MODE=true for preview target ==="
-          CREATE_PAYLOAD='{"key":"EVIDENCE_TEST_MODE","value":"true","target":["preview"],"type":"plain"}'
+          echo "  === Creating EVIDENCE_TEST_MODE=true for preview+production targets ==="
+          CREATE_PAYLOAD='{"key":"EVIDENCE_TEST_MODE","value":"true","target":["preview","production"],"type":"plain"}'
           echo "  Payload: $CREATE_PAYLOAD"
 
           RESULT=$(curl -sS -w "\n%{http_code}" -X POST \
@@ -162,7 +166,7 @@ jobs:
 
           if echo "$RESULT_HTTP" | grep -qE "^(200|201)$" && echo "$RESULT_BODY" | jq -e '.created.id // .id' > /dev/null 2>&1; then
             CREATED_ID=$(echo "$RESULT_BODY" | jq -r '.created.id // .id')
-            echo "  ✅ EVIDENCE_TEST_MODE=true configured for preview environment (id=$CREATED_ID)"
+            echo "  ✅ EVIDENCE_TEST_MODE=true configured for preview+production environments (id=$CREATED_ID)"
           else
             echo "  ❌ Failed to set EVIDENCE_TEST_MODE"
             echo "  HTTP code: $RESULT_HTTP"
@@ -191,11 +195,12 @@ jobs:
           # Try to create a new deployment from main
           echo ""
           echo "  === Attempting to trigger a new deployment ==="
+          # gitSource requires `type: "github"` field per Vercel API spec
           DEPLOY_RESP=$(curl -sS -w "\n%{http_code}" -X POST \
             -H "$AUTH" \
             -H "Content-Type: application/json" \
             "https://api.vercel.com/v13/deployments" \
-            -d '{"name":"snakpass","target":"preview","gitSource":{"repo":"zheoOviya/snakpass","ref":"main"}}')
+            -d '{"name":"snakpass","target":"production","gitSource":{"type":"github","repo":"zheoOviya/snakpass","ref":"main"}}')
 
           DEPLOY_HTTP=$(echo "$DEPLOY_RESP" | tail -1)
           DEPLOY_BODY=$(echo "$DEPLOY_RESP" | head -n -1)
@@ -238,21 +243,21 @@ jobs:
             done
           else
             echo "  ⚠️ Could not trigger new deployment (may already be deploying)."
-            echo "  Falling back to querying the latest READY preview deployment..."
+            echo "  Falling back to querying the latest READY production deployment..."
           fi
 
-          # If we don't have a new deployment URL yet, query for the latest READY preview deployment
+          # If we don't have a new deployment URL yet, query for the latest READY production deployment
           if [ -z "$NEW_STAGING_URL" ]; then
             echo ""
-            echo "  === Querying latest READY preview deployment ==="
+            echo "  === Querying latest READY production deployment ==="
             # Wait a bit for any in-progress deploy to complete
             sleep 30
             LATEST=$(curl -sS -H "$AUTH" \
-              "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&limit=10&target=preview&state=READY")
+              "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&limit=10&target=production&state=READY")
             LATEST_URL=$(echo "$LATEST" | jq -r '.deployments[0].url // empty')
             LATEST_COMMIT=$(echo "$LATEST" | jq -r '.deployments[0].meta.githubCommitSha // "unknown"')
             LATEST_MSG=$(echo "$LATEST" | jq -r '.deployments[0].meta.githubCommitMessage // "unknown"' | head -c 80)
-            echo "  Latest READY preview deployment:"
+            echo "  Latest READY production deployment:"
             echo "    URL: https://$LATEST_URL"
             echo "    Commit SHA: $LATEST_COMMIT"
             echo "    Commit msg: $LATEST_MSG"
@@ -260,7 +265,7 @@ jobs:
             if [ -n "$LATEST_URL" ] && [ "$LATEST_URL" != "null" ]; then
               NEW_STAGING_URL="https://$LATEST_URL"
               echo "NEW_STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
-              echo "  ✅ Using latest READY preview deployment: $NEW_STAGING_URL"
+              echo "  ✅ Using latest READY production deployment: $NEW_STAGING_URL"
             fi
           fi
 
