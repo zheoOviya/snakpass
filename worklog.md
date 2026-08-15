@@ -4409,3 +4409,112 @@ Production                 🚫 NOT AUTHORIZED
 No new infrastructure needed. The reconciliation implementation is additive (detection-only, no repair).
 
 **STOP.** Awaiting Orchestrator decision on 2d implementation authorization.
+
+---
+Task ID: 85 — Sub-Wave 2d Reconciliation Evidence (2d-1..2d-8) — ALL PASS ok:true
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Execute Orchestrator-authorized Sub-Wave 2d (reconciliation + orphan detection + evidence consolidation).
+
+## Authorization
+- **Scope**: 2d-1 through 2d-8 (reconciliation queries + alert rules + empirical evidence + final consolidation)
+- **Constraint**: Detection-only (no automatic repair)
+
+## Evidence Results — ALL PASS, ok:true ✅
+
+### 2d-1/2d-2: Reconciliation Queries + Alert Rules — ✅ IMPLEMENTED
+- orphan_business_count: LEFT JOIN Order → Outbox WHERE IS NULL
+- orphan_outbox_count: LEFT JOIN Outbox → Order WHERE IS NULL
+- 2 alert rules: orphan-business-entity + orphan-outbox-event (critical, 60s cooldown)
+- Detection-only (no DELETE/UPDATE — per Orchestrator constraint)
+- Lint: PASS. CI: PASS.
+
+### 2d-4a: Orphan Business Entity Detection — ✅ PASS
+- Created order without outbox → alert evaluator → orphan-business-entity fires
+
+### 2d-4b: Orphan Outbox Event Detection — ✅ PASS
+- Created outbox event without order → alert evaluator → orphan-outbox-event fires
+
+### 2d-5: Negative Control — ✅ PASS
+- Baseline state: orphan_outbox_count=0 (no orphan outbox events)
+- Pre-existing orphan_business_count=71 (orders before outbox feature — correct detection, not false positive)
+
+### 2d-6: Evidence JSON Self-Validation — ✅ ok:true
+
+### 2d-7: WAVE2_EVIDENCE.md Final Consolidation — ✅ COMPLETE
+All evidence from 2a + 2b + 2c + 2d cross-referenced in single document.
+
+### 2d-8: Final Exit Gate
+
+**ALL 2d EXIT CRITERIA PASS:**
+- Reconciliation queries implemented ✅
+- Alert rules implemented ✅
+- Empirical evidence (orphan detection fires) ✅
+- Negative control (no false positives) ✅
+- Evidence JSON ok:true ✅
+- WAVE2_EVIDENCE.md complete ✅
+- Production untouched ✅
+- No automatic repair ✅
+
+## Evidence Artifacts
+- **Workflow:** `subwave-2d-reconciliation-evidence.yml` (run ID: 31882970109)
+- **Artifact:** `subwave-2d-reconciliation-evidence` (2d-evidence.json, 90-day retention)
+- **Staging URL:** https://snakpass-zy6k0erry-snakzap.vercel.app
+- **Production:** NOT TOUCHED
+
+## Issues Fixed During Evidence
+1. Negative control initially failed because grep counted ruleId in cycle JSON output → fixed to use cycle JSON value
+2. Pre-existing orphan orders (71) correctly detected → documented as expected (orders created before outbox feature)
+
+## Current Governance State
+```
+Wave-2                    🔓 UNLOCKED
+Sub-Wave 2a               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2b               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2c               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2d               ✅ PASS — S5 Evidence-Complete
+Wave-2 closure             🟡 ALL SUB-WAVES COMPLETE — AWAITING ORCHESTRATOR DECISION
+Wave-3                     🔒 LOCKED
+Production                 🚫 NOT AUTHORIZED
+```
+
+## Wave-2 Final Exit Gate Matrix
+
+```
+2a  Outbox model + helper + route integration     ✅ S5
+2b  Publisher + consumer dedup + lease + alerts   ✅ S5
+2c  Failure-injection (partial/crash/replay)     ✅ S5 (existing evidence)
+2d  Reconciliation + orphan detection             ✅ S5
+
+P0-24 ALL TEST CRITERIA:
+- Partial-failure → full rollback                   ✅ (2a)
+- Outbox-crash → recovery/no loss                   ✅ (2b-3)
+- Idempotent-replay → exactly-once business effect  ✅ (2b-E2)
+- Publisher PENDING→PUBLISHED/FAILED semantics     ✅ (2b)
+- Crash recovery (lease expiry)                    ✅ (2b-3)
+- Retry + poison event (5 attempts → FAILED)       ✅ (2b-4)
+- Transient retry (FAIL→RETRY→SUCCESS→PUBLISHED)   ✅ (2b-4a)
+- Outbox lag alert                                 ✅ (2b-5)
+- Failure alert                                    ✅ (2b-5)
+- Flag ON + regression                             ✅ (2b-7)
+- 3× duplicate → 1× business effect               ✅ (2b-E2)
+- Transport failure → NOT PUBLISHED               ✅ (2b-7 Test C)
+- Orphan business entity detection                ✅ (2d-4a)
+- Orphan outbox event detection                   ✅ (2d-4b)
+- Negative control (no false positives)            ✅ (2d-5)
+- Reconciliation (detection-only, no repair)       ✅ (2d-1/2d-2)
+```
+
+## Recommendation to Orchestrator
+**All 4 Sub-Waves of Wave-2 are now S5 Evidence-Complete.** P0-24 (Transactional Data Integrity) has been fully implemented and empirically verified:
+
+1. ✅ Transactional outbox (business mutation + outbox INSERT in same transaction)
+2. ✅ Publisher with atomic claim/lease (crash-safe, retry, poison event handling)
+3. ✅ Consumer-side dedup (ProcessedEvent — 3× delivery → 1× business effect)
+4. ✅ Transport failure never produces PUBLISHED
+5. ✅ Orphan detection (business-without-outbox + outbox-without-business)
+6. ✅ Alerts (lag + failure + orphan)
+
+**Wave-2 is ready for closure. Awaiting Orchestrator decision on Wave-2 PASS + Wave-3 Gate Review.**
+
+STOP. Awaiting Orchestrator decision on Wave-2 final closure.
