@@ -255,9 +255,9 @@ jobs:
           # Emit JSON with ok:true when all pass (using proper jq boolean)
           jq -n \
             --argjson ok "$ALL_OK" \
-            --argjson transientOk "$TRANSIENT_OK" \
-            --argjson consumerOk "$CONSUMER_OK" \
-            --argjson crashOk "$CRASH_OK" \
+            --arg transientOk "$TRANSIENT_OK" \
+            --arg consumerOk "$CONSUMER_OK" \
+            --arg crashOk "$CRASH_OK" \
             --arg transientEventId "$TRANSIENT_ID" \
             --arg consumerEventId "$CONSUMER_EVENT_ID" \
             --arg crashEventId "$CRASH_ID" \
