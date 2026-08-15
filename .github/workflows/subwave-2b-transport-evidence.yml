@@ -174,9 +174,9 @@ jobs:
           # Delivery 1 should be processed=true, deliveries 2+3 should be processed=false
           # Extract delivery results — DELIVERY_RESULTS is a concatenation of JSON objects
           # Parse them properly by wrapping in an array
-          D1=$(echo "[$DELIVERY_RESULTS]" | jq -r 'map(select(.delivery==1)) | .[0].processed // "error"' 2>/dev/null || echo "error")
-          D2=$(echo "[$DELIVERY_RESULTS]" | jq -r 'map(select(.delivery==2)) | .[0].processed // "error"' 2>/dev/null || echo "error")
-          D3=$(echo "[$DELIVERY_RESULTS]" | jq -r 'map(select(.delivery==3)) | .[0].processed // "error"' 2>/dev/null || echo "error")
+          D1=$(echo "[$DELIVERY_RESULTS]" | jq -r 'map(select(.delivery==1)) | .[0].processed // "error"' 2>/dev/null)
+          D2=$(echo "[$DELIVERY_RESULTS]" | jq -r 'map(select(.delivery==2)) | .[0].processed // "error"' 2>/dev/null)
+          D3=$(echo "[$DELIVERY_RESULTS]" | jq -r 'map(select(.delivery==3)) | .[0].processed // "error"' 2>/dev/null)
 
           if [ "$D1" = "true" ] && [ "$D2" = "false" ] && [ "$D3" = "false" ] && [ "$PE_COUNT" = "1" ]; then
             CONSUMER_OK="true"
