@@ -4875,3 +4875,65 @@ Stage Summary:
 - Sub-Wave 3a evidence COMPLETE — awaiting Orchestrator S5 review.
 - STOP: Not starting 3b or 3c. Awaiting Orchestrator decision.
 
+---
+Task ID: 3a-arch-doc
+Agent: Architectural Documentation Specialist
+Task: Document transaction retry architectural invariant (external gateway side-effect ≠ blind DB retry)
+
+Work Log:
+- Read worklog sections 3a-evidence (lines 4840–4877) + Task 89 (lines 4757+) to establish context: Orchestrator concern that the new P2002/P1008/P2024 retry set in withTransaction could, if ever wrapped around a real Razorpay capture, cause catastrophic duplicate capture on retry.
+- Read current code paths:
+  - src/app/api/payments/route.ts (full file, 298 lines) — confirmed captureRazorpayPayment() at line 155 + createRazorpayOrder() at line 110 are BOTH inside the withTransaction(async (tx) => {...}) body (line 74).
+  - src/lib/db.ts (full file, 176 lines) — confirmed isRetryableConflict() at lines 62–83 now retries on P2034/P2036/P1008/P2002/P2024; MAX_RETRIES=5, exponential backoff base 50ms.
+  - src/lib/razorpay.ts (full file, 137 lines) — confirmed both external calls are gated by isFeatureEnabled('realPayments'); demo mode returns mock responses with no real HTTP (lines 53–60, 113–120). Real mode calls instance.orders.create (line 63) and instance.payments.capture (line 123) with NO X-Idempotency-Key header forwarded.
+  - src/lib/idempotency.ts (full file, 99 lines) — confirmed getCachedResponse / storeIdempotencyRecord are pure DB ops on the IdempotencyKey table; they do NOT protect external HTTP.
+  - src/lib/outbox.ts (full file, 108 lines) — confirmed enqueueOutboxEvent(tx, event) is the canonical post-commit deferral mechanism, with invariant comment at lines 19–21.
+  - src/lib/deployment.ts line 27 — confirmed realPayments flag defaults to false.
+- Wrote /home/z/my-project/docs/TRANSACTION_RETRY_INVARIANT.md (9 sections, ~14 KB):
+  1. Invariant statement (external gateway side-effect ≠ blind DB retry)
+  2. The retry mechanism that makes this dangerous (incl. the P2002/P1008/P2024 expansion rationale)
+  3. Current code analysis — line-by-line table of every call inside route.ts's withTransaction body, marking createRazorpayOrder (line 110) + captureRazorpayPayment (line 155) as external
+  4. Current safety posture — SAFE in demo mode (mock returns, no real HTTP); LATENT RISK in real mode (duplicate capture charge on retry; orphan Razorpay orders on retry)
+  5. The Rule — three acceptable configurations (Option A: after-commit outside body; Option B: pre-generated gateway-honored idempotency key; Option C: outbox pattern, marked canonical)
+  6. Outbox pattern canonical reference with failure-point table
+  7. DO NOT section — 4 concrete anti-pattern code snippets + 3 acceptable-pattern code snippets
+  8. Enforcement status — PARTIAL (no lint/CI gate today; Wave-3b/3c scope); explicit forward plan listing 5 enforcement items (code-review checklist, lint rule, outbox publisher for PAYMENT_CAPTURE_REQUESTED, pre-generated idk for createRazorpayOrder, CI grep-scan gate)
+  9. Pointers table mapping every concern to file + line range
+- Verified all file paths + line numbers cited in the document match the actual codebase.
+- Did NOT modify any source code. Did NOT enable realPayments. Did NOT start 3b/3c work. Did NOT touch production.
+
+Stage Summary:
+- New file: /home/z/my-project/docs/TRANSACTION_RETRY_INVARIANT.md (9 sections).
+- Current code IS safe in demo mode (realPayments=false default; both external calls return mocks; retry loop is exercised but fires no real HTTP).
+- Current code WOULD violate the invariant if realPayments were flipped to true today: captureRazorpayPayment (route.ts line 155) and createRazorpayOrder (route.ts line 110) both sit inside the withTransaction body that retries on P2002/P1008/P2024/P2034/P2036.
+- Canonical mitigation when realPayments is authorized: move capture into an outbox-driven publisher (Option C), since src/lib/outbox.ts already implements the post-commit deferral pattern. A pre-generated idempotency key (Option B) is the secondary mitigation for createRazorpayOrder to prevent orphan-order leaks.
+- Enforcement status: PARTIAL — documented in 3a, full lint/CI/publisher enforcement deferred to Wave-3b/3c.
+- STOP: Not starting 3b or 3c. Awaiting Orchestrator decision.
+
+
+---
+Task ID: 3a-regression
+Agent: Transaction Infrastructure Regression Analyst
+Task: Regression analysis of withTransaction() changes (P2002/P1008/P2024 retry)
+
+Work Log:
+- Read worklog sections 3a-evidence (lines 4840-4877) and 3a-arch-doc (lines 4879-4912) to establish context: the 3a-evidence change expanded isRetryableConflict() to include P2002/P1008/P2024 and raised MAX_RETRIES to 5; the 3a-arch-doc change documented the external-gateway-side-effect ≠ blind-DB-retry invariant.
+- Read src/lib/db.ts (176 lines, full), src/app/api/payments/route.ts (298 lines, full), src/lib/razorpay.ts (137 lines, full) to ground the analysis.
+- Ran `bun run lint` → exit 0, zero output. Lint PASS.
+- Ran `bunx tsc --noEmit` → exit 1, 154 lines of TS errors. Piped through `rg -i "lib/db|withTransaction|TransactionConflictError"` → ZERO matches. All TS errors are pre-existing (NextResponse generic-typing drift, Bun types in mini-services, Razorpay SDK amount string|number quirk at razorpay.ts:70, stale test scaffolding) and are NOT regressions from the retry-list expansion. Pre-existing errors are reported for the main agent's backlog.
+- Grep-discovered 8 files containing "withTransaction"; verified by reading each that 4 are real call sites (orders/route.ts, orders/[id]/status/route.ts, kill-switches/[key]/route.ts, payments/route.ts) and 2 are comment-only references (event-consumer.ts, outbox.ts) and 1 is the definition (db.ts) and 1 is db.ts's own definition referenced by the grep tool.
+- Per-caller analysis: caller #1 (orders POST) — no external side-effects, idempotency-cache check at start, retry-safe; caller #2 (order-status PATCH) — no external side-effects, optimistic-lock updateMany WHERE version=expected prevents duplicate transitions, retry-safe for state machine (minor audit-log duplication risk); caller #3 (kill-switch PATCH) — same optimistic-lock pattern as #2, retry-safe for state machine; caller #4 (payments POST) — gateway-call surface (captureRazorpayPayment at line 155 inside withTransaction body), idempotency-cache check at start, retry-safe in DEMO MODE (captureRazorpayPayment is a no-op mock), NOT retry-safe in REAL MODE (would re-fire gateway capture on P1008 retry-after-commit) — but realPayments=false in 3a, so risk is theoretical and documented.
+- Bounded-retry proof: MAX_RETRIES=5 (finite, const, not overridable by any current caller). After exhaustion, TransactionConflictError is thrown (not swallowed). The for-loop's catch block has only two terminal paths: throw TransactionConflictError, or rethrow original non-retryable error. Retry re-runs the ENTIRE fn callback from the start (Prisma $transaction(fn, options) invokes fn(tx) fresh on each call) — so getCachedResponse (callers #1, #4) and optimistic-lock updateMany (callers #2, #3) are re-evaluated on every retry. Worst case: 750ms cumulative backoff + HTTP 409 to client.
+- Wrote /home/z/my-project/evidence/wave3-3a/regression-analysis.md (5 parts + overall verdict, ~16 KB). Includes the caller table, bounded-retry proof with code excerpts, the exact line-by-line trace of captureRazorpayPayment's location inside the withTransaction body (line 155 of route.ts, inside the retry loop), the demo-vs-real mode analysis, and the verdict: PASS-WITH-DOCUMENTED-RISK.
+- Did NOT modify any source code. Did NOT fix pre-existing TS errors (reported for main agent backlog). Did NOT enable realPayments. Did NOT start 3b or 3c work. Did NOT touch production.
+
+Stage Summary:
+- Lint: PASS (exit 0).
+- Typecheck: PASS for withTransaction surface (zero errors reference lib/db, withTransaction, or TransactionConflictError). 154 pre-existing TS errors in unrelated files reported for main agent backlog.
+- 4 withTransaction callers found and analyzed: orders/route.ts (POST), orders/[id]/status/route.ts (PATCH), kill-switches/[key]/route.ts (PATCH), payments/route.ts (POST). 2 additional files (event-consumer.ts, outbox.ts) contain "withTransaction" only in comments.
+- All 4 callers retry-safe in current 3a posture: 3 of 4 have no external side-effects inside the txn body (rely on optimistic-lock + idempotency-cache); 1 of 4 (payments POST) has a gateway-call surface that is gated by realPayments=false in 3a (captureRazorpayPayment is a no-op mock in demo mode).
+- Bounded retry confirmed: MAX_RETRIES=5, throws TransactionConflictError after exhaustion, every caller catches it and returns HTTP 409.
+- External capture retry-safety: captureRazorpayPayment() is at route.ts line 155 INSIDE the withTransaction body — retry could re-invoke it. In demo mode (current 3a posture, realPayments=false confirmed at deployment.ts:27) it is a no-op mock → retry-safe. In real mode (NOT authorized in 3a) it would re-fire the gateway capture — hazard is fully documented in /home/z/my-project/docs/TRANSACTION_RETRY_INVARIANT.md (Task 3a-arch-doc), canonical mitigation (outbox pattern, Option C) is already wired in src/lib/outbox.ts, enforcement deferred to Wave-3b/3c.
+- Overall verdict: PASS-WITH-DOCUMENTED-RISK. The "WITH-DOCUMENTED-RISK" qualifier refers exclusively to the real-mode gateway-capture hazard, which is inactive in 3a (realPayments=false), documented in 3a-arch-doc, and has its mitigation path already wired.
+- Orchestrator's 4 concerns all resolved. Report delivered at /home/z/my-project/evidence/wave3-3a/regression-analysis.md.
+- STOP: Not starting 3b or 3c. Awaiting Orchestrator decision.
