@@ -160,8 +160,9 @@ jobs:
           echo "  Create response: $RESULT_BODY" | head -c 500
           echo ""
 
-          if [ "$RESULT_HTTP" = "200" ] && echo "$RESULT_BODY" | jq -e '.id' > /dev/null 2>&1; then
-            echo "  ✅ EVIDENCE_TEST_MODE=true configured for preview environment"
+          if echo "$RESULT_HTTP" | grep -qE "^(200|201)$" && echo "$RESULT_BODY" | jq -e '.created.id // .id' > /dev/null 2>&1; then
+            CREATED_ID=$(echo "$RESULT_BODY" | jq -r '.created.id // .id')
+            echo "  ✅ EVIDENCE_TEST_MODE=true configured for preview environment (id=$CREATED_ID)"
           else
             echo "  ❌ Failed to set EVIDENCE_TEST_MODE"
             echo "  HTTP code: $RESULT_HTTP"
