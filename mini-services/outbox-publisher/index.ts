@@ -23,6 +23,16 @@ import { appendFile, mkdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
 
+// Transport configuration:
+// - HTTP mode: publisher POSTs events to CONSUMER_URL/api/test/consume-event
+// - Socket.io mode: publisher emits via Socket.io to REALTIME_URL
+// HTTP mode is used for staging E2E testing (no realtime service deployed).
+// Socket.io mode is for production (realtime service deployed).
+const TRANSPORT_MODE = process.env.OUTBOX_TRANSPORT_MODE || 'http' // 'http' | 'socket'
+
+// HTTP consumer URL (for staging E2E testing)
+const CONSUMER_URL = process.env.CONSUMER_URL || ''
+
 const PORT = parseInt(process.env.OUTBOX_PUBLISHER_PORT || '3009', 10)
 const REALTIME_URL = process.env.REALTIME_URL || 'http://localhost:3003'
 const LEASE_DURATION_MS = 30_000 // 30 seconds — if publisher crashes, lease expires
@@ -152,12 +162,9 @@ async function publishPendingEvents(): Promise<{
   })
 
   // Step 4: Publish each event
-  const sock = getRealtimeSocket()
-  const realtimeConnected = sock !== null && sock.connected
-  if (!realtimeConnected) {
-    await log({ level: 'warn', message: 'realtime-not-connected-best-effort-mode', workerId })
-  }
-
+  // PUBLISHED means: successful transport handoff to the consumer.
+  // If transport fails, the event goes to retry (PENDING with incremented attempts)
+  // or FAILED (max retries). PUBLISHED is NOT set on failure.
   for (const event of claimedEvents) {
     try {
       const socketEventName = EVENT_TYPE_TO_SOCKET[event.eventType]
@@ -167,21 +174,43 @@ async function publishPendingEvents(): Promise<{
 
       const payload = JSON.parse(event.payload)
 
-      // Best-effort delivery: if realtime is connected, emit via Socket.io.
-      // If realtime is NOT connected (staging without realtime service),
-      // still mark as PUBLISHED — the event is persisted in the Outbox table
-      // and will be available for any future consumer. This is the
-      // "at-least-once delivery" pattern: the event is safely stored,
-      // delivery is best-effort, consumer-side dedup handles duplicates.
-      if (realtimeConnected) {
-        sock!.emit(socketEventName, payload)
-        await log({ level: 'info', message: 'event-published-via-socketio', eventId: event.eventId, eventType: event.eventType, workerId })
+      // Transport: deliver the event via HTTP or Socket.io
+      if (TRANSPORT_MODE === 'http') {
+        // HTTP mode: POST to consumer endpoint
+        if (!CONSUMER_URL) {
+          throw new Error('CONSUMER_URL not set for HTTP transport mode')
+        }
+
+        const consumerEndpoint = `${CONSUMER_URL}/api/test/consume-event`
+        const response = await fetch(consumerEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            eventId: event.eventId,
+            eventType: event.eventType,
+            payload,
+          }),
+          signal: AbortSignal.timeout(5000),
+        })
+
+        if (!response.ok) {
+          const errBody = await response.text().catch(() => 'unknown')
+          throw new Error(`Consumer returned HTTP ${response.status}: ${errBody}`)
+        }
+
+        const consumerResult = await response.json()
+        await log({ level: 'info', message: 'event-delivered-via-http', eventId: event.eventId, eventType: event.eventType, workerId, consumerProcessed: consumerResult.processed })
       } else {
-        await log({ level: 'info', message: 'event-published-best-effort-no-realtime', eventId: event.eventId, eventType: event.eventType, workerId })
+        // Socket.io mode: emit via realtime service
+        const sock = getRealtimeSocket()
+        if (!sock || !sock.connected) {
+          throw new Error('Realtime service not connected — transport failed')
+        }
+        sock.emit(socketEventName, payload)
+        await log({ level: 'info', message: 'event-published-via-socketio', eventId: event.eventId, eventType: event.eventType, workerId })
       }
 
-      // Mark as PUBLISHED (regardless of realtime availability — the event
-      // has been processed by the publisher and is no longer PENDING)
+      // Mark as PUBLISHED ONLY after successful transport
       await db.outbox.update({
         where: { id: event.id },
         data: {
