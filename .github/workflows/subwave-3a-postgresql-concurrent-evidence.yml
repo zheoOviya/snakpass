@@ -184,33 +184,101 @@ jobs:
           PROJECT_ID="$VERCEL_PROJECT_ID"
           AUTH="Authorization: Bearer $VERCEL_TOKEN"
 
-          # First, check if there's already a production deployment for the current commit
-          # The push of this workflow file likely triggered a deploy already.
-          echo "  === Querying existing Vercel deployments for main branch ==="
-          LIST_DEPLOYS=$(curl -sS -H "$AUTH" \
-            "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&limit=5&target=preview&state=READY")
-          echo "  Recent READY preview deployments:"
-          echo "$LIST_DEPLOYS" | jq -r '.deployments[]? | "    - \(.url) (created: \(.createdAt), meta: \(.meta.githubCommitMessage // "n/a" | .[0:60]))"' 2>/dev/null | head -5
-
-          # Try to create a new deployment from main
+          # ------------------------------------------------------------------
+          # Step 0: Query the Vercel project to get the linked GitHub repo's
+          # numeric repoId (Vercel API v13/deployments REQUIRES gitSource.repoId
+          # when gitSource.type=github). This is needed for the Option B fallback.
+          # ------------------------------------------------------------------
           echo ""
-          echo "  === Attempting to trigger a new deployment ==="
-          # gitSource requires `type: "github"` field per Vercel API spec
+          echo "  === Querying Vercel project for linked git source info ==="
+          PROJECT_RESP=$(curl -sS -w "\n%{http_code}" -H "$AUTH" \
+            "https://api.vercel.com/v9/projects/$PROJECT_ID")
+          PROJECT_HTTP=$(echo "$PROJECT_RESP" | tail -1)
+          PROJECT_BODY=$(echo "$PROJECT_RESP" | head -n -1)
+          echo "  Project query HTTP: $PROJECT_HTTP"
+          if [ "$PROJECT_HTTP" != "200" ]; then
+            echo "  ❌ Failed to query Vercel project (HTTP $PROJECT_HTTP)"
+            echo "  Response: $(echo "$PROJECT_BODY" | head -c 500)"
+            exit 1
+          fi
+          LINK_TYPE=$(echo "$PROJECT_BODY" | jq -r '.link.type // empty')
+          REPO_ID=$(echo "$PROJECT_BODY" | jq -r '.link.repoId // empty')
+          ORG=$(echo "$PROJECT_BODY" | jq -r '.link.org // empty')
+          REPO=$(echo "$PROJECT_BODY" | jq -r '.link.repo // empty')
+          echo "  Linked git source:"
+          echo "    type:   $LINK_TYPE"
+          echo "    org:    $ORG"
+          echo "    repo:   $REPO"
+          echo "    repoId: $REPO_ID"
+
+          # Show recent READY preview deployments for context
+          echo ""
+          echo "  === Recent READY Vercel deployments (any target) ==="
+          LIST_DEPLOYS=$(curl -sS -H "$AUTH" \
+            "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&limit=5&state=READY")
+          echo "$LIST_DEPLOYS" | jq -r '.deployments[]? | "    - target=\(.target // "preview") url=\(.url) created=\(.createdAt) commit=\(.meta.githubCommitSha // "n/a" | .[0:8])"' 2>/dev/null | head -5
+
+          # ------------------------------------------------------------------
+          # Step 1: Try Option A — ref-only payload (no gitSource).
+          # Per Vercel API docs, when the project has a linked git repository,
+          # you can trigger a deploy using just `ref` + `name` + `target`.
+          # ------------------------------------------------------------------
+          echo ""
+          echo "  === Attempting Option A: ref-only deployment trigger ==="
           DEPLOY_RESP=$(curl -sS -w "\n%{http_code}" -X POST \
             -H "$AUTH" \
             -H "Content-Type: application/json" \
             "https://api.vercel.com/v13/deployments" \
-            -d '{"name":"snakpass","target":"production","gitSource":{"type":"github","repo":"zheoOviya/snakpass","ref":"main"}}')
+            -d '{"name":"snakpass","target":"production","ref":"main"}')
 
           DEPLOY_HTTP=$(echo "$DEPLOY_RESP" | tail -1)
           DEPLOY_BODY=$(echo "$DEPLOY_RESP" | head -n -1)
-          echo "  Deploy trigger HTTP: $DEPLOY_HTTP"
-          echo "  Deploy response (first 300 chars): $(echo $DEPLOY_BODY | head -c 300)"
+          echo "  Option A HTTP: $DEPLOY_HTTP"
+          echo "  Option A response (first 400 chars): $(echo "$DEPLOY_BODY" | head -c 400)"
 
           DEPLOY_ID=$(echo "$DEPLOY_BODY" | jq -r '.id // empty')
+
+          # ------------------------------------------------------------------
+          # Step 2: If Option A failed (HTTP 400 / no DEPLOY_ID), fall back to
+          # Option B — full gitSource with numeric repoId from the project query.
+          # ------------------------------------------------------------------
+          if [ -z "$DEPLOY_ID" ] || [ "$DEPLOY_ID" = "null" ]; then
+            echo ""
+            echo "  ⚠️  Option A did not return a deployment id. Falling back to Option B..."
+            if [ -z "$REPO_ID" ] || [ "$REPO_ID" = "null" ]; then
+              echo "  ❌ Cannot fall back to Option B — project has no linked repoId."
+              echo "  ❌ Cannot trigger deployment."
+              exit 1
+            fi
+            echo "  === Attempting Option B: gitSource with repoId=$REPO_ID ==="
+            PAYLOAD=$(jq -n \
+              --arg name "snakpass" \
+              --arg target "production" \
+              --arg type "$LINK_TYPE" \
+              --arg org "$ORG" \
+              --arg repo "$REPO" \
+              --argjson repoId "$REPO_ID" \
+              --arg ref "main" \
+              '{name:$name, target:$target, gitSource:{type:$type, org:$org, repo:$repo, repoId:$repoId, ref:$ref}}')
+            echo "  Option B payload: $PAYLOAD"
+            DEPLOY_RESP=$(curl -sS -w "\n%{http_code}" -X POST \
+              -H "$AUTH" \
+              -H "Content-Type: application/json" \
+              "https://api.vercel.com/v13/deployments" \
+              -d "$PAYLOAD")
+
+            DEPLOY_HTTP=$(echo "$DEPLOY_RESP" | tail -1)
+            DEPLOY_BODY=$(echo "$DEPLOY_RESP" | head -n -1)
+            echo "  Option B HTTP: $DEPLOY_HTTP"
+            echo "  Option B response (first 400 chars): $(echo "$DEPLOY_BODY" | head -c 400)"
+
+            DEPLOY_ID=$(echo "$DEPLOY_BODY" | jq -r '.id // empty')
+          fi
+
           DEPLOY_URL=$(echo "$DEPLOY_BODY" | jq -r '.url // empty')
 
           if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
+            echo ""
             echo "  ✅ Deployment triggered: id=$DEPLOY_ID, url=$DEPLOY_URL"
             if [ -n "$DEPLOY_URL" ] && [ "$DEPLOY_URL" != "null" ]; then
               NEW_STAGING_URL="https://$DEPLOY_URL"
@@ -242,7 +310,7 @@ jobs:
               sleep 5
             done
           else
-            echo "  ⚠️ Could not trigger new deployment (may already be deploying)."
+            echo "  ⚠️ Could not trigger new deployment."
             echo "  Falling back to querying the latest READY production deployment..."
           fi
 
