@@ -138,7 +138,7 @@ model Order {
   user           User           @relation(fields: [userId], references: [id])
   restaurantId   String
   restaurant     Restaurant     @relation(fields: [restaurantId], references: [id])
-  status         String         @default("CONFIRMED") // CONFIRMED | PREPARING | ALMOST_READY | READY_FOR_PICKUP | PICKED_UP | CANCELLED
+  status         String         @default("CONFIRMED") // CONFIRMED | PREPARING | ALMOST_READY | READY_FOR_PICKUP | PICKED_UP | CANCELLED | PAID | PAYMENT_PENDING
   totalAmount    Int            // paise
   pickupOtp      String         @default("000000")
   isCatering     Boolean        @default(false)
@@ -150,9 +150,9 @@ model Order {
   orderItems     OrderItem[]
   statusHistory  String         @default("[]") // JSON array of {status, at}
   // P0-25 Case B: State-transition race protection.
-  // Conditional UPDATE (`WHERE version = X`) ensures only one concurrent
-  // status transition succeeds; the other gets 409 Conflict.
   version        Int            @default(0)
+  // P0-01 Wave-3: 1:1 relation to Payment
+  payment        Payment?
 }
 
 model OrderItem {
@@ -343,4 +343,84 @@ model ProcessedEvent {
   payloadHash String?
 
   @@index([consumerId, processedAt])
+}
+
+// ----------------------------------------
+// P0-01 Wave-3 — Payment (Razorpay capture lifecycle)
+// ----------------------------------------
+model Payment {
+  id               String    @id @default(cuid())
+  orderId          String    @unique
+  order            Order     @relation(fields: [orderId], references: [id])
+  userId           String
+  // Razorpay gateway linkage
+  gatewayOrderId   String?   // razorpay_order_id (from order-create API)
+  gatewayPaymentId String?   // razorpay_payment_id (after Checkout SDK)
+  gatewaySignature String?   // X-Razorpay-Signature (HMAC-SHA256)
+  // Amount (paise — consistent with Order.totalAmount)
+  amount           Int
+  currency         String    @default("INR")
+  // Status lifecycle: PAYMENT_PENDING → CAPTURED | FAILED | FROZEN; CAPTURED → REFUNDED (Wave-5)
+  status           String    @default("PAYMENT_PENDING")
+  // I-04 Capture Uniqueness: capturedAt set once, never reset
+  capturedAt       DateTime?
+  // P0-25 Case C: Idempotency-Key linkage (payment double-click dedup)
+  idempotencyKey   String?   @unique
+  // P0-28: Freeze flag (per invariant-checker.ts:139)
+  frozen           Boolean   @default(false)
+  // P0-25: Optimistic-locking version field
+  version          Int       @default(0)
+  // Failure tracking
+  failureReason    String?
+  retryCount       Int       @default(0)
+  // Ledger entries (double-entry: Dr + Cr per payment)
+  ledgerEntries    LedgerEntry[]
+  // Audit
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([userId, createdAt])
+  @@index([status, createdAt])
+}
+
+// ----------------------------------------
+// P0-02/P0-24 Wave-3 — LedgerEntry (double-entry, append-only)
+// ----------------------------------------
+model LedgerEntry {
+  id              String   @id @default(cuid())
+  paymentId       String
+  payment         Payment  @relation(fields: [paymentId], references: [id])
+  // Double-entry: each Payment produces >=2 entries (Dr + Cr)
+  entryType       String   // "DEBIT" | "CREDIT"
+  accountType     String   // "GATEWAY_RECEIVABLE" | "CONSUMER_REVENUE" | "VENDOR_PAYOUT" | "COMMISSION_REVENUE" | "GATEWAY_FEE_EXPENSE"
+  amount          Int      // paise; Dr and Cr sum to same total per Payment (I-06)
+  // Traceability
+  traceId         String?
+  // Append-only: no updatedAt field (entries never updated)
+  createdAt       DateTime @default(now())
+
+  @@index([paymentId, entryType])
+  @@index([accountType, createdAt])
+}
+
+// ----------------------------------------
+// P0-05 Wave-3 — WebhookEvent (Razorpay webhook dedup + HMAC verification)
+// ----------------------------------------
+// Schema-only in Wave-3 (handler implementation is Wave-4 P0-05 scope)
+model WebhookEvent {
+  id              String   @id @default(cuid())
+  eventId         String   @unique // Razorpay webhook event_id (dedup key, I-04)
+  eventType       String   // "payment.captured" | "payment.failed" | "refund.processed"
+  paymentId       String?  // FK to Payment (if webhook relates to a payment)
+  // Raw webhook payload
+  payload         String   // JSON
+  payloadHash     String   // SHA-256 of payload
+  signature       String   // X-Razorpay-Signature header
+  verified        Boolean  @default(false) // HMAC verification result
+  processed       Boolean  @default(false) // idempotent processing flag
+  processedAt     DateTime?
+  receivedAt     DateTime @default(now())
+
+  @@index([eventType, receivedAt])
+  @@index([processed, receivedAt])
 }
