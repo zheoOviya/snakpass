@@ -271,3 +271,61 @@ Per Orchestrator Decision (Wave-2 Gate Review PASS + Sub-Wave 2a authorized):
 - 2b-7 FEATURE_OUTBOX_PUBLISHER=ON: pending (requires 2b-3 + 2b-4 evidence first)
 - 2b-8 Final evidence package: pending
 
+
+### Sub-Wave 2b — Failure Injection Evidence (2026-08-15) — ALL 3 EMPIRICALLY VERIFIED ✅
+
+**Workflow:** `subwave-2b-failure-evidence.yml` (run ID: 31873863056)
+
+#### 2b-3 Crash Recovery — ✅ EMPIRICALLY VERIFIED
+- **Test:** Event claimed by crashed worker → lease expired (5s) → publisher recovered → PUBLISHED
+- **Evidence:**
+  - Before: status=PENDING (event created)
+  - After claim: status=CLAIMED (simulated crash with 5s lease)
+  - After lease expiry: status=CLAIMED (lease expired, not yet recovered)
+  - After publisher run: status=PUBLISHED (recovered + published)
+- **Conclusion:** `noEventLoss: true` — event went PENDING→CLAIMED(crash)→recovered→PUBLISHED
+
+#### 2b-4 Poison Event — ✅ EMPIRICALLY VERIFIED
+- **Test:** Unknown event type → 5 attempts → FAILED (no infinite retry)
+- **Evidence:**
+  - Attempt 1: status=PENDING, attempts=1 (error: Unknown event type)
+  - Attempt 2: status=PENDING, attempts=2
+  - Attempt 3: status=PENDING, attempts=3
+  - Attempt 4: status=PENDING, attempts=4
+  - Attempt 5: status=FAILED, attempts=5 (max retries exhausted)
+  - lastError: "Unknown event type: UNKNOWN_POISON_EVENT_TYPE"
+- **Conclusion:** `noInfiniteRetry: true` — exactly 5 attempts → FAILED, no further retry
+
+#### 2b-8 Duplicate Delivery → Exactly 1 Business Effect — ✅ EMPIRICALLY VERIFIED
+- **Test:** 3× delivery of same eventId via processEvent() → verify exactly 1 ProcessedEvent + 1 business effect
+- **Evidence:**
+  - Delivery 1: `processed: true` (business effect executed)
+  - Delivery 2: `processed: false` (dedup — already processed)
+  - Delivery 3: `processed: false` (dedup — already processed)
+  - ProcessedEvent count: 1
+  - Business effect count: 1
+- **Conclusion:** `exactlyOnce: true` — 3× delivery → exactly 1 ProcessedEvent + 1 business effect
+
+#### Raw Evidence JSON (from workflow artifact)
+```json
+{
+  "ok": true,
+  "timestamp": "2026-08-15T08:13:40Z",
+  "tests": {
+    "2b-3-crash-recovery": {
+      "finalStatus": "PUBLISHED",
+      "noEventLoss": true
+    },
+    "2b-4-poison-event": {
+      "finalStatus": "FAILED",
+      "attempts": 5,
+      "noInfiniteRetry": true
+    },
+    "2b-8-duplicate-delivery": {
+      "processedEventCount": 1,
+      "exactlyOnce": true
+    }
+  }
+}
+```
+

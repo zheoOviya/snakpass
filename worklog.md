@@ -3952,3 +3952,76 @@ Production                🚫 NOT AUTHORIZED
 Sub-Wave 2b is progressing well. The E2E flow is verified (order→PENDING→publisher→PUBLISHED). The remaining items (2b-3 crash evidence, 2b-4 retry/poison evidence, 2b-7 flag ON, 2b-8 final package) require additional evidence workflows. The publisher is functional and the transport contract is resolved.
 
 STOP. Awaiting Orchestrator review of 2b-0..2b-6 progress + decision on continuing to 2b-3/2b-4 evidence.
+
+---
+Task ID: 78 — Sub-Wave 2b Failure Injection Evidence (2b-3/2b-4/2b-8) — ALL 3 EMPIRICALLY VERIFIED
+Agent: main (IDE)
+Date: 2026-08-15
+Task: Execute Orchestrator-authorized empirical failure-injection tests for 2b-3 (crash recovery), 2b-4 (poison event), and 2b-8 (duplicate delivery → exactly 1 business effect).
+
+## Authorization
+- **Scope**: 2b-3 + 2b-4 + 2b-8 empirical evidence on staging
+- **Forbidden**: 2b-7 flag ON, 2c, Wave-3, production changes
+
+## Evidence Results — ALL 3 PASS ✅
+
+### 2b-3 Crash Recovery — ✅ EMPIRICALLY VERIFIED
+- Event: PENDING → CLAIMED (crashed worker, 5s lease) → lease expired → publisher recovered → PUBLISHED
+- `noEventLoss: true` — event reached PUBLISHED despite crash
+- Log evidence: "recovered-stale-claimed-events" (count: 1) + "event-published-best-effort-no-realtime"
+
+### 2b-4 Poison Event — ✅ EMPIRICALLY VERIFIED
+- Unknown event type → 5 attempts (1s, 5s, 30s, 5min, 15min backoff bypassed for test) → FAILED
+- `noInfiniteRetry: true` — exactly 5 attempts, then FAILED, no further retry
+- Log evidence: "event-retry-scheduled" (attempts 1-4) + "event-failed-max-retries" (attempt 5)
+
+### 2b-8 Duplicate Delivery → Exactly 1 Business Effect — ✅ EMPIRICALLY VERIFIED
+- 3× processEvent() call with same eventId
+- Delivery 1: processed=true (business effect executed)
+- Delivery 2: processed=false (dedup)
+- Delivery 3: processed=false (dedup)
+- `processedEventCount: 1`, `businessEffectCount: 1`
+- `exactlyOnce: true`
+
+## Issues Fixed During Evidence
+1. SQL `$$` shell expansion in create_outbox_row → fixed with printf
+2. Publisher "Realtime not connected" error → switched to best-effort mode
+3. processEvent import path → wrote test to project root + .js extension
+4. jq `&&` syntax → fixed to `and`
+5. jq non-ASCII chars (×→x) → replaced
+
+## Staging Evidence
+- **Workflow run:** https://github.com/zheoOviya/snakpass/actions/runs/31873863056
+- **Artifact:** `subwave-2b-failure-evidence` (2b-failure-evidence.json, 90-day retention)
+- **Production:** NOT TOUCHED
+
+## Current Governance State
+```
+Wave-2                    🔓 UNLOCKED
+Sub-Wave 2a               ✅ PASS — S5 Evidence-Complete
+Sub-Wave 2b               🟡 2b-0..2b-6 + 2b-3/2b-4/2b-8 PASS
+  ├─ 2b-0 Transport        ✅ PASS
+  ├─ 2b-1 ProcessedEvent   ✅ IMPLEMENTED
+  ├─ 2b-2 Claim/Lease      ✅ IMPLEMENTED + E2E
+  ├─ 2b-3 Crash Recovery   ✅ EMPIRICALLY VERIFIED
+  ├─ 2b-4 Poison Event     ✅ EMPIRICALLY VERIFIED
+  ├─ 2b-5 Alerts           ✅ IMPLEMENTED
+  ├─ 2b-6 E2E              ✅ PASS
+  ├─ 2b-7 Flag ON          🔒 LOCKED (all prerequisites now PASS)
+  ├─ 2b-8 Dedup            ✅ EMPIRICALLY VERIFIED (3×→1×)
+  └─ 2b-8 Final Package    🔒 PENDING (requires 2b-7)
+Sub-Wave 2c               🔒 LOCKED
+Sub-Wave 2d               🔒 LOCKED
+Wave-3                    🔒 LOCKED
+Production                🚫 NOT AUTHORIZED
+```
+
+## Recommendation to Orchestrator
+All 3 Orchestrator-required empirical evidence tests PASS:
+1. ✅ Crash recovery: PENDING→CLAIMED(crash)→recovered→PUBLISHED (no event loss)
+2. ✅ Poison event: 5 attempts→FAILED (no infinite retry)
+3. ✅ 3× duplicate delivery → exactly 1 ProcessedEvent + 1 business effect
+
+The only remaining 2b item is 2b-7 (FEATURE_OUTBOX_PUBLISHER=ON on staging), which the Orchestrator gated on 2b-3 + 2b-4 + dedup passing. All prerequisites now PASS.
+
+**STOP.** Awaiting Orchestrator review of 2b-3/2b-4/2b-8 evidence + decision on 2b-7 (flag ON).
