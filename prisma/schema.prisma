@@ -298,8 +298,8 @@ model Outbox {
   aggregateId     String
   // JSON payload of the event (the data the consumer needs)
   payload         String   // JSON
-  // PENDING = not yet published; PUBLISHED = delivered by publisher
-  status          String   @default("PENDING") // PENDING | PUBLISHED | FAILED
+  // PENDING = not yet published; PUBLISHED = delivered by publisher; FAILED = max retries exhausted
+  status          String   @default("PENDING") // PENDING | CLAIMED | PUBLISHED | FAILED
   // Number of publish attempts (for retry tracking + backoff)
   attempts        Int      @default(0)
   // Last error message (if publishing failed)
@@ -308,7 +308,39 @@ model Outbox {
   createdAt       DateTime @default(now())
   // When the publisher successfully delivered the event
   publishedAt     DateTime?
+  // P0-24 2b-2: Claim/lease fields for crash-safe publisher
+  // When a worker claims this event (sets status=CLAIMED)
+  claimedAt       DateTime?
+  // When the lease expires (if publisher crashes, another worker can re-claim after this time)
+  claimUntil      DateTime?
+  // ID of the worker that claimed this event (for debugging + lease management)
+  workerId        String?
 
   @@index([status, createdAt]) // publisher polls WHERE status='PENDING' ORDER BY createdAt
   @@index([aggregateType, aggregateId]) // lookup by aggregate
+}
+
+// ----------------------------------------
+// P0-24 Sub-Wave 2b — Consumer-side idempotency (ProcessedEvent)
+// ----------------------------------------
+// When the outbox publisher delivers an event, the consumer checks this
+// table to determine if the event has already been processed. If the
+// eventId exists, the business effect is NOT re-applied (exactly-once
+// business effect, even if delivery happens multiple times).
+//
+// The dedup record and the protected business effect must be in the same
+// transaction (atomic dedup).
+model ProcessedEvent {
+  // Matches Outbox.eventId — the consumer-side idempotency key
+  eventId     String   @id
+  // Event type (for debugging + audit)
+  eventType   String
+  // Which consumer processed it (for multi-consumer future)
+  consumerId  String   @default("default")
+  // When the event was processed
+  processedAt DateTime @default(now())
+  // Optional: payload hash for verification
+  payloadHash String?
+
+  @@index([consumerId, processedAt])
 }

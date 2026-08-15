@@ -112,6 +112,26 @@ export const ALERT_RULES: AlertRule[] = [
     comparison: 'gt',
     cooldownMs: 5 * 60_000,
   },
+  {
+    id: 'outbox-lag-exceeded',
+    name: 'Outbox Lag Exceeded',
+    description: 'Oldest unpublished outbox row > 60 seconds old — publisher may be stalled or crashed',
+    severity: 'warning',
+    metric: 'outbox_lag_seconds',
+    threshold: 60,
+    comparison: 'gt',
+    cooldownMs: 60_000,
+  },
+  {
+    id: 'outbox-publish-failed',
+    name: 'Outbox Publish Failed',
+    description: 'An outbox event has FAILED after max retries (5 attempts) — manual intervention required',
+    severity: 'critical',
+    metric: 'outbox_failed_count',
+    threshold: 0,
+    comparison: 'gt',
+    cooldownMs: 0, // no cooldown — every failure alerts
+  },
 ]
 
 // Fire an alert. In dev: log to stderr. In production: send to PagerDuty/Opsgenie.

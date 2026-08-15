@@ -85,10 +85,23 @@ export function parseOutboxPayload<T = unknown>(payload: string): T {
 
 /**
  * Map outbox event types to Socket.io event names.
- * The publisher uses this to route events to the correct Socket.io room.
+ * The publisher uses this to route events to the correct Socket.io channel.
+ *
+ * 2b-0 TRANSPORT CONTRACT FIX:
+ * These names MUST match exactly what the realtime mini-service listens for
+ * (mini-services/realtime/index.ts). The previous mapping used hyphens
+ * (order-created) but the realtime service expects colons (order:created).
+ * This mismatch would cause the publisher to emit events that the realtime
+ * service never receives — false-positive PUBLISHED status with no actual
+ * delivery.
+ *
+ * Verified mapping (from mini-services/realtime/index.ts):
+ *   socket.on('order:created', ...)      ← line 55
+ *   socket.on('order:updated', ...)      ← line 47
+ *   socket.on('killswitch:toggled', ...) ← line 61
  */
 export const EVENT_TYPE_TO_SOCKET_EVENT: Record<string, string> = {
-  ORDER_CREATED: 'order-created',
-  ORDER_STATUS_CHANGED: 'order-updated',
-  KILL_SWITCH_TOGGLED: 'kill-switch-toggled',
+  ORDER_CREATED: 'order:created',
+  ORDER_STATUS_CHANGED: 'order:updated',
+  KILL_SWITCH_TOGGLED: 'killswitch:toggled',
 }
