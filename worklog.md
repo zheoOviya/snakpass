@@ -7001,3 +7001,100 @@ Gateway / DB / Event State
 - Wave-3/4/5A CLOSED — immutable.
 - Next governance checkpoint: Orchestrator directive on 5C/Remediation OR Wave-6 (P0-06) OR Wave-7 (P0-07) OR Production. IDE will not begin any until separate explicit directive.
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5c-gate-review — Wave-5 Sub-Wave 5C (P0-03 Reconciliation Remediation) READ/PLAN-FIRST Gate Review
+
+Timestamp: 2026-08-16 (Orchestrator WAVE5-5C-P0-03-REMEDIATION-GATE directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized 5C READ/PLAN-FIRST Gate Review (Directive ID: `WAVE5-5C-P0-03-REMEDIATION-GATE`):
+1. READ repository/code/schema/docs relevant to reconciliation findings + CLOSED wave flows.
+2. Analyze actual 5B evidence artifacts (SQLite + PostgreSQL).
+3. For each M1-M17: determine detection meaning, root cause, whether remediation is necessary/deterministic/requires external state/requires human authorization, financial risk, idempotency risk, retry/concurrency risk, possibility of false repair, whether automatic remediation should be prohibited.
+4. Classify remediation candidates into CLASS A (safe deterministic), B (requires state verification), C (requires external Razorpay verification), D (requires human authorization), E (DO NOT automatically remediate).
+5. Design proposed remediation architecture (WITHOUT implementing).
+6. Define authorization boundary: Detection → Review → Authorization → Repair → Verification.
+7. Define mandatory safety invariants for 5C.
+8. Define mandatory evidence scenarios for future implementation.
+9. Define rollback/recovery requirements.
+10. Define concurrency and idempotency requirements.
+11. Determine for each mismatch class: automatic / semi-automatic / operator-approved / permanently detection-only.
+12. Produce `WAVE5_5C_REMEDIATION_GATE_REVIEW.md`.
+13. Append this worklog entry.
+14. STOP — do not interpret as implementation authorization.
+
+### Governance boundaries honored
+- ✅ READ/PLAN-FIRST ONLY — no implementation, no code changes, no schema changes, no migrations.
+- ✅ No financial mutation. No Razorpay API calls. No outbox enqueue. No status repair.
+- ✅ No feature-flag changes. No production deployment. No staging migration. No PostgreSQL evidence execution.
+- ✅ No Wave-6 / Wave-7. No reopening Wave-3/4/5A.
+- ✅ No 5C implementation.
+- ✅ Did NOT design "automatically repair every finding" — the majority of mismatch classes (13 of 17) are classified as NOT safe for automatic repair.
+
+### Work Log
+- Re-read 5B evidence artifacts:
+  - SQLite evidence (`evidence-E1-E6-sqlite-5b.json`): ok=true, 6/6 PASS, financialMutation=false.
+  - PostgreSQL evidence (`evidence-E1-E6-postgresql-5b-pg-ev.json`): ok=true, 6/6 PASS, orchestratorRequiredFields all true.
+  - Noted that 5B evidence exercised only 4 of 17 mismatch classes (M1, M9, M10, M12) via seeded anomalies. The remaining 13 are implemented but not exercised against real anomalies.
+- Re-read reconciliation.ts detectors (M1-M17) — all 17 detector signatures + severity assignments verified.
+- Re-read CLOSED wave mutation points:
+  - Capture route: Payment (CAPTURE_PENDING), Order (PAID), LedgerEntry (Dr/Cr), AuditLog, Outbox, IdempotencyKey — all inside withTransaction.
+  - Refund route: Refund (REFUND_PENDING), LedgerEntry (reversal Dr/Cr), AuditLog, Outbox, IdempotencyKey.
+  - Publisher: Payment/Refund status flips via conditional updateMany (race-safe).
+  - Webhook handler: WebhookEvent dedup via eventId + conditional Payment status updates.
+- Produced M1-M17 remediation classification:
+  - CLASS A (safe deterministic): 1 class (M16 — operational, not financial).
+  - CLASS B (requires state verification): 3 classes (M2, M7, M13 — ledger synthesis / webhook re-process, HIGH RISK).
+  - CLASS C (requires gateway verification): 3 classes (M3, M9, M10 — status mutation based on gateway truth).
+  - CLASS D (requires human authorization): 3 classes (M11-FAILED, M12, M14 — quarantine + manual review).
+  - CLASS E (DO NOT automatically remediate): 7 classes (M1, M4, M5, M6, M8, M15, M17 — accounting/forensic review only).
+- Designed proposed remediation architecture with 3 non-negotiable principles:
+  1. Re-validation before repair (finding may be stale).
+  2. Repair idempotency (crash + retry must NOT cause second financial mutation).
+  3. External gateway ambiguity = no automatic repair (escalate to human).
+- Defined 14 mandatory safety invariants (SI-1 through SI-14) for any future 5C implementation.
+- Defined 12 E-scenarios (E1-E12) for future evidence, with E9 (no money-state mutation for CLASS E) + E10 (concurrency) + E11 (scale) + E12 (gateway truth) as PostgreSQL-mandatory.
+- Defined rollback/recovery requirements (per-repair rollback, schema rollback, feature-flag rollback).
+- Defined concurrency + idempotency requirements (single-instance worker, conditional updates, RemediationAction unique constraint).
+- Produced `WAVE5_5C_REMEDIATION_GATE_REVIEW.md` — 13 sections including:
+  - §0 Executive Summary (CONDITIONAL GO recommendation).
+  - §1 Current-State Findings (5B evidence + CLOSED wave mutation points + 5B safety contract).
+  - §2 M1-M17 Remediation Classification (the core table — 5 classes, 17 mismatch classes).
+  - §3 Proposed Remediation Architecture (pipeline + 3 principles + per-class handlers).
+  - §4 Mandatory Safety Invariants (SI-1 through SI-14).
+  - §5 Authorization Boundaries (Detection → Review → Authorization → Repair → Verification).
+  - §6 Evidence Plan (E1-E12, 4 PostgreSQL-mandatory).
+  - §7 Rollback / Recovery Requirements.
+  - §8 Concurrency and Idempotency Requirements.
+  - §9 Risk Matrix (10 risks with mitigations).
+  - §10 Recommendation: CONDITIONAL GO (authorize M16 + M3/M9/M10 only; defer the rest).
+  - §11 Stop Point.
+  - §12 Per-Class Detailed Analysis (M1-M17, root cause + rationale for each classification).
+  - §13 D1-D12 Decision Summary.
+
+### Key decisions documented in the Gate Review
+- **Recommendation: CONDITIONAL GO.** Authorize implementation for only 4 of 17 mismatch classes:
+  - M16 (outbox lag — operational, not financial, zero money-state risk).
+  - M3 (missing capture status — status mutation based on gateway truth).
+  - M9 (stuck CAPTURE_PENDING — same pattern as M3, publisher idempotency prevents duplicate capture).
+  - M10 (stuck REFUND_PENDING — same pattern, 5A Option A semantics preserved on success).
+- **NOT authorized in initial 5C:** CLASS B (M2, M7, M13 — ledger synthesis HIGH RISK), CLASS D (M11-FAILED, M12, M14 — quarantine), CLASS E (M1, M4, M5, M6, M8, M15, M17 — never auto-repaired).
+- **Key architectural principle:** 5B proved detection safety. 5C must prove REPAIR safety. These are distinct safety boundaries. Detection safety does NOT transfer to repair safety.
+- **Feature flag:** `reconciliationAutoRepair` (default OFF) — even after 5C implementation, the flag starts OFF. Enablement is a separate Orchestrator decision.
+- **Three non-negotiable principles:** (1) Re-validation before repair, (2) Repair idempotency, (3) External gateway ambiguity = no repair.
+
+### Stage Summary
+- **5C READ/PLAN-FIRST Gate Review: ✅ COMPLETE.**
+- `WAVE5_5C_REMEDIATION_GATE_REVIEW.md` produced (13 sections, M1-M17 classification, 14 safety invariants, 12 evidence scenarios, 10-risk matrix, CONDITIONAL GO recommendation).
+- **Recommendation: CONDITIONAL GO** — limited remediation for 4 explicitly approved classes (M16 + M3/M9/M10); majority (13 of 17) remain detection + operator review.
+- NO code modified. NO schema changed. NO evidence run. NO production touched.
+- Wave-3/4/5A CLOSED — immutable. 5C does not touch them.
+- `realPayments` / `webhookHandler` / `requestHashEnforcement` remain OFF.
+- `reconciliationAutoRepair` does not exist yet (would default to OFF if implemented).
+- Wave-6 / Wave-7 remain LOCKED.
+- Next governance checkpoint: Orchestrator decision on 5C implementation authorization (separate directive required). The Orchestrator may authorize 5C implementation for the 4 CONDITIONAL GO classes, modify the scope, defer 5C entirely, or reject the plan.
+- IDE is STOPPING after commit + push. Awaiting Orchestrator decision.
