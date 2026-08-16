@@ -6312,3 +6312,65 @@ Stage Summary:
 - P0-03 (Reconciliation) NOT started — separate evidence package required.
 - Wave-6/7 NOT started.
 - IDE is STOPPING. Awaiting Orchestrator S5 review of P0-04 evidence package.
+
+---
+
+## Task ID: 5a-postgresql-evidence — Wave-5 5a PostgreSQL Evidence Pipeline (P0-04)
+
+Timestamp: 2026-08-16T10:21Z (UTC)
+
+### Objective
+Monitor the Wave-5 5a staging migration, then trigger + capture the PostgreSQL
+refund-flow (P0-04) E1-E5 evidence workflow and persist the evidence JSON locally.
+
+### Pipeline execution
+
+1. **Staging migration run** (id: 31941312885)
+   - Workflow: "Wave-5 5a — Apply Staging Migration"
+   - Polled status → `completed`, conclusion → `success`.
+
+2. **Triggered PostgreSQL evidence workflow_dispatch**
+   - Endpoint: `/actions/workflows/subwave-5a-postgresql-evidence.yml/dispatches`
+   - Inputs: `staging_url=https://snakpass-eqkarf10s-snakzap.vercel.app`,
+     `confirm=RUN-5A-PG-EVIDENCE`, `ref=main`
+   - Dispatch returned HTTP 204 (accepted).
+
+3. **PostgreSQL evidence run** (id: 31941354942, job id: 95150920760)
+   - Workflow name: "Wave-5 5a — PostgreSQL Refund Flow (P0-04) Evidence"
+   - Job name: "5a-PG — P0-04 Refund flow E1-E5 verification on PostgreSQL"
+   - Final status: `completed`, conclusion: `success`.
+   - Job logs downloaded (79875 bytes); 2 occurrences of the
+     `=== Evidence JSON ===` marker found. 2nd occurrence (the final,
+     authoritative block at line 824) extracted and parsed.
+
+### Evidence captured
+- File: `/home/z/my-project/evidence/wave5-5a/evidence-postgresql-5a-pg-ev.json`
+- `ok` : **true**
+- `database` : postgresql
+- `evidenceType` : refund-flow-e1-e5-postgresql
+- `runId` : 5a-pg-1786875651-1765
+- E1 (refund returns REFUND_PENDING) → **PASS**
+- E2 (atomic writes — reversal Dr/Cr + AuditLog + Outbox in same txn) → **PASS**
+  (reversalDrCount=1, reversalCrCount=1, auditPendingCount=1,
+   outboxStatus=PENDING, ledgerBalanceIntact=true, Dr/Cr sums both 64000)
+- E3 (idempotency preserved — same key → same Refund) → **PASS**
+- E4 (concurrent refund requests → exactly 1 Refund) → **PASS**
+- E5 (publisher retry → no duplicate refund) → **PASS**
+  (firstRunRefundCalled=true, secondRunRefundCalled=false,
+   secondRunIdempotencySkipped=true, finalRefundStatus=REFUNDED,
+   outboxStatus=PUBLISHED, ledgerBalanceIntact=true)
+- Invariant (TRANSACTION_RETRY_INVARIANT): preserved — first run called refund,
+  second run skipped, duplicate prevented = true.
+
+### Governance safeguards honored
+- ✅ realPayments remained **OFF** (`governance.realPaymentsEnabled = false`;
+  demo mode — refundRazorpayPayment returns mock success).
+- ✅ productionTouched = false — no production traffic touched.
+- ✅ Did NOT enable realPayments.
+- ✅ Did NOT start P0-03 (separate evidence package required).
+- ✅ Did NOT self-close 5a (Wave-5 5a remains open for Orchestrator S5 review).
+
+### Next actions
+- Evidence JSON committed + pushed to `main` (evidence/ + this worklog update).
+- Wave-5 5a remains OPEN pending Orchestrator S5 review of PostgreSQL evidence.
+- Awaiting Orchestrator decision on Wave-5 5a closure + transition to next wave.
