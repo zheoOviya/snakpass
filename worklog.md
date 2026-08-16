@@ -6896,3 +6896,108 @@ Wave-5
 - Remediation LOCKED. Production NOT AUTHORIZED. realPayments/webhookHandler/requestHashEnforcement OFF. Wave-6/7 LOCKED.
 - Next governance checkpoint: Orchestrator's explicit `S5 PASS / CLOSED` directive on Sub-Wave 5b.
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5b-s5-closure — Wave-5 Sub-Wave 5B (P0-03 Reconciliation) S5 PASS / CLOSED
+
+Timestamp: 2026-08-16 (Orchestrator S5 PASS / CLOSED directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator's `S5 PASS / CLOSED` directive for Sub-Wave 5B (Directive ID: `S5-5B-P0-03-CLOSE`). Documentation-only closure — no code/schema/evidence changes. Preserve the distinction that 5B closure applies ONLY to the detection-only P0-03 reconciliation scope. Remediation (5C) remains LOCKED.
+
+### Directive
+- **Directive ID:** `S5-5B-P0-03-CLOSE`
+- **Decision:** `S5 PASS / CLOSED`
+- **Scope:** Sub-Wave 5B — P0-03 Reconciliation, detection-only
+- **Closure basis:** Completed evidence package (SQLite E1-E6 + PostgreSQL E1-E6 + E4/E5/E6 mandatory checks all PASS)
+
+### Evidence basis for closure (preserved — NOT regenerated)
+- **SQLite E1-E6:** ✅ 6/6 PASS (run ID `5b-1786883048869-4c4c6000`, artifact `evidence/wave5-5b/evidence-E1-E6-sqlite-5b.json`, commit `ad68438`)
+- **PostgreSQL E1-E6:** ✅ 6/6 PASS (run ID `5b-1786884398113-2f46649b`, artifact `evidence/wave5-5b/evidence-E1-E6-postgresql-5b-pg-ev.json`, GitHub Actions run `31947883826`, commit `0d72b56`)
+- **E4 safety result:** ✅ `moneyStateMutated=false`, `financialMutation=false`, `moneyStateDiffs=[]` (0 diffs across Payment/Refund/LedgerEntry/Outbox/WebhookEvent/IdempotencyKey/AuditLog on both SQLite + PostgreSQL)
+- **E5 concurrency result:** ✅ `concurrentRuns=2`, `duplicateFindings=0`, `findingsForEntity=1` (real PostgreSQL row-level locking)
+- **E6 scale result:** ✅ `scaleCount=1000`, `runtimeMs=2331` (< 30000ms SLA), `allSeededFound=true`, `falsePositives=0`
+- **M1-M17:** ✅ implemented, all read-only (batch-optimized queries)
+- **Detection-only boundary:** ✅ verified — no writes to money-state tables
+- **Staging migration:** ✅ Class-2 additive (run id `31947683640`) — existing Wave-3/4/5A tables untouched
+
+### Closure scope (critical distinction)
+5B closure applies ONLY to the detection-only P0-03 reconciliation scope. It does NOT authorize:
+- ❌ Automatic financial remediation
+- ❌ Payment / Refund / LedgerEntry / Outbox / WebhookEvent / IdempotencyKey / AuditLog mutation
+- ❌ Razorpay API calls from reconciliation
+- ❌ Automatic capture/refund/ledger correction/status repair
+- ❌ Production deployment / migration
+- ❌ Feature-flag activation (`realPayments`, `webhookHandler`, `requestHashEnforcement`)
+- ❌ Wave-6 / Wave-7
+
+The 5B final contract (closed):
+```text
+Gateway / DB / Event State
+          ↓
+      M1-M17
+          ↓
+ ReconciliationFinding
+          ↓
+ ExceptionQueue / Alert
+          ↓
+ Human / separately authorized remediation
+```
+
+**5B closed the capability to DETECT problems; it did NOT authorize automatically REPAIRING them.** Remediation (5C) is a separate authorization boundary.
+
+### Work Log
+- Verified git working tree clean + local HEAD (`cd016f9`) matches remote HEAD.
+- Read current `WAVE5_EVIDENCE.md` (header + §1 status table + §5b status + §6 governance state + §7 stop point) to identify exact lines to update.
+- Read current `WAVE5_5B_GATE_REVIEW.md` header to update.
+- Documentation closure edits (documentation-only — no code/schema/evidence changes):
+  - `WAVE5_EVIDENCE.md`:
+    - Header status → "Wave-5 COMPLETE / CLOSED — Sub-Wave 5a + 5b both S5 PASS / CLOSED. Remediation 🔒 LOCKED."
+    - Added `Sub-Wave 5b S5 Closure` line with Directive ID `S5-5B-P0-03-CLOSE`.
+    - Production boundary line → "5a + 5b are CLOSED — no reopen without Orchestrator authorization. Remediation (5C) is LOCKED — separate authorization boundary."
+    - §1 status table → 5b row changed from "🔒 LOCKED" to "✅ S5 PASS / CLOSED (SQLite E1-E6 PASS + PostgreSQL E1-E6 PASS; Directive ID S5-5B-P0-03-CLOSE)".
+    - §5b status → "✅ S5 PASS / CLOSED (Orchestrator Directive S5-5B-P0-03-CLOSE, 2026-08-16)" + closure scope blockquote.
+    - §6 → "Canonical Governance State (Authoritative — 5B S5 PASS / CLOSED)" + Orchestrator directive blockquote + 5B state "✅ S5 PASS / CLOSED (Directive ID: S5-5B-P0-03-CLOSE)" + Detection-only contract CLOSED.
+    - §7 → "Sub-Wave 5b is S5 PASS / CLOSED" + closure scope blockquote + preserved evidence record (NOT regenerated) + all S5 decision rule conditions met + mandatory boundary (remains explicitly unauthorized) + next governance checkpoint (5C/Wave-6/Wave-7/Production — all require separate Orchestrator directives).
+  - `WAVE5_5B_GATE_REVIEW.md`:
+    - Title → "Wave-5 Sub-Wave 5B — P0-03 Reconciliation: S5 PASS / CLOSED".
+    - Document type → "Gate Review (READ/PLAN-FIRST → IMPLEMENTATION → S5 PASS / CLOSED)".
+    - Orchestrator directive → "Sub-Wave 5B S5 PASS / CLOSED (Directive ID: S5-5B-P0-03-CLOSE, 2026-08-16). Closure applies ONLY to the detection-only P0-03 reconciliation scope. Remediation (5C) remains a separate authorization boundary."
+    - Governance update blockquote → S5 Closure narrative (READ/PLAN-FIRST → implementation → SQLite PASS → PostgreSQL PASS → S5 PASS / CLOSED directive).
+- Appended this `5b-s5-closure` worklog entry with all required fields.
+- Ran `bun run lint` → clean (documentation-only changes, no code modified).
+- Verified git diff: only `WAVE5_EVIDENCE.md`, `WAVE5_5B_GATE_REVIEW.md`, `worklog.md` changed. No `.env`, no SQLite DB, no tool-results, no source code changes.
+
+### Evidence preservation (per Orchestrator directive §B)
+- ✅ Did NOT delete, rewrite, regenerate, or fabricate existing evidence artifacts.
+- ✅ SQLite E1-E6 evidence JSON unchanged (`evidence/wave5-5b/evidence-E1-E6-sqlite-5b.json`).
+- ✅ PostgreSQL E1-E6 evidence JSON unchanged (`evidence/wave5-5b/evidence-E1-E6-postgresql-5b-pg-ev.json`).
+- ✅ Staging migration evidence unchanged (workflow run `31947683640`).
+- ✅ PostgreSQL evidence workflow run reference unchanged (run `31947883826`).
+- ✅ Existing 5A evidence unchanged (all prior commits intact).
+- ✅ Did NOT create a new evidence scenario (per directive §E — existing E1-E6 package is sufficient).
+
+### Git discipline (per Orchestrator directive §F)
+1. ✅ Verified `git status` (clean before edits).
+2. ✅ Confirmed only intended documentation/worklog changes staged.
+3. ✅ Did NOT stage: `.env`, SQLite database, transient tool results, generated temporary files, unrelated source changes.
+4. ✅ Ran `bun run lint` (clean — documentation-only).
+5. ✅ Committed with clear message: `Wave-5 5b: S5 PASS / CLOSED — P0-03 reconciliation detection`.
+6. ✅ Pushed only the intended closure commit to `main`.
+
+### Stage Summary
+- **Wave-5 Sub-Wave 5B (P0-03 Reconciliation) — S5 PASS / CLOSED.**
+- Directive ID: `S5-5B-P0-03-CLOSE`.
+- Closure scope: detection-only P0-03 reconciliation. Remediation NOT authorized.
+- All evidence artifacts preserved (not regenerated).
+- Documentation-only closure commit (no code/schema/evidence changes).
+- Wave-5 is now COMPLETE / CLOSED (both 5A and 5B).
+- Remediation (5C) LOCKED — separate authorization boundary.
+- Production NOT AUTHORIZED. `realPayments` OFF. `webhookHandler` OFF. `requestHashEnforcement` OFF.
+- Wave-6 / Wave-7 LOCKED.
+- Wave-3/4/5A CLOSED — immutable.
+- Next governance checkpoint: Orchestrator directive on 5C/Remediation OR Wave-6 (P0-06) OR Wave-7 (P0-07) OR Production. IDE will not begin any until separate explicit directive.
+- IDE is STOPPING after commit + push.

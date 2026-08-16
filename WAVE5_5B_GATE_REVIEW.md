@@ -1,12 +1,12 @@
-# Wave-5 Sub-Wave 5B — P0-03 Reconciliation: READ/PLAN-FIRST Gate Review
+# Wave-5 Sub-Wave 5B — P0-03 Reconciliation: S5 PASS / CLOSED
 
-**Document type:** Gate Review (READ/PLAN-FIRST — implementation NOW AUTHORIZED + executed).
+**Document type:** Gate Review (READ/PLAN-FIRST → IMPLEMENTATION → S5 PASS / CLOSED).
 **Author:** IDE (read-only synthesis from repository evidence).
-**Orchestrator directive:** Sub-Wave 5B IMPLEMENTATION AUTHORIZED (detection-only). Implementation COMPLETE + SQLite evidence E1-E6 PASS. PostgreSQL evidence pending Orchestrator trigger.
+**Orchestrator directive:** Sub-Wave 5B S5 PASS / CLOSED (Directive ID: `S5-5B-P0-03-CLOSE`, 2026-08-16). Closure applies ONLY to the detection-only P0-03 reconciliation scope. Remediation (5C) remains a separate authorization boundary.
 **Created:** 2026-08-16
 **Scope:** P0-03 — Payment reconciliation (gateway ↔ ledger).
 
-> **Governance update:** This Gate Review was originally READ/PLAN-FIRST (no implementation). The Orchestrator subsequently authorized implementation (detection-only model per §7.1). Implementation is now COMPLETE. SQLite evidence E1-E6 all PASS (6/6). PostgreSQL evidence workflow committed; pending Orchestrator trigger. See `WAVE5_EVIDENCE.md` §5 for the full implementation + evidence record.
+> **S5 Closure (Orchestrator Directive `S5-5B-P0-03-CLOSE`):** This Gate Review was originally READ/PLAN-FIRST (no implementation). The Orchestrator subsequently authorized implementation (detection-only model per §7.1). Implementation COMPLETE + SQLite evidence E1-E6 PASS (6/6) + PostgreSQL evidence E1-E6 PASS (6/6) on staging Supabase. Orchestrator issued `S5 PASS / CLOSED` directive on 2026-08-16. The closure applies ONLY to the detection-only scope — remediation, financial repair, and production deployment remain explicitly unauthorized. See `WAVE5_EVIDENCE.md` §5 + §6 + §7 for the full implementation + evidence + closure record.
 
 > **Orchestrator constraint honored:** P0-03's automatic financial correction is NOT self-authorized. The review explicitly separates detection (read-only) from remediation (mutation), and flags any remediation path as a separate authorization boundary (see D6, D7, §7).
 

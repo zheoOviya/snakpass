@@ -1,14 +1,15 @@
 # Wave-5 Evidence Document
 
-**Status:** ✅ Sub-Wave 5a (P0-04 Refund) — S5 PASS / CLOSED. Sub-Wave 5b (P0-03 Reconciliation) 🔒 LOCKED (separate authorization required).
+**Status:** ✅ Wave-5 COMPLETE / CLOSED — Sub-Wave 5a (P0-04 Refund) + Sub-Wave 5b (P0-03 Reconciliation) both S5 PASS / CLOSED. Remediation 🔒 LOCKED (separate authorization boundary).
 **Created:** 2026-08-16
 **Sub-Wave 5a Implementation:** 2026-08-16 (IDE — task ID `wave5a-p0-04-refund`)
 **Sub-Wave 5a S5 Closure:** 2026-08-16 (Orchestrator Decision — 5A S5 PASS / CLOSED)
-**Authorization:** Orchestrator Decision — Wave-5 AUTHORIZED (P0-04 Refund + P0-03 Reconciliation). P0-04 IMPLEMENTED FIRST.
+**Sub-Wave 5b S5 Closure:** 2026-08-16 (Orchestrator Decision — 5B S5 PASS / CLOSED; Directive ID `S5-5B-P0-03-CLOSE`)
+**Authorization:** Orchestrator Decision — Wave-5 AUTHORIZED (P0-04 Refund + P0-03 Reconciliation). Both sub-waves CLOSED.
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence. Each row reflects actual evidence artifacts committed to the repo and (for PostgreSQL) actual GitHub Actions runs against the staging Supabase database.
 
-> **Production boundary:** `realPayments` remains OFF (demo mode). `webhookHandler` remains OFF. `requestHashEnforcement` remains OFF. No production flag activation. No Wave-6/7. 5a is CLOSED — no reopen without Orchestrator authorization. 5b is LOCKED — separate authorization required.
+> **Production boundary:** `realPayments` remains OFF (demo mode). `webhookHandler` remains OFF. `requestHashEnforcement` remains OFF. No production flag activation. No Wave-6/7. 5a + 5b are CLOSED — no reopen without Orchestrator authorization. Remediation (5C) is LOCKED — separate authorization boundary.
 
 ---
 
@@ -17,7 +18,7 @@
 | Sub-Wave | Scope | Status |
 |----------|-------|--------|
 | 5a | P0-04 Refund flow (mirror of 4c capture pattern) | ✅ **S5 PASS / CLOSED** (SQLite E1-E5 PASS + PostgreSQL E1-E5 PASS + PostgreSQL E6 PASS) |
-| 5b | P0-03 Reconciliation | 🔒 LOCKED — separate Orchestrator authorization REQUIRED (NOT started) |
+| 5b | P0-03 Reconciliation (detection-only) | ✅ **S5 PASS / CLOSED** (SQLite E1-E6 PASS + PostgreSQL E1-E6 PASS; Directive ID `S5-5B-P0-03-CLOSE`) |
 
 ---
 
@@ -219,9 +220,11 @@ The S5 governance bar requires that the refund flow be deterministic across the 
 
 ## 5. Sub-Wave 5b — P0-03 Reconciliation (Detection-Only)
 
-**Status:** 🟡 IMPLEMENTED + SQLite evidence E1-E6 PASS. PostgreSQL evidence pending Orchestrator workflow trigger.
+**Status:** ✅ S5 PASS / CLOSED (Orchestrator Directive `S5-5B-P0-03-CLOSE`, 2026-08-16).
 
-**Authorization:** Orchestrator Decision — 5B IMPLEMENTATION AUTHORIZED (detection-only model). Remediation 🔒 NOT AUTHORIZED (separate boundary).
+**Authorization:** Orchestrator Decision — 5B IMPLEMENTATION AUTHORIZED (detection-only model). Implementation COMPLETE + SQLite E1-E6 PASS + PostgreSQL E1-E6 PASS + S5 PASS / CLOSED. Remediation 🔒 NOT AUTHORIZED (separate boundary — 5C).
+
+> **Closure scope:** 5B closure applies ONLY to the detection-only P0-03 reconciliation scope. It does NOT authorize remediation, financial repair, or production deployment. See §5b Governance safeguards below + §6/§7.
 
 > **Orchestrator hard boundary:** The reconciliation worker NEVER writes to Payment, Refund, LedgerEntry, Outbox, WebhookEvent, IdempotencyKey, or AuditLog. It NEVER makes external Razorpay API calls. It NEVER triggers capture / refund / outbox enqueue. It NEVER performs automatic financial correction. Its job is: detect → classify → record → report.
 
@@ -343,9 +346,9 @@ Per-scenario results (PostgreSQL, staging Supabase):
 
 ---
 
-## 6. Canonical Governance State (Authoritative — Evidence ≠ Closure)
+## 6. Canonical Governance State (Authoritative — 5B S5 PASS / CLOSED)
 
-> **Governance rule (Orchestrator directive):** Evidence PASS is a factual claim about the evidence artifacts. It is NOT governance closure. The canonical state below is authoritative — 5B is **EVIDENCE-COMPLETE**, not CLOSED. S5 closure requires an explicit Orchestrator `S5 PASS / CLOSED` directive. The IDE does NOT self-close sub-waves.
+> **Orchestrator Directive `S5-5B-P0-03-CLOSE` (2026-08-16):** Sub-Wave 5B is S5 PASS / CLOSED. The closure applies ONLY to the detection-only P0-03 reconciliation scope. It does NOT authorize remediation, financial repair, or production deployment. Remediation (5C) remains a separate authorization boundary. The IDE does NOT self-authorize remediation.
 
 ```text
 Wave-0        ✅ CLOSED
@@ -363,19 +366,18 @@ Wave-5
               ├─ E5 ✅ Publisher retry / no duplicate refund (SQLite + PostgreSQL)
               └─ E6 ✅ Failure → retry + pending-ledger semantics (SQLite + PostgreSQL)
 
-  5B          🟡 EVIDENCE-COMPLETE (NOT CLOSED — awaiting Orchestrator S5 directive)
+  5B          ✅ S5 PASS / CLOSED (Directive ID: S5-5B-P0-03-CLOSE)
               ├─ P0-03 Reconciliation (detection-only)
-              ├─ 17 mismatch classes (M1-M17)
+              ├─ M1-M17 detection
               ├─ Class-2 additive schema (ReconciliationRun + ReconciliationFinding)
               ├─ SQLite E1-E6       ✅ (6/6 PASS)
               ├─ PostgreSQL E1-E6   ✅ (6/6 PASS)
               ├─ E4 safety          ✅ (moneyStateMutated=false, financialMutation=false)
               ├─ E5 concurrency     ✅ (duplicateFindings=0, real PostgreSQL row-level locking)
               ├─ E6 scale           ✅ (1000 payments, 2331ms < 30s SLA, falsePositives=0)
-              ├─ Detection-only     ✅ (no writes to money-state tables)
-              └─ S5 closure         ⏳ ORCHESTRATOR DECISION (evidence PASS ≠ governance closure)
+              └─ Detection-only contract CLOSED
 
-  Remediation  🔒 LOCKED — separate authorization boundary
+  Remediation  🔒 LOCKED — separate authorization boundary (5C)
 
 Production               🚫 NOT AUTHORIZED
 realPayments             🚫 OFF
@@ -390,23 +392,23 @@ Wave-7                   🔒 LOCKED (P0-07 Pickup Attribution)
 
 ## 7. Stop Point
 
-Sub-Wave 5b is **EVIDENCE-COMPLETE** (NOT CLOSED). The IDE is STOPPING — awaiting the Orchestrator's explicit `S5 PASS / CLOSED` directive.
+Sub-Wave 5b is **S5 PASS / CLOSED** (Orchestrator Directive `S5-5B-P0-03-CLOSE`). Wave-5 is now COMPLETE / CLOSED (both 5A and 5B). The IDE is STOPPING.
 
-> **Governance clarification (Orchestrator directive):** Evidence PASS ≠ governance closure. The evidence conditions for S5 are factually met (see the S5 decision rule below), but closure is a separate Orchestrator decision. The IDE does NOT self-close sub-waves. The canonical governance state in §6 above is authoritative.
+> **Closure scope (Orchestrator directive):** 5B closure applies ONLY to the detection-only P0-03 reconciliation scope. The IDE does NOT self-authorize remediation, financial repair, or production deployment. Remediation (5C) remains a separate authorization boundary.
 
-**Evidence record (factual — not a closure claim):**
+**Evidence record (preserved — NOT regenerated):**
 - 5b implementation is COMPLETE (detection-only model, 17 mismatch classes, Class-2 additive schema, mini-service, evidence endpoints).
 - SQLite evidence E1-E6 all PASS (6/6), including the CRITICAL E4 safety property (no money-state mutation).
 - PostgreSQL evidence E1-E6 all PASS (6/6) on staging Supabase, including the 3 PostgreSQL-mandatory scenarios:
   - E4 (CRITICAL SAFETY): `moneyStateMutated=false`, `financialMutation=false`, `moneyStateDiffs=[]`.
   - E5 (concurrency): 2 concurrent runs → 1 finding, `duplicateFindings=0`.
   - E6 (scale): 1000 payments + 3 anomalies, runtime 2331ms (< 30000ms SLA), `falsePositives=0`.
-- 5b remains **OPEN** — EVIDENCE-COMPLETE, awaiting Orchestrator S5 directive.
-- Remediation (automatic repair) is LOCKED — separate authorization boundary.
+- 5b is **CLOSED** — S5 PASS / CLOSED per Orchestrator Directive `S5-5B-P0-03-CLOSE`.
+- Remediation (automatic repair) is LOCKED — separate authorization boundary (5C).
 - Wave-6 / Wave-7 remain LOCKED.
 - Production remains NOT AUTHORIZED. All production flags remain OFF.
 
-**S5 decision rule (Orchestrator's criteria — evidence status):**
+**S5 decision rule (Orchestrator's criteria — all conditions met):**
 ```text
 SQLite E1-E6       ✅ (6/6 PASS)
 PostgreSQL E1-E6   ✅ (6/6 PASS)
@@ -422,9 +424,18 @@ detection-only     ✅ (no writes to money-state tables)
 no remediation     ✅ (remediation LOCKED — separate boundary)
 ```
 
-The evidence conditions above are factually met. However, **5B is NOT CLOSED** — closure requires the Orchestrator's explicit `S5 PASS / CLOSED` directive. The IDE will not self-close 5B, will not start 5C/Remediation, will not start Wave-6/7, and will not authorize production until that directive is issued.
+**5B is CLOSED.** Remediation (5C) is NOT authorized by this closure.
 
-**Next governance checkpoint:** Orchestrator's explicit `S5 PASS / CLOSED` directive on Sub-Wave 5b. Even after closure: `5C/Remediation 🔒 NOT AUTHORIZED`, `Production 🚫 NOT AUTHORIZED`, `realPayments 🚫 OFF`, `Wave-6 🔒 LOCKED`, `Wave-7 🔒 LOCKED`.
+**Mandatory boundary (remains explicitly unauthorized):**
+- ❌ writes to `Payment`, `Refund`, `LedgerEntry`, `Outbox`, `WebhookEvent`, `IdempotencyKey`, `AuditLog`
+- ❌ Razorpay API calls from reconciliation
+- ❌ automatic capture/refund
+- ❌ automatic ledger correction
+- ❌ automatic status repair
+- ❌ production deployment / migration
+- ❌ feature-flag activation (`realPayments`, `webhookHandler`, `requestHashEnforcement`)
+
+**Next governance checkpoint:** Orchestrator directive on 5C/Remediation (separate authorization boundary) OR Wave-6 (P0-06 State Separation) OR Wave-7 (P0-07 Pickup Attribution) OR Production. The IDE will not begin any of these until a separate explicit Orchestrator directive is issued.
 
 ---
 
