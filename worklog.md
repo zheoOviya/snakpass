@@ -5996,3 +5996,85 @@ Stage Summary:
 - Workflow run: https://github.com/zheoOviya/snakpass/actions/runs/31925497313 (conclusion: success).
 - realPayments remains OFF (demo mode). webhookHandler OFF. requestHashEnforcement OFF. Wave-5 NOT started. Production NOT touched.
 - STOP: IDE is not self-closing 4c. Awaiting Orchestrator S5 decision.
+
+---
+
+## Task: 4c-e5-postgresql-evidence — Monitor + extract Wave-4 4c-E5 PostgreSQL evidence (run 31927563085)
+
+**Task ID:** 4c-e5-postgresql-evidence
+**Timestamp:** 2026-08-16 (UTC)
+**Operator:** Sub-agent (general-purpose)
+**Workflow run:** https://github.com/zheoOviya/snakpass/actions/runs/31927563085
+**Job URL:** https://github.com/zheoOviya/snakpass/actions/runs/31927563085/job/95117372317
+**Job ID:** 95117372317
+**Workflow name:** Wave-4 4c-E5 — PostgreSQL Publisher Retry / Duplicate-Capture Evidence
+**Repo:** zheoOviya/snakpass  (branch: main, head_sha: 87ad484e750fd5834e7e1f2c6817b8232a2638b7)
+
+### 1. Monitoring
+- Polled `GET /repos/zheoOviya/snakpass/actions/runs/31927563085` every 20 s (max 15 min).
+- Iterations:
+  - iter=1 (04:50:51Z): status=in_progress, conclusion=
+  - iter=2 (04:51:11Z): status=in_progress, conclusion=
+  - iter=3 (04:51:32Z): status=in_progress, conclusion=
+  - iter=4 (04:51:52Z): status=completed, conclusion=success ✅
+- Completed in ~1 min 48 s (created 04:50:03Z, completed 04:51:45Z). No further polling needed.
+
+### 2. Conclusion: SUCCESS ✅
+- All 11 steps completed with conclusion=success:
+  1. Set up job ✅
+  2. Checkout ✅
+  3. Verify trigger ✅
+  4. Install dependencies ✅
+  5. Verify secrets present ✅
+  6. Set EVIDENCE_TEST_MODE=true on Vercel preview environment ✅
+  7. Trigger new Vercel deployment ✅
+  8. Use new deployment URL if available ✅
+  9. Run publisher-retry test (capture once → publisher retry → idempotency skip) ✅
+  10. Upload evidence artifact ✅
+  11. Post-run cleanup ✅
+- Artifact uploaded: `wave4-4c-e5-postgresql-evidence.zip` (Artifact ID 9258308031, 903 bytes), SHA256 `912a590f73364f9a767bfa42e61a64396971aa4383dc76764d5f0f6f2c2cc34a`.
+
+### 3. Evidence extraction (job logs)
+- Downloaded job logs via `GET /actions/jobs/95117372317/logs` with `-L` (redirect-following). Returned as plain UTF-8 text (with BOM), 66 754 bytes.
+- Located 2 occurrences of `=== Evidence JSON ===`:
+  - 1st (log line ~598): the shell `echo "=== Evidence JSON ==="` command (marker only, no payload).
+  - 2nd (log line ~679): the actual printed JSON output. Extracted per task spec (2nd occurrence).
+- Stripped GitHub Actions timestamp prefixes (`YYYY-MM-DDTHH:MM:SS.ffffffZ `), brace-depth-tracked to capture the complete object, validated via `json.loads` (parsed OK), and saved to:
+  `evidence/wave4-4c/evidence-E5-postgresql-4c-pg-ev.json` (1995 bytes, ok:true).
+- Evidence invariants CONFIRMED:
+  - ok: true ✅
+  - runId: 4c-E5-pg-1786855893-2906, timestamp: 2026-08-16T04:51:41Z
+  - wave: 4, subWave: 4c, evidenceType: publisher-retry-duplicate-capture-prevention, database: postgresql ✅
+  - stagingUrl: https://snakpass-maf3gxnkz-snakzap.vercel.app
+  - Test setup: paymentId=cmsvbv4jb0009l8047y6svajw, orderId=cmsvbv3zy0005l8042npx99i9, idempotencyKey=ev-4c-E5-pg-1786855894-25123, against staging PostgreSQL.
+  - Publisher runs:
+    - first: captureCalled=true, statusAfter=CAPTURED ✅ (capture happened on first run)
+    - second: captureCalled=false, idempotencySkipped=true ✅ (retry did NOT duplicate capture — idempotency check `Payment.status === CAPTURED` prevented second capture call)
+  - Database state after both runs:
+    - paymentStatus: CAPTURED (single, not re-captured)
+    - ledgerEntryCount: 2 (1 debit + 1 credit — exactly one Dr/Cr pair, no double-posting)
+    - ledgerDrCount: 1, ledgerCrCount: 1
+    - auditLogCount: 1 (exactly one PAYMENT_CAPTURED audit entry — no duplicates)
+    - idempotencyRecordCount: 1 (single idempotency record)
+  - invariant.duplicateCapturePrevented: true ✅
+  - invariant.firstRunCalledCapture: true, invariant.secondRunSkippedCapture: true ✅
+- Governance safeguards CONFIRMED in the evidence JSON (per project hard constraints):
+  - governance.realPaymentsEnabled: false ✅ (realPayments NOT enabled — demo mode)
+  - governance.productionTouched: false ✅
+  - governance.note: "4c-E5 evidence: publisher retry does NOT duplicate external capture. Test run against staging PostgreSQL. realPayments=false (demo mode). No production traffic touched."
+  - realPayments NOT enabled ✅. Wave-5 NOT started ✅. Production NOT touched ✅.
+
+### 4. Files changed
+- Added: `evidence/wave4-4c/evidence-E5-postgresql-4c-pg-ev.json` (1995 bytes, ok:true).
+- Modified: `worklog.md` (this entry appended).
+
+### 5. Commit & push
+- Will commit + push evidence JSON + this worklog entry to the repo (`git add` + `commit` + `push` to `main`).
+
+### Stage Summary
+- Wave-4 4c-E5 PostgreSQL publisher-retry / duplicate-capture-prevention evidence PASSED on real staging PostgreSQL.
+- Publisher retry (simulating an at-least-once message broker redelivery) does NOT produce a duplicate external capture: the second publisher run detects `Payment.status === CAPTURED` and skips the capture call, leaving exactly one capture, one Dr/Cr ledger pair, one PAYMENT_CAPTURED audit log entry, and one idempotency record.
+- Evidence artifact: `evidence/wave4-4c/evidence-E5-postgresql-4c-pg-ev.json` (ok:true, database:postgresql, runId:4c-E5-pg-1786855893-2906).
+- Workflow run: https://github.com/zheoOviya/snakpass/actions/runs/31927563085 (conclusion: success).
+- realPayments remains OFF (demo mode). Wave-5 NOT started. Production NOT touched.
+- STOP: IDE is not self-closing 4c. Awaiting Orchestrator S5 decision.
