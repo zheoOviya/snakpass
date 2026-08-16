@@ -5765,3 +5765,33 @@ Stage Summary:
 - Invariants verified by `ok:true`: Payment count=5 + LedgerEntry count=10 (5 Dr + 5 Cr) + Dr sum == Cr sum (balance intact) + no orphan LedgerEntries (global FK check) + all 5 captures succeeded
 - Next: ready for Orchestrator review. Workflow NOT triggered (will be triggered manually with `confirm=RUN-4B-PG-EVIDENCE` + staging_url input when 4b implementation is deployed)
 - Production NOT touched. realPayments OFF. No additional feature flags set.
+
+---
+Task ID: 4b-postgresql-evidence
+Agent: IDE (main)
+Task: Sub-Wave 4b PostgreSQL-native ledger balance evidence (P0-02)
+
+Work Log:
+- Extended payments/evidence-verify endpoint: +ledgerDrSum, +ledgerCrSum, +ledgerBalanceIntact, +orphanLedgerCount, +noOrphanLedgerEntries
+- No schema changes (LedgerEntry already complete from Wave-3a)
+- No migration needed
+- Wrote evidence runner (scripts/wave4-4b-evidence.mjs): 4 tests
+- Ran local SQLite evidence: 4/4 PASS (ok:true)
+  - E1: Ledger balance intact (Dr sum == Cr sum per Payment) ✅
+  - E2: No orphan ledger entries ✅
+  - E3: No phantom ledger (failed capture → 0 LedgerEntry) ✅
+  - E4: 5 concurrent captures → exactly 2 LedgerEntries (Dr+Cr) ✅
+- Created PostgreSQL workflow (.github/workflows/subwave-4b-postgresql-concurrent-evidence.yml)
+- Workflow run 31922913773: ALL STEPS PASSED ✅
+  - 5 concurrent captures with different idempotency keys → 5 Payments, 10 LedgerEntries
+  - Dr sum == Cr sum (balance intact), no orphan ledger entries
+  - ok: true, database: postgresql
+- Extracted evidence JSON: evidence/wave4-4b/evidence-postgresql-4b-pg-ev.json
+
+Stage Summary:
+- Sub-Wave 4b: ALL EVIDENCE CRITERIA PASS. PostgreSQL-native ledger balance PROVEN.
+- 5 concurrent captures → 5 Payments, 10 LedgerEntries (5 Dr + 5 Cr), Dr sum == Cr sum, no orphans
+- Evidence: evidence/wave4-4b/evidence-postgresql-4b-pg-ev.json (ok:true, database:postgresql)
+- NOT implemented: production deployment, 4c/4d, realPayments OFF, webhookHandler OFF
+- STOP: IDE is not self-closing 4b. Awaiting Orchestrator S5 decision.
+
