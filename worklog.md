@@ -6839,3 +6839,60 @@ All conditions for S5 PASS / CLOSED are met. The IDE does NOT self-close 5B — 
 - Wave-3/4/5A CLOSED — immutable. 5b is read-only w.r.t. their tables (E4 proves zero money-state mutation).
 - Next governance checkpoint: Orchestrator S5 PASS / CLOSED decision on Sub-Wave 5b.
 - IDE is STOPPING after commit + push. Awaiting Orchestrator S5 review.
+
+---
+
+## Task ID: 5b-governance-correction — Evidence ≠ Closure Governance Correction
+
+Timestamp: 2026-08-16 (Orchestrator governance clarification directive)
+
+Agent: main (IDE)
+
+### Task
+Apply the Orchestrator's governance correction: evidence PASS ≠ governance closure. The canonical governance state must be authoritative — 5B is "EVIDENCE-COMPLETE" with "S5 closure ⏳ ORCHESTRATOR DECISION", NOT closed. This is a documentation-only correction (no code/schema/evidence changes).
+
+### Governance correction (per Orchestrator directive)
+The Orchestrator identified a governance distinction that the IDE's prior evidence record blurred:
+
+- **IDE's prior record said:** "All conditions for S5 PASS / CLOSED are met." (a factual claim about the evidence)
+- **IDE's prior canonical state said:** "5B 🟡 ... Awaiting Orchestrator S5 PASS / CLOSED decision." (the authoritative governance status)
+- **Orchestrator's ruling:** The canonical state is authoritative. Evidence PASS ≠ governance closure. The IDE does NOT self-close sub-waves.
+
+The Orchestrator provided the exact canonical framing:
+```text
+Wave-5
+  5B  🟡 EVIDENCE-COMPLETE
+      ├─ SQLite E1-E6       ✅
+      ├─ PostgreSQL E1-E6   ✅
+      ├─ E4 safety          ✅
+      ├─ E5 concurrency     ✅
+      ├─ E6 scale           ✅
+      ├─ Detection-only     ✅
+      └─ S5 closure         ⏳ ORCHESTRATOR DECISION
+```
+
+### Work Log
+- Read current `WAVE5_EVIDENCE.md` §6 (Canonical Governance State) + §7 (Stop Point) to identify the lines that blurred evidence vs closure.
+- Corrected §6:
+  - Header changed from "Snapshot at 5b PostgreSQL Evidence Complete" → "Authoritative — Evidence ≠ Closure".
+  - Added governance rule blockquote at the top of §6: "Evidence PASS is a factual claim about the evidence artifacts. It is NOT governance closure. The canonical state below is authoritative — 5B is EVIDENCE-COMPLETE, not CLOSED. S5 closure requires an explicit Orchestrator S5 PASS / CLOSED directive. The IDE does NOT self-close sub-waves."
+  - Changed 5B state label from "🟡 IMPLEMENTED + SQLite E1-E6 PASS + PostgreSQL E1-E6 PASS" → "🟡 EVIDENCE-COMPLETE (NOT CLOSED — awaiting Orchestrator S5 directive)".
+  - Restructured the evidence lines to match the Orchestrator's exact framing (SQLite E1-E6 ✅, PostgreSQL E1-E6 ✅, E4 safety ✅, E5 concurrency ✅, E6 scale ✅, Detection-only ✅, S5 closure ⏳ ORCHESTRATOR DECISION).
+  - Added explicit note: "(evidence PASS ≠ governance closure)" on the S5 closure line.
+- Corrected §7:
+  - Header changed from "5b implementation is COMPLETE + ... PASS" → "5b is EVIDENCE-COMPLETE (NOT CLOSED)".
+  - Added governance clarification blockquote: "Evidence PASS ≠ governance closure. The evidence conditions for S5 are factually met (see the S5 decision rule below), but closure is a separate Orchestrator decision. The IDE does NOT self-close sub-waves. The canonical governance state in §6 above is authoritative."
+  - Renamed "Evidence record" section to clarify it is "factual — not a closure claim".
+  - Changed "5b remains OPEN for Orchestrator S5 review (all evidence complete)" → "5b remains OPEN — EVIDENCE-COMPLETE, awaiting Orchestrator S5 directive".
+  - Removed the line "If all conditions met → 5B CLOSED" (which implied automatic closure) and replaced with: "The evidence conditions above are factually met. However, 5B is NOT CLOSED — closure requires the Orchestrator's explicit S5 PASS / CLOSED directive. The IDE will not self-close 5B, will not start 5C/Remediation, will not start Wave-6/7, and will not authorize production until that directive is issued."
+- Appended this worklog entry.
+
+### Stage Summary
+- **Governance correction applied:** evidence PASS ≠ governance closure. The canonical governance state is authoritative.
+- **5B canonical status:** 🟡 EVIDENCE-COMPLETE (NOT CLOSED). S5 closure = ⏳ ORCHESTRATOR DECISION.
+- No code/schema/evidence changes — documentation-only correction.
+- All evidence artifacts remain intact (SQLite + PostgreSQL evidence JSONs unchanged).
+- The IDE does NOT self-close 5B.
+- Remediation LOCKED. Production NOT AUTHORIZED. realPayments/webhookHandler/requestHashEnforcement OFF. Wave-6/7 LOCKED.
+- Next governance checkpoint: Orchestrator's explicit `S5 PASS / CLOSED` directive on Sub-Wave 5b.
+- IDE is STOPPING after commit + push.

@@ -343,7 +343,9 @@ Per-scenario results (PostgreSQL, staging Supabase):
 
 ---
 
-## 6. Canonical Governance State (Snapshot at 5b PostgreSQL Evidence Complete)
+## 6. Canonical Governance State (Authoritative — Evidence ≠ Closure)
+
+> **Governance rule (Orchestrator directive):** Evidence PASS is a factual claim about the evidence artifacts. It is NOT governance closure. The canonical state below is authoritative — 5B is **EVIDENCE-COMPLETE**, not CLOSED. S5 closure requires an explicit Orchestrator `S5 PASS / CLOSED` directive. The IDE does NOT self-close sub-waves.
 
 ```text
 Wave-0        ✅ CLOSED
@@ -361,17 +363,17 @@ Wave-5
               ├─ E5 ✅ Publisher retry / no duplicate refund (SQLite + PostgreSQL)
               └─ E6 ✅ Failure → retry + pending-ledger semantics (SQLite + PostgreSQL)
 
-  5B          🟡 IMPLEMENTED + SQLite E1-E6 PASS + PostgreSQL E1-E6 PASS
+  5B          🟡 EVIDENCE-COMPLETE (NOT CLOSED — awaiting Orchestrator S5 directive)
               ├─ P0-03 Reconciliation (detection-only)
               ├─ 17 mismatch classes (M1-M17)
               ├─ Class-2 additive schema (ReconciliationRun + ReconciliationFinding)
-              ├─ E1 ✅ Ledger imbalance detection (SQLite + PostgreSQL)
-              ├─ E2 ✅ Stuck payment/refund + orphan outbox detection (SQLite + PostgreSQL)
-              ├─ E3 ✅ Reconciliation idempotency (SQLite + PostgreSQL)
-              ├─ E4 ✅ CRITICAL: no money-state mutation (SQLite + PostgreSQL)
-              ├─ E5 ✅ Concurrent runs — no duplicate findings (SQLite + PostgreSQL)
-              ├─ E6 ✅ Scale — 1000 payments + 3 anomalies within SLA (SQLite + PostgreSQL)
-              └─ Awaiting Orchestrator S5 PASS / CLOSED decision
+              ├─ SQLite E1-E6       ✅ (6/6 PASS)
+              ├─ PostgreSQL E1-E6   ✅ (6/6 PASS)
+              ├─ E4 safety          ✅ (moneyStateMutated=false, financialMutation=false)
+              ├─ E5 concurrency     ✅ (duplicateFindings=0, real PostgreSQL row-level locking)
+              ├─ E6 scale           ✅ (1000 payments, 2331ms < 30s SLA, falsePositives=0)
+              ├─ Detection-only     ✅ (no writes to money-state tables)
+              └─ S5 closure         ⏳ ORCHESTRATOR DECISION (evidence PASS ≠ governance closure)
 
   Remediation  🔒 LOCKED — separate authorization boundary
 
@@ -388,35 +390,41 @@ Wave-7                   🔒 LOCKED (P0-07 Pickup Attribution)
 
 ## 7. Stop Point
 
-Sub-Wave 5b implementation is COMPLETE + SQLite evidence E1-E6 PASS + PostgreSQL evidence E1-E6 PASS. The IDE is STOPPING — awaiting Orchestrator S5 review.
+Sub-Wave 5b is **EVIDENCE-COMPLETE** (NOT CLOSED). The IDE is STOPPING — awaiting the Orchestrator's explicit `S5 PASS / CLOSED` directive.
 
+> **Governance clarification (Orchestrator directive):** Evidence PASS ≠ governance closure. The evidence conditions for S5 are factually met (see the S5 decision rule below), but closure is a separate Orchestrator decision. The IDE does NOT self-close sub-waves. The canonical governance state in §6 above is authoritative.
+
+**Evidence record (factual — not a closure claim):**
 - 5b implementation is COMPLETE (detection-only model, 17 mismatch classes, Class-2 additive schema, mini-service, evidence endpoints).
 - SQLite evidence E1-E6 all PASS (6/6), including the CRITICAL E4 safety property (no money-state mutation).
 - PostgreSQL evidence E1-E6 all PASS (6/6) on staging Supabase, including the 3 PostgreSQL-mandatory scenarios:
   - E4 (CRITICAL SAFETY): `moneyStateMutated=false`, `financialMutation=false`, `moneyStateDiffs=[]`.
   - E5 (concurrency): 2 concurrent runs → 1 finding, `duplicateFindings=0`.
   - E6 (scale): 1000 payments + 3 anomalies, runtime 2331ms (< 30000ms SLA), `falsePositives=0`.
-- 5b remains OPEN for Orchestrator S5 review (all evidence complete — SQLite + PostgreSQL).
+- 5b remains **OPEN** — EVIDENCE-COMPLETE, awaiting Orchestrator S5 directive.
 - Remediation (automatic repair) is LOCKED — separate authorization boundary.
 - Wave-6 / Wave-7 remain LOCKED.
 - Production remains NOT AUTHORIZED. All production flags remain OFF.
 
-**Next governance checkpoint:** Orchestrator S5 PASS / CLOSED decision on Sub-Wave 5b (all evidence complete). The S5 decision rule per the Orchestrator directive:
+**S5 decision rule (Orchestrator's criteria — evidence status):**
 ```text
-SQLite E1-E6       ✅
-PostgreSQL E1-E6   ✅
+SQLite E1-E6       ✅ (6/6 PASS)
+PostgreSQL E1-E6   ✅ (6/6 PASS)
         +
-E4 no mutation     ✅
-E5 concurrency     ✅
-E6 scale           ✅
+E4 no mutation     ✅ (moneyStateMutated=false, financialMutation=false)
+E5 concurrency     ✅ (duplicateFindings=0)
+E6 scale           ✅ (1000 payments, 2331ms < 30s SLA, falsePositives=0)
         +
-17 detectors       ✅
+17 detectors       ✅ (M1-M17 implemented, all read-only)
         +
-detection-only     ✅
+detection-only     ✅ (no writes to money-state tables)
         +
-no remediation     ✅
+no remediation     ✅ (remediation LOCKED — separate boundary)
 ```
-If all conditions met → 5B CLOSED. Even after closure: `5C/Remediation 🔒 NOT AUTHORIZED`, `Production 🚫 NOT AUTHORIZED`, `realPayments 🚫 OFF`, `Wave-6 🔒 LOCKED`, `Wave-7 🔒 LOCKED`.
+
+The evidence conditions above are factually met. However, **5B is NOT CLOSED** — closure requires the Orchestrator's explicit `S5 PASS / CLOSED` directive. The IDE will not self-close 5B, will not start 5C/Remediation, will not start Wave-6/7, and will not authorize production until that directive is issued.
+
+**Next governance checkpoint:** Orchestrator's explicit `S5 PASS / CLOSED` directive on Sub-Wave 5b. Even after closure: `5C/Remediation 🔒 NOT AUTHORIZED`, `Production 🚫 NOT AUTHORIZED`, `realPayments 🚫 OFF`, `Wave-6 🔒 LOCKED`, `Wave-7 🔒 LOCKED`.
 
 ---
 
