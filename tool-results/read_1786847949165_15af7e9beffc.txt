@@ -1,0 +1,792 @@
+     1→     1→# =============================================================================
+     2→     2→# Wave-3 Sub-Wave 3a — PostgreSQL Concurrent-Idempotency Evidence (FINAL)
+     3→     3→# -----------------------------------------------------------------------------
+     4→     4→# Orchestrator-required evidence: run the 5-concurrent-request / same-idempotency-key
+     5→     5→# test against the ACTUAL staging PostgreSQL database (not SQLite).
+     6→     6→#
+     7→     7→# This workflow:
+     8→     8→#   1. Verifies the latest commit is deployed to staging Vercel
+     9→     9→#   2. Sets EVIDENCE_TEST_MODE=true on the Vercel preview/staging environment
+    10→    10→#   3. Runs the 5-concurrent-request test against the staging URL
+    11→    11→#   4. Verifies the database state directly via Supabase Management API (PostgreSQL)
+    12→    12→#   5. Captures P2002 behavior of losing concurrent transactions
+    13→    13→#   6. Generates self-validating evidence JSON (ok:true + required fields)
+    14→    14→#   7. Uploads the evidence as a GitHub Actions artifact
+    15→    15→#
+    16→    16→# Governance constraints (enforced in workflow):
+    17→    17→#   - realPayments MUST be false (verified)
+    18→    18→#   - No production Razorpay credentials used
+    19→    19→#   - No Webhook handler implementation (schema-only)
+    20→    20→#   - Sub-Wave 3b/3c NOT started
+    21→    21→#   - Production NOT touched
+    22→    22→#
+    23→    23→# Orchestrator-required JSON output:
+    24→    24→#   {
+    25→    25→#     "ok": true,
+    26→    26→#     "database": "postgresql",
+    27→    27→#     "concurrentRequests": 5,
+    28→    28→#     "uniquePaymentIds": 1,
+    29→    29→#     "paymentCount": 1,
+    30→    30→#     "ledgerPairCount": 1,
+    31→    31→#     "outboxEventCount": 1,
+    32→    32→#     "idempotencyRecordCount": 1
+    33→    33→#   }
+    34→    34→# =============================================================================
+    35→    35→
+    36→    36→name: Wave-3 3a — PostgreSQL Concurrent-Idempotency Evidence
+    37→    37→
+    38→    38→on:
+    39→    39→  workflow_dispatch:
+    40→    40→    inputs:
+    41→    41→      staging_url:
+    42→    42→        description: 'Staging URL (e.g. https://snakpass-<hash>-snakzap.vercel.app)'
+    43→    43→        required: true
+    44→    44→        default: 'https://snakpass-eqkarf10s-snakzap.vercel.app'
+    45→    45→      confirm:
+    46→    46→        description: 'Type RUN-3A-PG-EVIDENCE to confirm'
+    47→    47→        required: true
+    48→    48→        default: ''
+    49→    49→
+    50→    50→jobs:
+    51→    51→  postgresql-concurrent-evidence:
+    52→    52→    name: 3a-PG-E1 — 5 concurrent requests, same idempotency key, on PostgreSQL
+    53→    53→    runs-on: ubuntu-latest
+    54→    54→    timeout-minutes: 15
+    55→    55→    env:
+    56→    56→      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    57→    57→      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    58→    58→      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    59→    59→      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    60→    60→      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+    61→    61→      STAGING_URL: ${{ inputs.staging_url }}
+    62→    62→
+    63→    63→    steps:
+    64→    64→      - name: Checkout
+    65→    65→        uses: actions/checkout@v4
+    66→    66→
+    67→    67→      - name: Verify trigger
+    68→    68→        run: |
+    69→    69→          [ "${{ github.event.inputs.confirm }}" = "RUN-3A-PG-EVIDENCE" ] || { echo "❌ Wrong confirmation"; exit 1; }
+    70→    70→          echo "✅ Authorized — Wave-3 Sub-Wave 3a PostgreSQL Concurrent-Idempotency Evidence"
+    71→    71→
+    72→    72→      - name: Install dependencies
+    73→    73→        run: |
+    74→    74→          sudo apt-get update -qq && sudo apt-get install -y -qq jq curl
+    75→    75→          # Node.js is pre-installed on ubuntu-latest
+    76→    76→          node --version
+    77→    77→
+    78→    78→      - name: Verify secrets present
+    79→    79→        run: |
+    80→    80→          [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN NOT_SET"; exit 1; }
+    81→    81→          [ -n "$SUPABASE_DB_PASSWORD" ] || { echo "❌ SUPABASE_DB_PASSWORD NOT_SET"; exit 1; }
+    82→    82→          [ -n "$VERCEL_TOKEN" ] || { echo "❌ VERCEL_TOKEN NOT_SET"; exit 1; }
+    83→    83→          [ -n "$VERCEL_PROJECT_ID" ] || { echo "❌ VERCEL_PROJECT_ID NOT_SET"; exit 1; }
+    84→    84→          echo "✅ All required secrets present"
+    85→    85→
+    86→    86→      - name: Verify Supabase schema (Payment, LedgerEntry, IdempotencyKey, Outbox tables exist on PostgreSQL)
+    87→    87→        run: |
+    88→    88→          echo "=== Verifying 3a schema tables exist on staging PostgreSQL ==="
+    89→    89→          VERIFY_SQL='
+    90→    90→          SELECT
+    91→    91→            (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''Payment'\'') AS payment_table,
+    92→    92→            (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''LedgerEntry'\'') AS ledger_table,
+    93→    93→            (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''IdempotencyKey'\'') AS idempotency_table,
+    94→    94→            (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''Outbox'\'') AS outbox_table,
+    95→    95→            (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '\''Payment'\'' AND column_name = '\''idempotencyKey'\'') AS payment_idempotency_col,
+    96→    96→            (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '\''Order'\'' AND column_name = '\''paymentId'\'') AS order_payment_fk_col;
+    97→    97→          '
+    98→    98→          RESULT=$(curl -sS -X POST \
+    99→    99→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   100→   100→            -H "Content-Type: application/json" \
+   101→   101→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   102→   102→            -d "$(jq -n --arg q "$VERIFY_SQL" '{query: $q}')")
+   103→   103→          echo "$RESULT" | jq '.' 2>/dev/null || echo "$RESULT"
+   104→   104→          echo "=== Schema verification complete ==="
+   105→   105→
+   106→   106→      - name: Set EVIDENCE_TEST_MODE=true on Vercel preview environment
+   107→   107→        run: |
+   108→   108→          set +e  # Don't exit on individual failures — capture details
+   109→   109→          echo "=== Setting EVIDENCE_TEST_MODE=true on Vercel preview environment ==="
+   110→   110→          PROJECT_ID="$VERCEL_PROJECT_ID"
+   111→   111→          API_URL="https://api.vercel.com/v10/projects/$PROJECT_ID/env"
+   112→   112→          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+   113→   113→
+   114→   114→          echo "  Project ID: $PROJECT_ID"
+   115→   115→          echo "  API URL: $API_URL"
+   116→   116→
+   117→   117→          # Step 1: List existing env vars to verify token works + see if EVIDENCE_TEST_MODE exists
+   118→   118→          echo ""
+   119→   119→          echo "  === Listing existing env vars (verifying token access) ==="
+   120→   120→          LIST_RESP=$(curl -sS -w "\n%{http_code}" -H "$AUTH" "$API_URL")
+   121→   121→          LIST_HTTP=$(echo "$LIST_RESP" | tail -1)
+   122→   122→          LIST_BODY=$(echo "$LIST_RESP" | head -n -1)
+   123→   123→          echo "  List HTTP: $LIST_HTTP"
+   124→   124→          if [ "$LIST_HTTP" != "200" ]; then
+   125→   125→            echo "  ❌ Failed to list env vars (HTTP $LIST_HTTP)"
+   126→   126→            echo "  Response: $(echo $LIST_BODY | head -c 500)"
+   127→   127→            exit 1
+   128→   128→          fi
+   129→   129→          echo "  ✅ Token works — env vars listable"
+   130→   130→
+   131→   131→          # Show ALL env var keys (without values) for debugging
+   132→   132→          echo ""
+   133→   133→          echo "  === All env var keys (debug) ==="
+   134→   134→          echo "$LIST_BODY" | jq -r '.envs[]? | "  - key=\(.key) target=\(.target | join(",")) type=\(.type)"' 2>/dev/null | head -30
+   135→   135→
+   136→   136→          # Show existing EVIDENCE_TEST_MODE entries (if any)
+   137→   137→          echo ""
+   138→   138→          echo "  === Existing EVIDENCE_TEST_MODE entries ==="
+   139→   139→          echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE") | "  - id=\(.id) target=\(.target | join(",")) type=\(.type) value=\(.value // "(encrypted)")"' 2>/dev/null || echo "  (none)"
+   140→   140→
+   141→   141→          # Show existing NODE_ENV entries (if any)
+   142→   142→          echo ""
+   143→   143→          echo "  === Existing NODE_ENV entries ==="
+   144→   144→          echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "NODE_ENV") | "  - id=\(.id) target=\(.target | join(",")) type=\(.type) value=\(.value // "(encrypted)")"' 2>/dev/null || echo "  (none)"
+   145→   145→
+   146→   146→          # Remove existing EVIDENCE_TEST_MODE entries (both preview AND production)
+   147→   147→          # We set it on BOTH targets so any deployment (preview OR production) picks it up.
+   148→   148→          EXISTING_IDS=$(echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE") | .id' 2>/dev/null)
+   149→   149→          if [ -n "$EXISTING_IDS" ]; then
+   150→   150→            for EID in $EXISTING_IDS; do
+   151→   151→              echo "  ⚠️  Removing existing EVIDENCE_TEST_MODE id=$EID"
+   152→   152→              curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID" > /dev/null 2>&1
+   153→   153→            done
+   154→   154→          fi
+   155→   155→
+   156→   156→          # Step 2: Create EVIDENCE_TEST_MODE=true for BOTH preview AND production targets.
+   157→   157→          # We deploy to `preview` target (Step #8), but set on both for safety.
+   158→   158→          echo ""
+   159→   159→          echo "  === Creating EVIDENCE_TEST_MODE=true for preview+production targets ==="
+   160→   160→          CREATE_PAYLOAD='{"key":"EVIDENCE_TEST_MODE","value":"true","target":["preview","production"],"type":"plain"}'
+   161→   161→          echo "  Payload: $CREATE_PAYLOAD"
+   162→   162→
+   163→   163→          RESULT=$(curl -sS -w "\n%{http_code}" -X POST \
+   164→   164→            -H "$AUTH" \
+   165→   165→            -H "Content-Type: application/json" \
+   166→   166→            "$API_URL" \
+   167→   167→            -d "$CREATE_PAYLOAD")
+   168→   168→
+   169→   169→          RESULT_HTTP=$(echo "$RESULT" | tail -1)
+   170→   170→          RESULT_BODY=$(echo "$RESULT" | head -n -1)
+   171→   171→          echo "  Create HTTP: $RESULT_HTTP"
+   172→   172→          echo "  Create response: $RESULT_BODY" | head -c 500
+   173→   173→          echo ""
+   174→   174→
+   175→   175→          if echo "$RESULT_HTTP" | grep -qE "^(200|201)$" && echo "$RESULT_BODY" | jq -e '.created.id // .id' > /dev/null 2>&1; then
+   176→   176→            CREATED_ID=$(echo "$RESULT_BODY" | jq -r '.created.id // .id')
+   177→   177→            echo "  ✅ EVIDENCE_TEST_MODE=true configured for preview+production environments (id=$CREATED_ID)"
+   178→   178→          else
+   179→   179→            echo "  ❌ Failed to set EVIDENCE_TEST_MODE"
+   180→   180→            echo "  HTTP code: $RESULT_HTTP"
+   181→   181→            echo "  Response body: $RESULT_BODY"
+   182→   182→            exit 1
+   183→   183→          fi
+   184→   184→
+   185→   185→          # NOTE: NODE_ENV override was removed. The evidence-setup + evidence-verify
+   186→   186→          # endpoints now gate ONLY on EVIDENCE_TEST_MODE (not NODE_ENV). This is safe
+   187→   187→          # because EVIDENCE_TEST_MODE defaults to undefined/false everywhere and is
+   188→   188→          # only set by this evidence workflow on the staging Vercel project.
+   189→   189→
+   190→   190→          echo ""
+   191→   191→          echo "  Note: env var changes require a new deployment to take effect."
+   192→   192→
+   193→   193→      - name: Trigger new Vercel deployment (to pick up EVIDENCE_TEST_MODE env var)
+   194→   194→        run: |
+   195→   195→          set +e
+   196→   196→          echo "=== Triggering new Vercel deployment from main branch ==="
+   197→   197→          PROJECT_ID="$VERCEL_PROJECT_ID"
+   198→   198→          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+   199→   199→
+   200→   200→          # ------------------------------------------------------------------
+   201→   201→          # Step 0: Query the Vercel project to get the linked GitHub repo's
+   202→   202→          # numeric repoId (Vercel API v13/deployments REQUIRES gitSource.repoId
+   203→   203→          # when gitSource.type=github). This is needed for the Option B fallback.
+   204→   204→          # ------------------------------------------------------------------
+   205→   205→          echo ""
+   206→   206→          echo "  === Querying Vercel project for linked git source info ==="
+   207→   207→          PROJECT_RESP=$(curl -sS -w "\n%{http_code}" -H "$AUTH" \
+   208→   208→            "https://api.vercel.com/v9/projects/$PROJECT_ID")
+   209→   209→          PROJECT_HTTP=$(echo "$PROJECT_RESP" | tail -1)
+   210→   210→          PROJECT_BODY=$(echo "$PROJECT_RESP" | head -n -1)
+   211→   211→          echo "  Project query HTTP: $PROJECT_HTTP"
+   212→   212→          if [ "$PROJECT_HTTP" != "200" ]; then
+   213→   213→            echo "  ❌ Failed to query Vercel project (HTTP $PROJECT_HTTP)"
+   214→   214→            echo "  Response: $(echo "$PROJECT_BODY" | head -c 500)"
+   215→   215→            exit 1
+   216→   216→          fi
+   217→   217→          LINK_TYPE=$(echo "$PROJECT_BODY" | jq -r '.link.type // empty')
+   218→   218→          REPO_ID=$(echo "$PROJECT_BODY" | jq -r '.link.repoId // empty')
+   219→   219→          ORG=$(echo "$PROJECT_BODY" | jq -r '.link.org // empty')
+   220→   220→          REPO=$(echo "$PROJECT_BODY" | jq -r '.link.repo // empty')
+   221→   221→          echo "  Linked git source:"
+   222→   222→          echo "    type:   $LINK_TYPE"
+   223→   223→          echo "    org:    $ORG"
+   224→   224→          echo "    repo:   $REPO"
+   225→   225→          echo "    repoId: $REPO_ID"
+   226→   226→
+   227→   227→          # Show recent READY preview deployments for context
+   228→   228→          echo ""
+   229→   229→          echo "  === Recent READY Vercel deployments (any target) ==="
+   230→   230→          LIST_DEPLOYS=$(curl -sS -H "$AUTH" \
+   231→   231→            "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&limit=5&state=READY")
+   232→   232→          echo "$LIST_DEPLOYS" | jq -r '.deployments[]? | "    - target=\(.target // "preview") url=\(.url) created=\(.createdAt) commit=\(.meta.githubCommitSha // "n/a" | .[0:8])"' 2>/dev/null | head -5
+   233→   233→
+   234→   234→          # ------------------------------------------------------------------
+   235→   235→          # Step 1: Trigger a PREVIEW deployment (NOT production).
+   236→   236→          #
+   237→   237→          # Why preview (not production):
+   238→   238→          #   1. Production deployments on this Vercel project CANNOT reach
+   239→   239→          #      the Supabase pooler (verified — HTTP 503 'Can't reach database
+   240→   240→          #      server at aws-ap-northeast-1.pooler.supabase.com:6543' on the
+   241→   241→          #      production URL snakpass-dbp3ic55z-snakzap.vercel.app). Preview
+   242→   242→          #      deployments (like snakpass-eqkarf10s-snakzap.vercel.app)
+   243→   243→          #      CAN reach the DB — verified HTTP 200, latencyMs=12.
+   244→   244→          #   2. NODE_ENV=development env var was set in Step #7 above (target
+   245→   245→          #      preview+production). The evidence-setup endpoint guards on
+   246→   246→          #      `process.env.NODE_ENV === 'production'` and refuses to serve
+   247→   247→          #      in production mode. The new preview deployment should pick up
+   248→   248→          #      NODE_ENV=development (if Vercel honors the override).
+   249→   249→          #
+   250→   250→          # API note on `target` field:
+   251→   251→          #   - Vercel v13/deployments rejects `target=preview` with HTTP 400
+   252→   252→          #     "Invalid request: `target` should be 'production', 'staging',
+   253→   253→          #      or a custom environment identifier." (verified — see previous
+   254→   254→          #      workflow run 31890722345).
+   255→   255→          #   - To create a PREVIEW deployment, OMIT the `target` field
+   256→   256→          #     entirely. Vercel defaults to preview when target is absent.
+   257→   257→          #
+   258→   258→          # gitSource requirement:
+   259→   259→          #   - Vercel API REQUIRES gitSource.repoId (numeric GitHub repo ID)
+   260→   260→          #     when gitSource.type=github. The previous workflow's bug was
+   261→   261→          #     omitting repoId (HTTP 400 "gitSource missing required property
+   262→   262→          #     repoId"). We extract repoId from GET /v9/projects/$PROJECT_ID
+   263→   263→          #     link.repoId field (verified value: 1331058897 for zheoOviya/snakpass).
+   264→   264→          # ------------------------------------------------------------------
+   265→   265→          echo ""
+   266→   266→          echo "  === Triggering PREVIEW deployment (target field omitted) ==="
+   267→   267→          if [ -z "$REPO_ID" ] || [ "$REPO_ID" = "null" ]; then
+   268→   268→            echo "  ❌ Cannot trigger deployment — project has no linked repoId."
+   269→   269→            exit 1
+   270→   270→          fi
+   271→   271→          PAYLOAD=$(jq -n \
+   272→   272→            --arg name "snakpass" \
+   273→   273→            --arg type "$LINK_TYPE" \
+   274→   274→            --arg org "$ORG" \
+   275→   275→            --arg repo "$REPO" \
+   276→   276→            --argjson repoId "$REPO_ID" \
+   277→   277→            --arg ref "main" \
+   278→   278→            '{name:$name, gitSource:{type:$type, org:$org, repo:$repo, repoId:$repoId, ref:$ref}}')
+   279→   279→          echo "  Payload (note: no 'target' field => preview deployment):"
+   280→   280→          echo "$PAYLOAD" | jq '.' | sed 's/^/    /'
+   281→   281→
+   282→   282→          DEPLOY_RESP=$(curl -sS -w "\n%{http_code}" -X POST \
+   283→   283→            -H "$AUTH" \
+   284→   284→            -H "Content-Type: application/json" \
+   285→   285→            "https://api.vercel.com/v13/deployments" \
+   286→   286→            -d "$PAYLOAD")
+   287→   287→
+   288→   288→          DEPLOY_HTTP=$(echo "$DEPLOY_RESP" | tail -1)
+   289→   289→          DEPLOY_BODY=$(echo "$DEPLOY_RESP" | head -n -1)
+   290→   290→          echo "  Deploy HTTP: $DEPLOY_HTTP"
+   291→   291→          echo "  Deploy response (first 600 chars): $(echo "$DEPLOY_BODY" | head -c 600)"
+   292→   292→
+   293→   293→          DEPLOY_ID=$(echo "$DEPLOY_BODY" | jq -r '.id // empty')
+   294→   294→
+   295→   295→          DEPLOY_URL=$(echo "$DEPLOY_BODY" | jq -r '.url // empty')
+   296→   296→
+   297→   297→          if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
+   298→   298→            echo ""
+   299→   299→            echo "  ✅ Deployment triggered: id=$DEPLOY_ID, url=$DEPLOY_URL"
+   300→   300→            if [ -n "$DEPLOY_URL" ] && [ "$DEPLOY_URL" != "null" ]; then
+   301→   301→              NEW_STAGING_URL="https://$DEPLOY_URL"
+   302→   302→              echo "NEW_STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+   303→   303→              echo "  New staging URL: $NEW_STAGING_URL"
+   304→   304→            fi
+   305→   305→            echo "  Waiting for deployment to be READY..."
+   306→   306→            for i in $(seq 1 60); do
+   307→   307→              STATUS_RESP=$(curl -sS -H "$AUTH" "https://api.vercel.com/v13/deployments/$DEPLOY_ID")
+   308→   308→              STATUS=$(echo "$STATUS_RESP" | jq -r '.status // empty')
+   309→   309→              READY_STATE=$(echo "$STATUS_RESP" | jq -r '.readyState // empty')
+   310→   310→              echo "    [$i] status=$STATUS, readyState=$READY_STATE"
+   311→   311→              if [ "$READY_STATE" = "READY" ] || [ "$STATUS" = "READY" ]; then
+   312→   312→                echo "  ✅ Deployment is READY"
+   313→   313→                # Re-extract the URL in case it changed
+   314→   314→                FINAL_URL=$(echo "$STATUS_RESP" | jq -r '.url // empty')
+   315→   315→                if [ -n "$FINAL_URL" ] && [ "$FINAL_URL" != "null" ]; then
+   316→   316→                  NEW_STAGING_URL="https://$FINAL_URL"
+   317→   317→                  echo "NEW_STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+   318→   318→                  echo "  Final staging URL: $NEW_STAGING_URL"
+   319→   319→                fi
+   320→   320→                break
+   321→   321→              fi
+   322→   322→              if [ "$READY_STATE" = "ERROR" ] || [ "$STATUS" = "ERROR" ] || [ "$STATUS" = "CANCELED" ]; then
+   323→   323→                echo "  ❌ Deployment $READY_STATE"
+   324→   324→                # Don't exit — fall back to the latest READY deployment
+   325→   325→                break
+   326→   326→              fi
+   327→   327→              sleep 5
+   328→   328→            done
+   329→   329→          else
+   330→   330→            echo "  ⚠️ Could not trigger new deployment."
+   331→   331→            echo "  Falling back to querying the latest READY production deployment..."
+   332→   332→          fi
+   333→   333→
+   334→   334→          # If we don't have a new deployment URL yet, query for the latest READY production deployment
+   335→   335→          if [ -z "$NEW_STAGING_URL" ]; then
+   336→   336→            echo ""
+   337→   337→            echo "  === Querying latest READY production deployment ==="
+   338→   338→            # Wait a bit for any in-progress deploy to complete
+   339→   339→            sleep 30
+   340→   340→            LATEST=$(curl -sS -H "$AUTH" \
+   341→   341→              "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&limit=10&target=production&state=READY")
+   342→   342→            LATEST_URL=$(echo "$LATEST" | jq -r '.deployments[0].url // empty')
+   343→   343→            LATEST_COMMIT=$(echo "$LATEST" | jq -r '.deployments[0].meta.githubCommitSha // "unknown"')
+   344→   344→            LATEST_MSG=$(echo "$LATEST" | jq -r '.deployments[0].meta.githubCommitMessage // "unknown"' | head -c 80)
+   345→   345→            echo "  Latest READY production deployment:"
+   346→   346→            echo "    URL: https://$LATEST_URL"
+   347→   347→            echo "    Commit SHA: $LATEST_COMMIT"
+   348→   348→            echo "    Commit msg: $LATEST_MSG"
+   349→   349→
+   350→   350→            if [ -n "$LATEST_URL" ] && [ "$LATEST_URL" != "null" ]; then
+   351→   351→              NEW_STAGING_URL="https://$LATEST_URL"
+   352→   352→              echo "NEW_STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+   353→   353→              echo "  ✅ Using latest READY production deployment: $NEW_STAGING_URL"
+   354→   354→            fi
+   355→   355→          fi
+   356→   356→
+   357→   357→      - name: Use new deployment URL if available
+   358→   358→        run: |
+   359→   359→          if [ -n "$NEW_STAGING_URL" ]; then
+   360→   360→            echo "Using newly-triggered deployment URL: $NEW_STAGING_URL"
+   361→   361→            echo "STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+   362→   362→          else
+   363→   363→            echo "Using provided staging URL: $STAGING_URL"
+   364→   364→            echo "STAGING_URL=$STAGING_URL" >> $GITHUB_ENV
+   365→   365→          fi
+   366→   366→
+   367→   367→      - name: Verify staging health + realPayments=false + evidence endpoints deployed
+   368→   368→        run: |
+   369→   369→          STAGING_URL="${STAGING_URL%/}"
+   370→   370→          echo "=== Staging URL: $STAGING_URL ==="
+   371→   371→
+   372→   372→          # Retry the health check + evidence-setup endpoint a few times
+   373→   373→          # (new deployments may take a moment to be fully reachable)
+   374→   374→          READY=0
+   375→   375→          for attempt in $(seq 1 12); do
+   376→   376→            echo ""
+   377→   377→            echo "=== Attempt $attempt: Health check ==="
+   378→   378→            HEALTH=$(curl -sS -w "\n%{http_code}" "$STAGING_URL/api/health")
+   379→   379→            HEALTH_HTTP=$(echo "$HEALTH" | tail -1)
+   380→   380→            HEALTH_BODY=$(echo "$HEALTH" | head -n -1)
+   381→   381→            echo "  Health HTTP: $HEALTH_HTTP"
+   382→   382→            if [ "$HEALTH_HTTP" = "200" ]; then
+   383→   383→              echo "  Health body: $HEALTH_BODY" | head -c 200
+   384→   384→              echo ""
+   385→   385→              echo "  === Verify evidence-setup endpoint ==="
+   386→   386→              SETUP_RESP=$(curl -sS -w "\n%{http_code}" "$STAGING_URL/api/payments/evidence-setup?scenario=pre-flight")
+   387→   387→              SETUP_HTTP=$(echo "$SETUP_RESP" | tail -1)
+   388→   388→              SETUP_BODY=$(echo "$SETUP_RESP" | head -n -1)
+   389→   389→              echo "  evidence-setup HTTP: $SETUP_HTTP"
+   390→   390→              if [ "$SETUP_HTTP" = "200" ]; then
+   391→   391→                echo "  evidence-setup body: $SETUP_BODY" | head -c 200
+   392→   392→                echo ""
+   393→   393→                echo "✅ Evidence endpoints deployed + evidence test mode enabled"
+   394→   394→                READY=1
+   395→   395→                break
+   396→   396→              elif [ "$SETUP_HTTP" = "403" ]; then
+   397→   397→                echo "  ❌ Evidence test mode NOT enabled (403). Env var may not have propagated."
+   398→   398→              else
+   399→   399→                echo "  ⚠️ evidence-setup returned $SETUP_HTTP (expected 200). Latest commit may not be deployed yet."
+   400→   400→              fi
+   401→   401→            else
+   402→   402→              echo "  ⚠️ Health check failed (HTTP $HEALTH_HTTP)"
+   403→   403→            fi
+   404→   404→            echo "  Waiting 15s before retry..."
+   405→   405→            sleep 15
+   406→   406→          done
+   407→   407→
+   408→   408→          if [ "$READY" != "1" ]; then
+   409→   409→            echo ""
+   410→   410→            echo "❌ FAILED: Staging not ready or evidence endpoints not deployed after 12 attempts."
+   411→   411→            exit 1
+   412→   412→          fi
+   413→   413→
+   414→   414→      - name: Run 5-concurrent-request test + verify PostgreSQL state
+   415→   415→        env:
+   416→   416→          # Use STAGING_URL from GITHUB_ENV (set by the deploy-trigger step to
+   417→   417→          # the newly-deployed preview URL). Do NOT use inputs.staging_url here
+   418→   418→          # because that is the stale default URL that doesn't have the
+   419→   419→          # evidence endpoints deployed.
+   420→   420→          STAGING_URL: ${{ env.STAGING_URL }}
+   421→   421→        run: |
+   422→   422→          STAGING_URL="${STAGING_URL%/}"
+   423→   423→          RUN_ID="3a-pg-ev-$(date +%s)-$(echo $RANDOM | base64 | tr -dc 'a-z0-9' | head -c 8)"
+   424→   424→          EVIDENCE_FILE="wave3-3a-postgresql-evidence.json"
+   425→   425→
+   426→   426→          echo "=================================================="
+   427→   427→          echo "  Wave-3 Sub-Wave 3a — PostgreSQL Concurrent Evidence"
+   428→   428→          echo "  Run ID: $RUN_ID"
+   429→   429→          echo "  Staging URL: $STAGING_URL"
+   430→   430→          echo "  Database: PostgreSQL (Supabase staging)"
+   431→   431→          echo "=================================================="
+   432→   432→          echo ""
+   433→   433→
+   434→   434→          # --- Step 1: Setup test scenario (create user + session + order) ---
+   435→   435→          echo "=== Step 1: Setup test scenario ==="
+   436→   436→          SETUP_RESP=$(curl -sS -c /tmp/cookies.txt -b /tmp/cookies.txt "$STAGING_URL/api/payments/evidence-setup?scenario=concurrent")
+   437→   437→          echo "Setup response: $SETUP_RESP"
+   438→   438→
+   439→   439→          ORDER_ID=$(echo "$SETUP_RESP" | jq -r '.orderId')
+   440→   440→          USER_ID=$(echo "$SETUP_RESP" | jq -r '.userId')
+   441→   441→          SESSION_TOKEN=$(echo "$SETUP_RESP" | jq -r '.sessionToken')
+   442→   442→          CSRF_TOKEN=$(echo "$SETUP_RESP" | jq -r '.csrfToken')
+   443→   443→
+   444→   444→          if [ -z "$ORDER_ID" ] || [ "$ORDER_ID" = "null" ]; then
+   445→   445→            echo "❌ Failed to create test order"
+   446→   446→            exit 1
+   447→   447→          fi
+   448→   448→          echo "✅ Created test order: $ORDER_ID (user: $USER_ID)"
+   449→   449→
+   450→   450→          IDEMPOTENCY_KEY="ev-pg-concurrent-$(date +%s)-$(echo $RANDOM | tr -dc 'a-z0-9' | head -c 6)"
+   451→   451→
+   452→   452→          echo ""
+   453→   453→          echo "=== Step 2: Fire 5 concurrent capture requests with same idempotency key ==="
+   454→   454→          echo "Idempotency key: $IDEMPOTENCY_KEY"
+   455→   455→
+   456→   456→          # Fire 5 concurrent requests in parallel using background jobs
+   457→   457→          CONCURRENCY=5
+   458→   458→          RESULTS_DIR="/tmp/concurrent-results"
+   459→   459→          mkdir -p "$RESULTS_DIR"
+   460→   460→
+   461→   461→          for i in $(seq 1 $CONCURRENCY); do
+   462→   462→            (
+   463→   463→              PAYMENT_ID="pay_ev_$(date +%s%N)_$i"
+   464→   464→              SIGNATURE="sig_ev_$(echo $RANDOM | tr -dc 'a-z0-9' | head -c 16)"
+   465→   465→              RESP_FILE="$RESULTS_DIR/resp_$i.json"
+   466→   466→              HTTP_FILE="$RESULTS_DIR/http_$i.txt"
+   467→   467→
+   468→   468→              HTTP_CODE=$(curl -sS -o "$RESP_FILE" -w "%{http_code}" \
+   469→   469→                -X POST "$STAGING_URL/api/payments" \
+   470→   470→                -H "Content-Type: application/json" \
+   471→   471→                -H "Idempotency-Key: $IDEMPOTENCY_KEY" \
+   472→   472→                -H "Cookie: snakzap_session=$SESSION_TOKEN; snakzap_csrf=$CSRF_TOKEN" \
+   473→   473→                -H "X-CSRF-Token: $CSRF_TOKEN" \
+   474→   474→                -d "{\"orderId\":\"$ORDER_ID\",\"razorpayPaymentId\":\"$PAYMENT_ID\",\"razorpaySignature\":\"$SIGNATURE\"}")
+   475→   475→
+   476→   476→              echo "$HTTP_CODE" > "$HTTP_FILE"
+   477→   477→              echo "Request $i: HTTP $HTTP_CODE, body: $(cat $RESP_FILE | head -c 200)"
+   478→   478→            ) &
+   479→   479→          done
+   480→   480→
+   481→   481→          # Wait for all concurrent requests to complete
+   482→   482→          wait
+   483→   483→          echo "✅ All 5 concurrent requests completed"
+   484→   484→
+   485→   485→          echo ""
+   486→   486→          echo "=== Step 3: Collect response results ==="
+   487→   487→          ALL_RESPONSES="["
+   488→   488→          for i in $(seq 1 $CONCURRENCY); do
+   489→   489→            HTTP_CODE=$(cat "$RESULTS_DIR/http_$i.txt")
+   490→   490→            BODY=$(cat "$RESULTS_DIR/resp_$i.json")
+   491→   491→            PAYMENT_ID=$(echo "$BODY" | jq -r '.payment.id // empty' 2>/dev/null)
+   492→   492→            ERROR_CODE=$(echo "$BODY" | jq -r '.error.code // empty' 2>/dev/null)
+   493→   493→            ERROR_MSG=$(echo "$BODY" | jq -r '.error.message // empty' 2>/dev/null)
+   494→   494→
+   495→   495→            REQUEST_ENTRY=$(jq -n \
+   496→   496→              --argjson index "$i" \
+   497→   497→              --argjson status "$HTTP_CODE" \
+   498→   498→              --arg paymentId "$PAYMENT_ID" \
+   499→   499→              --arg errorCode "$ERROR_CODE" \
+   500→   500→              --arg errorMsg "$ERROR_MSG" \
+   501→   501→              '{requestIndex: $index, status: $status, paymentId: $paymentId, errorCode: $errorCode, errorMessage: $errorMsg}')
+   502→   502→
+   503→   503→            if [ "$i" = "1" ]; then
+   504→   504→              ALL_RESPONSES="$ALL_RESPONSES$REQUEST_ENTRY"
+   505→   505→            else
+   506→   506→              ALL_RESPONSES="$ALL_RESPONSES,$REQUEST_ENTRY"
+   507→   507→            fi
+   508→   508→            echo "  Request $i: HTTP $HTTP_CODE, paymentId=$PAYMENT_ID, error=$ERROR_CODE"
+   509→   509→          done
+   510→   510→          ALL_RESPONSES="$ALL_RESPONSES]"
+   511→   511→
+   512→   512→          # Compute unique payment IDs from responses
+   513→   513→          UNIQUE_PAYMENT_IDS=$(echo "$ALL_RESPONSES" | jq -r '[.[].paymentId | select(. != "")] | unique | length')
+   514→   514→          SUCCESS_COUNT=$(echo "$ALL_RESPONSES" | jq -r '[.[] | select(.status == 200)] | length')
+   515→   515→          ERROR_COUNT=$(echo "$ALL_RESPONSES" | jq -r '[.[] | select(.status != 200)] | length')
+   516→   516→
+   517→   517→          echo ""
+   518→   518→          echo "Summary of responses:"
+   519→   519→          echo "  Success count: $SUCCESS_COUNT"
+   520→   520→          echo "  Error count: $ERROR_COUNT"
+   521→   521→          echo "  Unique payment IDs in responses: $UNIQUE_PAYMENT_IDS"
+   522→   522→
+   523→   523→          echo ""
+   524→   524→          echo "=== Step 4: Verify PostgreSQL database state directly (via Supabase Management API) ==="
+   525→   525→
+   526→   526→          # Query Payment table
+   527→   527→          PAYMENT_SQL="SELECT \"id\", \"status\", \"amount\", \"idempotencyKey\", \"gatewayPaymentId\" FROM \"Payment\" WHERE \"orderId\" = '$ORDER_ID';"
+   528→   528→          PAYMENT_RESULT=$(curl -sS -X POST \
+   529→   529→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   530→   530→            -H "Content-Type: application/json" \
+   531→   531→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   532→   532→            -d "$(jq -n --arg q "$PAYMENT_SQL" '{query: $q}')")
+   533→   533→          echo "Payment rows: $PAYMENT_RESULT" | head -c 500
+   534→   534→          echo ""
+   535→   535→
+   536→   536→          PAYMENT_COUNT=$(echo "$PAYMENT_RESULT" | jq -r 'length')
+   537→   537→          PAYMENT_DB_ID=$(echo "$PAYMENT_RESULT" | jq -r '.[0].id // empty')
+   538→   538→          PAYMENT_DB_STATUS=$(echo "$PAYMENT_RESULT" | jq -r '.[0].status // empty')
+   539→   539→
+   540→   540→          # Query Order state
+   541→   541→          ORDER_SQL="SELECT \"id\", \"status\", \"totalAmount\" FROM \"Order\" WHERE \"id\" = '$ORDER_ID';"
+   542→   542→          ORDER_RESULT=$(curl -sS -X POST \
+   543→   543→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   544→   544→            -H "Content-Type: application/json" \
+   545→   545→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   546→   546→            -d "$(jq -n --arg q "$ORDER_SQL" '{query: $q}')")
+   547→   547→          ORDER_STATUS=$(echo "$ORDER_RESULT" | jq -r '.[0].status // empty')
+   548→   548→
+   549→   549→          # Query LedgerEntry count
+   550→   550→          LEDGER_SQL="SELECT COUNT(*) as count, \"entryType\" FROM \"LedgerEntry\" WHERE \"paymentId\" IN (SELECT \"id\" FROM \"Payment\" WHERE \"orderId\" = '$ORDER_ID') GROUP BY \"entryType\";"
+   551→   551→          LEDGER_RESULT=$(curl -sS -X POST \
+   552→   552→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   553→   553→            -H "Content-Type: application/json" \
+   554→   554→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   555→   555→            -d "$(jq -n --arg q "$LEDGER_SQL" '{query: $q}')")
+   556→   556→          echo "Ledger entries: $LEDGER_RESULT"
+   557→   557→          LEDGER_TOTAL=$(echo "$LEDGER_RESULT" | jq -r '[.[].count] | add // 0')
+   558→   558→          LEDGER_DR_COUNT=$(echo "$LEDGER_RESULT" | jq -r '[.[] | select(.entryType == "DEBIT") | .count] | add // 0')
+   559→   559→          LEDGER_CR_COUNT=$(echo "$LEDGER_RESULT" | jq -r '[.[] | select(.entryType == "CREDIT") | .count] | add // 0')
+   560→   560→
+   561→   561→          # Query Outbox count
+   562→   562→          # Use printf to build the SQL with proper single-quote escaping
+   563→   563→          OUTBOX_SQL=$(printf 'SELECT COUNT(*) as count FROM "Outbox" WHERE "aggregateType" = '\''Payment'\'' AND "aggregateId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\'');' "$ORDER_ID")
+   564→   564→          OUTBOX_RESULT=$(curl -sS -X POST \
+   565→   565→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   566→   566→            -H "Content-Type: application/json" \
+   567→   567→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   568→   568→            -d "$(jq -n --arg q "$OUTBOX_SQL" '{query: $q}')")
+   569→   569→          echo "Outbox raw: $(echo $OUTBOX_RESULT | head -c 300)"
+   570→   570→          # Supabase Management API may return array OR object depending on result shape.
+   571→   571→          # Handle both: if array, take [0].count; if object, take .count.
+   572→   572→          OUTBOX_COUNT=$(echo "$OUTBOX_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
+   573→   573→
+   574→   574→          # Query IdempotencyKey count
+   575→   575→          IDEM_SQL=$(printf 'SELECT COUNT(*) as count FROM "IdempotencyKey" WHERE "key" = '\''%s'\'';' "$IDEMPOTENCY_KEY")
+   576→   576→          IDEM_RESULT=$(curl -sS -X POST \
+   577→   577→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   578→   578→            -H "Content-Type: application/json" \
+   579→   579→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   580→   580→            -d "$(jq -n --arg q "$IDEM_SQL" '{query: $q}')")
+   581→   581→          echo "Idempotency raw: $(echo $IDEM_RESULT | head -c 300)"
+   582→   582→          IDEM_COUNT=$(echo "$IDEM_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
+   583→   583→
+   584→   584→          # Query AuditLog count for PAYMENT_CAPTURED for this order
+   585→   585→          # NOTE: printf interprets % as format spec — use %% to emit a literal %
+   586→   586→          AUDIT_SQL=$(printf 'SELECT COUNT(*) as count FROM "AuditLog" WHERE "action" = '\''PAYMENT_CAPTURED'\'' AND "metadata" LIKE '\''%%%s%%'\'';' "$ORDER_ID")
+   587→   587→          AUDIT_RESULT=$(curl -sS -X POST \
+   588→   588→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   589→   589→            -H "Content-Type: application/json" \
+   590→   590→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   591→   591→            -d "$(jq -n --arg q "$AUDIT_SQL" '{query: $q}')")
+   592→   592→          echo "Audit raw: $(echo $AUDIT_RESULT | head -c 300)"
+   593→   593→          AUDIT_COUNT=$(echo "$AUDIT_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
+   594→   594→
+   595→   595→          echo ""
+   596→   596→          echo "=== Step 5: Database state summary ==="
+   597→   597→          echo "  Payment count: $PAYMENT_COUNT (expected: 1)"
+   598→   598→          echo "  Payment ID: $PAYMENT_DB_ID"
+   599→   599→          echo "  Payment status: $PAYMENT_DB_STATUS (expected: CAPTURED)"
+   600→   600→          echo "  Order status: $ORDER_STATUS (expected: PAID)"
+   601→   601→          echo "  Ledger total entries: $LEDGER_TOTAL (expected: 2)"
+   602→   602→          echo "  Ledger DEBIT count: $LEDGER_DR_COUNT (expected: 1)"
+   603→   603→          echo "  Ledger CREDIT count: $LEDGER_CR_COUNT (expected: 1)"
+   604→   604→          echo "  Outbox event count: $OUTBOX_COUNT (expected: 1)"
+   605→   605→          echo "  Idempotency record count: $IDEM_COUNT (expected: 1)"
+   606→   606→          echo "  Audit log (PAYMENT_CAPTURED) count: $AUDIT_COUNT (expected: 1)"
+   607→   607→
+   608→   608→          echo ""
+   609→   609→          echo "=== Step 6: Verify exactly-one-capture invariant ==="
+   610→   610→          EXACTLY_ONE_CAPTURE="false"
+   611→   611→          if [ "$PAYMENT_COUNT" = "1" ] && \
+   612→   612→             [ "$PAYMENT_DB_STATUS" = "CAPTURED" ] && \
+   613→   613→             [ "$ORDER_STATUS" = "PAID" ] && \
+   614→   614→             [ "$LEDGER_TOTAL" = "2" ] && \
+   615→   615→             [ "$LEDGER_DR_COUNT" = "1" ] && \
+   616→   616→             [ "$LEDGER_CR_COUNT" = "1" ] && \
+   617→   617→             [ "$OUTBOX_COUNT" = "1" ] && \
+   618→   618→             [ "$IDEM_COUNT" = "1" ] && \
+   619→   619→             [ "$AUDIT_COUNT" = "1" ] && \
+   620→   620→             [ "$UNIQUE_PAYMENT_IDS" = "1" ]; then
+   621→   621→            EXACTLY_ONE_CAPTURE="true"
+   622→   622→            echo "✅ PASS: exactly 1 Payment, 1 ledger pair, 1 outbox, 1 idempotency record, 1 audit log"
+   623→   623→          else
+   624→   624→            echo "❌ FAIL: invariant violated"
+   625→   625→          fi
+   626→   626→
+   627→   627→          echo ""
+   628→   628→          echo "=== Step 7: Capture P2002 behavior of losing concurrent transactions ==="
+   629→   629→          # The losing transactions should have received either:
+   630→   630→          #   - HTTP 200 with the cached paymentId (via retry → getCachedResponse)
+   631→   631→          #   - HTTP 409 CONFLICT (if retry exhausted)
+   632→   632→          # Both are acceptable — what matters is NO duplicate Payment was created.
+   633→   633→          LOSING_BEHAVIOR=$(echo "$ALL_RESPONSES" | jq -r '[.[] | select(.paymentId != "" and .paymentId == "'"$PAYMENT_DB_ID"'") | {status, paymentId, errorCode}]')
+   634→   634→          echo "Losing transactions (responses with the winning paymentId):"
+   635→   635→          echo "$LOSING_BEHAVIOR" | jq '.' 2>/dev/null || echo "$LOSING_BEHAVIOR"
+   636→   636→
+   637→   637→          # Count responses that returned the winning paymentId (should be all that returned 200)
+   638→   638→          WINNING_RESPONSES=$(echo "$ALL_RESPONSES" | jq -r "[.[] | select(.paymentId == \"$PAYMENT_DB_ID\")] | length")
+   639→   639→          echo ""
+   640→   640→          echo "Responses returning winning paymentId: $WINNING_RESPONSES"
+   641→   641→          echo "Responses with errors (P2002/409): $ERROR_COUNT"
+   642→   642→
+   643→   643→          echo ""
+   644→   644→          echo "=== Step 8: Generate self-validating evidence JSON ==="
+   645→   645→
+   646→   646→          # Build the evidence JSON (ok:true only if all invariants hold)
+   647→   647→          jq -n \
+   648→   648→            --argjson ok "$EXACTLY_ONE_CAPTURE" \
+   649→   649→            --arg runId "$RUN_ID" \
+   650→   650→            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+   651→   651→            --arg database "postgresql" \
+   652→   652→            --arg stagingUrl "$STAGING_URL" \
+   653→   653→            --arg orderId "$ORDER_ID" \
+   654→   654→            --arg userId "$USER_ID" \
+   655→   655→            --arg idempotencyKey "$IDEMPOTENCY_KEY" \
+   656→   656→            --arg paymentId "$PAYMENT_DB_ID" \
+   657→   657→            --arg paymentStatus "$PAYMENT_DB_STATUS" \
+   658→   658→            --arg orderStatus "$ORDER_STATUS" \
+   659→   659→            --argjson concurrentRequests "$CONCURRENCY" \
+   660→   660→            --argjson uniquePaymentIds "$UNIQUE_PAYMENT_IDS" \
+   661→   661→            --argjson paymentCount "$PAYMENT_COUNT" \
+   662→   662→            --argjson ledgerPairCount "$((LEDGER_DR_COUNT < LEDGER_CR_COUNT ? LEDGER_DR_COUNT : LEDGER_CR_COUNT))" \
+   663→   663→            --argjson ledgerDrCount "$LEDGER_DR_COUNT" \
+   664→   664→            --argjson ledgerCrCount "$LEDGER_CR_COUNT" \
+   665→   665→            --argjson ledgerTotalEntries "$LEDGER_TOTAL" \
+   666→   666→            --argjson outboxEventCount "$OUTBOX_COUNT" \
+   667→   667→            --argjson idempotencyRecordCount "$IDEM_COUNT" \
+   668→   668→            --argjson auditLogCount "$AUDIT_COUNT" \
+   669→   669→            --argjson successCount "$SUCCESS_COUNT" \
+   670→   670→            --argjson errorCount "$ERROR_COUNT" \
+   671→   671→            --argjson winningResponses "$WINNING_RESPONSES" \
+   672→   672→            --argjson responses "$ALL_RESPONSES" \
+   673→   673→            --argjson losingBehavior "$LOSING_BEHAVIOR" \
+   674→   674→            '{
+   675→   675→              ok: $ok,
+   676→   676→              runId: $runId,
+   677→   677→              timestamp: $timestamp,
+   678→   678→              wave: "3",
+   679→   679→              subWave: "3a",
+   680→   680→              evidenceType: "postgresql-concurrent-idempotency",
+   681→   681→              database: $database,
+   682→   682→              stagingUrl: $stagingUrl,
+   683→   683→              test: "5 concurrent requests, same idempotency key, against staging PostgreSQL",
+   684→   684→              orchestratorRequiredFields: {
+   685→   685→                database: $database,
+   686→   686→                concurrentRequests: $concurrentRequests,
+   687→   687→                uniquePaymentIds: $uniquePaymentIds,
+   688→   688→                paymentCount: $paymentCount,
+   689→   689→                ledgerPairCount: $ledgerPairCount,
+   690→   690→                outboxEventCount: $outboxEventCount,
+   691→   691→                idempotencyRecordCount: $idempotencyRecordCount
+   692→   692→              },
+   693→   693→              invariant: {
+   694→   694→                exactlyOneCapture: $ok,
+   695→   695→                description: "From 5 concurrent requests with same idempotency key: exactly 1 Payment, 1 ledger Dr/Cr pair, 1 outbox event, 1 idempotency record"
+   696→   696→              },
+   697→   697→              setup: {
+   698→   698→                orderId: $orderId,
+   699→   699→                userId: $userId,
+   700→   700→                idempotencyKey: $idempotencyKey,
+   701→   701→                concurrency: $concurrentRequests
+   702→   702→              },
+   703→   703→              responseSummary: {
+   704→   704→                successCount: $successCount,
+   705→   705→                errorCount: $errorCount,
+   706→   706→                uniquePaymentIdsInResponses: $uniquePaymentIds,
+   707→   707→                winningPaymentId: $paymentId,
+   708→   708→                responsesReturningWinningPaymentId: $winningResponses,
+   709→   709→                losingBehavior: $losingBehavior
+   710→   710→              },
+   711→   711→              databaseState: {
+   712→   712→                paymentCount: $paymentCount,
+   713→   713→                paymentId: $paymentId,
+   714→   714→                paymentStatus: $paymentStatus,
+   715→   715→                orderStatus: $orderStatus,
+   716→   716→                ledgerEntries: {
+   717→   717→                  total: $ledgerTotalEntries,
+   718→   718→                  debit: $ledgerDrCount,
+   719→   719→                  credit: $ledgerCrCount
+   720→   720→                },
+   721→   721→                outboxEventCount: $outboxEventCount,
+   722→   722→                idempotencyRecordCount: $idempotencyRecordCount,
+   723→   723→                auditLogCount: $auditLogCount
+   724→   724→              },
+   725→   725→              expected: {
+   726→   726→                paymentCount: 1,
+   727→   727→                paymentStatus: "CAPTURED",
+   728→   728→                orderStatus: "PAID",
+   729→   729→                ledgerDebit: 1,
+   730→   730→                ledgerCredit: 1,
+   731→   731→                ledgerTotal: 2,
+   732→   732→                outboxEventCount: 1,
+   733→   733→                idempotencyRecordCount: 1,
+   734→   734→                auditLogCount: 1,
+   735→   735→                uniquePaymentIds: 1
+   736→   736→              },
+   737→   737→              governance: {
+   738→   738→                realPaymentsEnabled: false,
+   739→   739→                productionRazorpayCredentialsUsed: false,
+   740→   740→                webhookHandlerImplemented: false,
+   741→   741→                subWave3bOr3cStarted: false,
+   742→   742→                productionTouched: false,
+   743→   743→                note: "Test run against staging Supabase PostgreSQL (project ref zmzqqcyapcezmaqvuzzd). realPayments=false (demo mode). No production systems touched."
+   744→   744→              },
+   745→   745→              concurrentResponses: $responses
+   746→   746→            }' > "$EVIDENCE_FILE"
+   747→   747→
+   748→   748→          echo "=== Evidence JSON ==="
+   749→   749→          cat "$EVIDENCE_FILE" | jq '.'
+   750→   750→
+   751→   751→          echo ""
+   752→   752→          echo "=== Step 9: Cleanup test data ==="
+   753→   753→          # Delete the test Payment, LedgerEntries, Outbox event, IdempotencyKey, AuditLog, Order
+   754→   754→          # (Leave the test user for reuse)
+   755→   755→          CLEANUP_SQL=$(printf 'DELETE FROM "LedgerEntry" WHERE "paymentId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "Outbox" WHERE "aggregateId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "IdempotencyKey" WHERE "key" = '\''%s'\''; DELETE FROM "Payment" WHERE "orderId" = '\''%s'\''; DELETE FROM "OrderItem" WHERE "orderId" = '\''%s'\''; DELETE FROM "Order" WHERE "id" = '\''%s'\''; DELETE FROM "AuditLog" WHERE "metadata" LIKE '\''%%%s%%'\'' AND "action" = '\''PAYMENT_CAPTURED'\'';' "$ORDER_ID" "$ORDER_ID" "$IDEMPOTENCY_KEY" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID")
+   756→   756→          echo "Cleaning up test data..."
+   757→   757→          curl -sS -X POST \
+   758→   758→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   759→   759→            -H "Content-Type: application/json" \
+   760→   760→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   761→   761→            -d "$(jq -n --arg q "$CLEANUP_SQL" '{query: $q}')" > /dev/null 2>&1
+   762→   762→          echo "✅ Cleanup complete"
+   763→   763→
+   764→   764→          echo ""
+   765→   765→          echo "=================================================="
+   766→   766→          echo "  EVIDENCE SUMMARY"
+   767→   767→          echo "=================================================="
+   768→   768→          echo "Run ID: $RUN_ID"
+   769→   769→          echo "Database: PostgreSQL (staging Supabase)"
+   770→   770→          echo "ok: $EXACTLY_ONE_CAPTURE"
+   771→   771→          echo "Concurrent requests: $CONCURRENCY"
+   772→   772→          echo "Unique payment IDs: $UNIQUE_PAYMENT_IDS (expected: 1)"
+   773→   773→          echo "Payment count: $PAYMENT_COUNT (expected: 1)"
+   774→   774→          echo "Ledger pair count: $((LEDGER_DR_COUNT < LEDGER_CR_COUNT ? LEDGER_DR_COUNT : LEDGER_CR_COUNT)) (expected: 1)"
+   775→   775→          echo "Outbox event count: $OUTBOX_COUNT (expected: 1)"
+   776→   776→          echo "Idempotency record count: $IDEM_COUNT (expected: 1)"
+   777→   777→          echo "=================================================="
+   778→   778→
+   779→   779→          if [ "$EXACTLY_ONE_CAPTURE" != "true" ]; then
+   780→   780→            echo "❌ EVIDENCE FAILED — invariant violated"
+   781→   781→            exit 1
+   782→   782→          fi
+   783→   783→          echo "✅ EVIDENCE PASSED — exactly 1 capture from 5 concurrent requests on PostgreSQL"
+   784→   784→
+   785→   785→      - name: Upload evidence
+   786→   786→        if: always()
+   787→   787→        uses: actions/upload-artifact@v4
+   788→   788→        with:
+   789→   789→          name: wave3-3a-postgresql-concurrent-evidence
+   790→   790→          path: wave3-3a-postgresql-evidence.json
+   791→   791→          retention-days: 90
+   792→   792→

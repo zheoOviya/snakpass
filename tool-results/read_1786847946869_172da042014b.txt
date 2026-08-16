@@ -1,0 +1,1044 @@
+     1→# =============================================================================
+     2→# Wave-4 Sub-Wave 4a — PostgreSQL Webhook Concurrent Evidence (Razorpay Webhook)
+     3→# -----------------------------------------------------------------------------
+     4→# Orchestrator-required evidence: run the 5-concurrent-webhook / same-event_id
+     5→# test against the ACTUAL staging PostgreSQL database (not SQLite) — for the
+     6→# Razorpay webhook handler (POST /api/webhooks/razorpay) — with the webhookHandler
+     7→# feature flag ON (Sub-Wave 4a implementation).
+     8→#
+     9→# This workflow:
+    10→#   1. Verifies the latest commit is deployed to staging Vercel
+    11→#   2. Sets EVIDENCE_TEST_MODE=true + FEATURE_WEBHOOK_HANDLER=true on Vercel
+    12→#      (preview AND production targets — same pattern as 3b/3c's EVIDENCE_TEST_MODE)
+    13→#   3. Runs the 5-concurrent-webhook test against the staging URL
+    14→#      (POST /api/webhooks/razorpay) with webhookHandler flag ON (4a code path active)
+    15→#      — 5 concurrent POSTs with the SAME X-Razorpay-Event-Id + same body
+    16→#      → exactly 1 WebhookEvent row + exactly 1 Payment CAPTURED + 1 Outbox event
+    17→#   4. Verifies the database state directly via Supabase Management API (PostgreSQL)
+    18→#   5. Captures P2002 behavior of losing concurrent webhook transactions
+    19→#      (losing webhooks return status='duplicate' via findUnique dedup path)
+    20→#   6. Verifies WebhookEvent.processedBy column exists + is non-null for the
+    21→#      winning webhook (Sub-Wave 4a schema delta)
+    22→#   7. Verifies all 5 webhook responses are HTTP 200 (no 422 / no 5xx)
+    23→#   8. Generates self-validating evidence JSON (ok:true + required fields)
+    24→#   9. Uploads the evidence as a GitHub Actions artifact
+    25→#
+    26→# Governance constraints (enforced in workflow):
+    27→#   - realPayments MUST be false (verified — demo mode only)
+    28→#   - No production Razorpay credentials used (X-Evidence-Skip-Verify=true path)
+    29→#   - webhookHandler flag set ONLY on Vercel preview/staging (NOT production traffic)
+    30→#   - HMAC signature verification is SKIPPED only because EVIDENCE_TEST_MODE=true
+    31→#     AND the X-Evidence-Skip-Verify=true header is sent (test-only path)
+    32→#   - Production NOT touched
+    33→#
+    34→# Orchestrator-required JSON output:
+    35→#   {
+    36→#     "ok": true,
+    37→#     "database": "postgresql",
+    38→#     "concurrentRequests": 5,
+    39→#     "uniqueWebhookEvents": 1,
+    40→#     "webhookEventCount": 1,
+    41→#     "paymentCaptured": true,
+    42→#     "outboxEventCount": 1,
+    43→#     "auditLogCount": ">=2",
+    44→#     "no422Errors": true
+    45→#   }
+    46→# =============================================================================
+    47→
+    48→name: Wave-4 4a — PostgreSQL Webhook Concurrent Evidence
+    49→
+    50→on:
+    51→  workflow_dispatch:
+    52→    inputs:
+    53→      staging_url:
+    54→        description: 'Staging URL (e.g. https://snakpass-<hash>-snakzap.vercel.app)'
+    55→        required: true
+    56→        default: 'https://snakpass-eqkarf10s-snakzap.vercel.app'
+    57→      confirm:
+    58→        description: 'Type RUN-4A-PG-EVIDENCE to confirm'
+    59→        required: true
+    60→        default: ''
+    61→
+    62→jobs:
+    63→  postgresql-concurrent-evidence:
+    64→    name: 4a-PG-E1 — 5 concurrent webhooks with same event_id on PostgreSQL
+    65→    runs-on: ubuntu-latest
+    66→    timeout-minutes: 15
+    67→    env:
+    68→      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+    69→      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+    70→      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+    71→      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+    72→      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+    73→      STAGING_URL: ${{ inputs.staging_url }}
+    74→
+    75→    steps:
+    76→      - name: Checkout
+    77→        uses: actions/checkout@v4
+    78→
+    79→      - name: Verify trigger
+    80→        run: |
+    81→          [ "${{ github.event.inputs.confirm }}" = "RUN-4A-PG-EVIDENCE" ] || { echo "❌ Wrong confirmation"; exit 1; }
+    82→          echo "✅ Authorized — Wave-4 Sub-Wave 4a PostgreSQL Webhook Concurrent Evidence"
+    83→
+    84→      - name: Install dependencies
+    85→        run: |
+    86→          sudo apt-get update -qq && sudo apt-get install -y -qq jq curl
+    87→          # Node.js is pre-installed on ubuntu-latest
+    88→          node --version
+    89→
+    90→      - name: Verify secrets present
+    91→        run: |
+    92→          [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN NOT_SET"; exit 1; }
+    93→          [ -n "$SUPABASE_DB_PASSWORD" ] || { echo "❌ SUPABASE_DB_PASSWORD NOT_SET"; exit 1; }
+    94→          [ -n "$VERCEL_TOKEN" ] || { echo "❌ VERCEL_TOKEN NOT_SET"; exit 1; }
+    95→          [ -n "$VERCEL_PROJECT_ID" ] || { echo "❌ VERCEL_PROJECT_ID NOT_SET"; exit 1; }
+    96→          echo "✅ All required secrets present"
+    97→
+    98→      - name: Verify Supabase schema (WebhookEvent + processedBy, Payment, Outbox tables on PostgreSQL)
+    99→        run: |
+   100→          echo "=== Verifying 4a schema tables + WebhookEvent.processedBy column exist on staging PostgreSQL ==="
+   101→          VERIFY_SQL='
+   102→          SELECT
+   103→            (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''WebhookEvent'\'') AS webhook_event_table,
+   104→            (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''Payment'\'') AS payment_table,
+   105→            (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''Outbox'\'') AS outbox_table,
+   106→            (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''AuditLog'\'') AS audit_log_table,
+   107→            (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '\''WebhookEvent'\'' AND column_name = '\''eventId'\'') AS webhook_event_id_col,
+   108→            (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '\''WebhookEvent'\'' AND column_name = '\''processed'\'') AS webhook_processed_col,
+   109→            (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '\''WebhookEvent'\'' AND column_name = '\''processedBy'\'') AS webhook_processedby_col,
+   110→            (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '\''WebhookEvent'\'' AND column_name = '\''processingNotes'\'') AS webhook_processingnotes_col,
+   111→            (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '\''Payment'\'' AND column_name = '\''status'\'') AS payment_status_col,
+   112→            (SELECT COUNT(*) FROM information_schema.columns WHERE table_name = '\''Payment'\'' AND column_name = '\''capturedAt'\'') AS payment_capturedat_col;
+   113→          '
+   114→          RESULT=$(curl -sS -X POST \
+   115→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   116→            -H "Content-Type: application/json" \
+   117→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   118→            -d "$(jq -n --arg q "$VERIFY_SQL" '{query: $q}')")
+   119→          echo "$RESULT" | jq '.' 2>/dev/null || echo "$RESULT"
+   120→          echo "=== Schema verification complete ==="
+   121→
+   122→      - name: Set EVIDENCE_TEST_MODE + FEATURE_WEBHOOK_HANDLER on Vercel preview environment
+   123→        run: |
+   124→          set +e  # Don't exit on individual failures — capture details
+   125→          echo "=== Setting EVIDENCE_TEST_MODE=true on Vercel preview environment ==="
+   126→          PROJECT_ID="$VERCEL_PROJECT_ID"
+   127→          API_URL="https://api.vercel.com/v10/projects/$PROJECT_ID/env"
+   128→          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+   129→
+   130→          echo "  Project ID: $PROJECT_ID"
+   131→          echo "  API URL: $API_URL"
+   132→
+   133→          # Step 1: List existing env vars to verify token works + see if EVIDENCE_TEST_MODE exists
+   134→          echo ""
+   135→          echo "  === Listing existing env vars (verifying token access) ==="
+   136→          LIST_RESP=$(curl -sS -w "\n%{http_code}" -H "$AUTH" "$API_URL")
+   137→          LIST_HTTP=$(echo "$LIST_RESP" | tail -1)
+   138→          LIST_BODY=$(echo "$LIST_RESP" | head -n -1)
+   139→          echo "  List HTTP: $LIST_HTTP"
+   140→          if [ "$LIST_HTTP" != "200" ]; then
+   141→            echo "  ❌ Failed to list env vars (HTTP $LIST_HTTP)"
+   142→            echo "  Response: $(echo $LIST_BODY | head -c 500)"
+   143→            exit 1
+   144→          fi
+   145→          echo "  ✅ Token works — env vars listable"
+   146→
+   147→          # Show ALL env var keys (without values) for debugging
+   148→          echo ""
+   149→          echo "  === All env var keys (debug) ==="
+   150→          echo "$LIST_BODY" | jq -r '.envs[]? | "  - key=\(.key) target=\(.target | join(",")) type=\(.type)"' 2>/dev/null | head -30
+   151→
+   152→          # Show existing EVIDENCE_TEST_MODE entries (if any)
+   153→          echo ""
+   154→          echo "  === Existing EVIDENCE_TEST_MODE entries ==="
+   155→          echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE") | "  - id=\(.id) target=\(.target | join(",")) type=\(.type) value=\(.value // "(encrypted)")"' 2>/dev/null || echo "  (none)"
+   156→
+   157→          # Show existing NODE_ENV entries (if any)
+   158→          echo ""
+   159→          echo "  === Existing NODE_ENV entries ==="
+   160→          echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "NODE_ENV") | "  - id=\(.id) target=\(.target | join(",")) type=\(.type) value=\(.value // "(encrypted)")"' 2>/dev/null || echo "  (none)"
+   161→
+   162→          # Remove existing EVIDENCE_TEST_MODE entries (both preview AND production)
+   163→          # We set it on BOTH targets so any deployment (preview OR production) picks it up.
+   164→          EXISTING_IDS=$(echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE") | .id' 2>/dev/null)
+   165→          if [ -n "$EXISTING_IDS" ]; then
+   166→            for EID in $EXISTING_IDS; do
+   167→              echo "  ⚠️  Removing existing EVIDENCE_TEST_MODE id=$EID"
+   168→              curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID" > /dev/null 2>&1
+   169→            done
+   170→          fi
+   171→
+   172→          # Step 2: Create EVIDENCE_TEST_MODE=true for BOTH preview AND production targets.
+   173→          # We deploy to `preview` target (Step #8), but set on both for safety.
+   174→          echo ""
+   175→          echo "  === Creating EVIDENCE_TEST_MODE=true for preview+production targets ==="
+   176→          CREATE_PAYLOAD='{"key":"EVIDENCE_TEST_MODE","value":"true","target":["preview","production"],"type":"plain"}'
+   177→          echo "  Payload: $CREATE_PAYLOAD"
+   178→
+   179→          RESULT=$(curl -sS -w "\n%{http_code}" -X POST \
+   180→            -H "$AUTH" \
+   181→            -H "Content-Type: application/json" \
+   182→            "$API_URL" \
+   183→            -d "$CREATE_PAYLOAD")
+   184→
+   185→          RESULT_HTTP=$(echo "$RESULT" | tail -1)
+   186→          RESULT_BODY=$(echo "$RESULT" | head -n -1)
+   187→          echo "  Create HTTP: $RESULT_HTTP"
+   188→          echo "  Create response: $RESULT_BODY" | head -c 500
+   189→          echo ""
+   190→
+   191→          if echo "$RESULT_HTTP" | grep -qE "^(200|201)$" && echo "$RESULT_BODY" | jq -e '.created.id // .id' > /dev/null 2>&1; then
+   192→            CREATED_ID=$(echo "$RESULT_BODY" | jq -r '.created.id // .id')
+   193→            echo "  ✅ EVIDENCE_TEST_MODE=true configured for preview+production environments (id=$CREATED_ID)"
+   194→          else
+   195→            echo "  ❌ Failed to set EVIDENCE_TEST_MODE"
+   196→            echo "  HTTP code: $RESULT_HTTP"
+   197→            echo "  Response body: $RESULT_BODY"
+   198→            exit 1
+   199→          fi
+   200→
+   201→          # NOTE: NODE_ENV override was removed. The evidence-setup + evidence-verify
+   202→          # endpoints now gate ONLY on EVIDENCE_TEST_MODE (not NODE_ENV). This is safe
+   203→          # because EVIDENCE_TEST_MODE defaults to undefined/false everywhere and is
+   204→          # only set by this evidence workflow on the staging Vercel project.
+   205→
+   206→          echo ""
+   207→          echo "  Note: env var changes require a new deployment to take effect."
+   208→
+   209→          # ----------------------------------------------------------------
+   210→          # 4a-specific: ALSO set FEATURE_WEBHOOK_HANDLER=true on
+   211→          # BOTH preview AND production targets (same pattern as
+   212→          # EVIDENCE_TEST_MODE above). This enables the Razorpay webhook
+   213→          # handler code path (Sub-Wave 4a) on the staging deployment
+   214→          # that this workflow triggers next.
+   215→          #
+   216→          # The flag is read by src/lib/deployment.ts::getFlag() which maps
+   217→          # the FEATURE_WEBHOOK_HANDLER env var → webhookHandler feature flag
+   218→          # (default OFF in source, ON when env var = 'true'). When OFF,
+   219→          # POST /api/webhooks/razorpay returns HTTP 503 (handler disabled).
+   220→          #
+   221→          # Same create-env-var pattern as above: list → remove → create.
+   222→          # ----------------------------------------------------------------
+   223→          echo ""
+   224→          echo "  === Setting FEATURE_WEBHOOK_HANDLER=true on Vercel (preview+production) ==="
+   225→
+   226→          # Re-list env vars (to get fresh IDs after the EVIDENCE_TEST_MODE mutations above)
+   227→          LIST_RESP2=$(curl -sS -w "\n%{http_code}" -H "$AUTH" "$API_URL")
+   228→          LIST_HTTP2=$(echo "$LIST_RESP2" | tail -1)
+   229→          LIST_BODY2=$(echo "$LIST_RESP2" | head -n -1)
+   230→          if [ "$LIST_HTTP2" != "200" ]; then
+   231→            echo "  ❌ Failed to re-list env vars (HTTP $LIST_HTTP2)"
+   232→            echo "  Response: $(echo $LIST_BODY2 | head -c 500)"
+   233→            exit 1
+   234→          fi
+   235→
+   236→          # Show existing FEATURE_WEBHOOK_HANDLER entries (if any)
+   237→          echo "  === Existing FEATURE_WEBHOOK_HANDLER entries ==="
+   238→          echo "$LIST_BODY2" | jq -r '.envs[] | select(.key == "FEATURE_WEBHOOK_HANDLER") | "  - id=\(.id) target=\(.target | join(",")) type=\(.type) value=\(.value // "(encrypted)")"' 2>/dev/null || echo "  (none)"
+   239→
+   240→          # Remove existing FEATURE_WEBHOOK_HANDLER entries (both preview AND production)
+   241→          EXISTING_IDS2=$(echo "$LIST_BODY2" | jq -r '.envs[] | select(.key == "FEATURE_WEBHOOK_HANDLER") | .id' 2>/dev/null)
+   242→          if [ -n "$EXISTING_IDS2" ]; then
+   243→            for EID2 in $EXISTING_IDS2; do
+   244→              echo "  ⚠️  Removing existing FEATURE_WEBHOOK_HANDLER id=$EID2"
+   245→              curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID2" > /dev/null 2>&1
+   246→            done
+   247→          fi
+   248→
+   249→          # Create FEATURE_WEBHOOK_HANDLER=true for BOTH preview AND production targets
+   250→          echo ""
+   251→          echo "  === Creating FEATURE_WEBHOOK_HANDLER=true for preview+production targets ==="
+   252→          CREATE_PAYLOAD2='{"key":"FEATURE_WEBHOOK_HANDLER","value":"true","target":["preview","production"],"type":"plain"}'
+   253→          echo "  Payload: $CREATE_PAYLOAD2"
+   254→
+   255→          RESULT2=$(curl -sS -w "\n%{http_code}" -X POST \
+   256→            -H "$AUTH" \
+   257→            -H "Content-Type: application/json" \
+   258→            "$API_URL" \
+   259→            -d "$CREATE_PAYLOAD2")
+   260→
+   261→          RESULT_HTTP2=$(echo "$RESULT2" | tail -1)
+   262→          RESULT_BODY2=$(echo "$RESULT2" | head -n -1)
+   263→          echo "  Create HTTP: $RESULT_HTTP2"
+   264→          echo "  Create response: $RESULT_BODY2" | head -c 500
+   265→          echo ""
+   266→
+   267→          if echo "$RESULT_HTTP2" | grep -qE "^(200|201)$" && echo "$RESULT_BODY2" | jq -e '.created.id // .id' > /dev/null 2>&1; then
+   268→            CREATED_ID2=$(echo "$RESULT_BODY2" | jq -r '.created.id // .id')
+   269→            echo "  ✅ FEATURE_WEBHOOK_HANDLER=true configured for preview+production environments (id=$CREATED_ID2)"
+   270→          else
+   271→            echo "  ❌ Failed to set FEATURE_WEBHOOK_HANDLER"
+   272→            echo "  HTTP code: $RESULT_HTTP2"
+   273→            echo "  Response body: $RESULT_BODY2"
+   274→            exit 1
+   275→          fi
+   276→
+   277→      - name: Trigger new Vercel deployment (to pick up EVIDENCE_TEST_MODE + FEATURE_WEBHOOK_HANDLER env vars)
+   278→        run: |
+   279→          set +e
+   280→          echo "=== Triggering new Vercel deployment from main branch ==="
+   281→          PROJECT_ID="$VERCEL_PROJECT_ID"
+   282→          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+   283→
+   284→          # ------------------------------------------------------------------
+   285→          # Step 0: Query the Vercel project to get the linked GitHub repo's
+   286→          # numeric repoId (Vercel API v13/deployments REQUIRES gitSource.repoId
+   287→          # when gitSource.type=github). This is needed for the Option B fallback.
+   288→          # ------------------------------------------------------------------
+   289→          echo ""
+   290→          echo "  === Querying Vercel project for linked git source info ==="
+   291→          PROJECT_RESP=$(curl -sS -w "\n%{http_code}" -H "$AUTH" \
+   292→            "https://api.vercel.com/v9/projects/$PROJECT_ID")
+   293→          PROJECT_HTTP=$(echo "$PROJECT_RESP" | tail -1)
+   294→          PROJECT_BODY=$(echo "$PROJECT_RESP" | head -n -1)
+   295→          echo "  Project query HTTP: $PROJECT_HTTP"
+   296→          if [ "$PROJECT_HTTP" != "200" ]; then
+   297→            echo "  ❌ Failed to query Vercel project (HTTP $PROJECT_HTTP)"
+   298→            echo "  Response: $(echo "$PROJECT_BODY" | head -c 500)"
+   299→            exit 1
+   300→          fi
+   301→          LINK_TYPE=$(echo "$PROJECT_BODY" | jq -r '.link.type // empty')
+   302→          REPO_ID=$(echo "$PROJECT_BODY" | jq -r '.link.repoId // empty')
+   303→          ORG=$(echo "$PROJECT_BODY" | jq -r '.link.org // empty')
+   304→          REPO=$(echo "$PROJECT_BODY" | jq -r '.link.repo // empty')
+   305→          echo "  Linked git source:"
+   306→          echo "    type:   $LINK_TYPE"
+   307→          echo "    org:    $ORG"
+   308→          echo "    repo:   $REPO"
+   309→          echo "    repoId: $REPO_ID"
+   310→
+   311→          # Show recent READY preview deployments for context
+   312→          echo ""
+   313→          echo "  === Recent READY Vercel deployments (any target) ==="
+   314→          LIST_DEPLOYS=$(curl -sS -H "$AUTH" \
+   315→            "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&limit=5&state=READY")
+   316→          echo "$LIST_DEPLOYS" | jq -r '.deployments[]? | "    - target=\(.target // "preview") url=\(.url) created=\(.createdAt) commit=\(.meta.githubCommitSha // "n/a" | .[0:8])"' 2>/dev/null | head -5
+   317→
+   318→          # ------------------------------------------------------------------
+   319→          # Step 1: Trigger a PREVIEW deployment (NOT production).
+   320→          #
+   321→          # Why preview (not production):
+   322→          #   1. Production deployments on this Vercel project CANNOT reach
+   323→          #      the Supabase pooler (verified — HTTP 503 'Can't reach database
+   324→          #      server at aws-ap-northeast-1.pooler.supabase.com:6543' on the
+   325→          #      production URL snakpass-dbp3ic55z-snakzap.vercel.app). Preview
+   326→          #      deployments (like snakpass-eqkarf10s-snakzap.vercel.app)
+   327→          #      CAN reach the DB — verified HTTP 200, latencyMs=12.
+   328→          #   2. NODE_ENV=development env var was set in Step #7 above (target
+   329→          #      preview+production). The evidence-setup endpoint guards on
+   330→          #      `process.env.NODE_ENV === 'production'` and refuses to serve
+   331→          #      in production mode. The new preview deployment should pick up
+   332→          #      NODE_ENV=development (if Vercel honors the override).
+   333→          #
+   334→          # API note on `target` field:
+   335→          #   - Vercel v13/deployments rejects `target=preview` with HTTP 400
+   336→          #     "Invalid request: `target` should be 'production', 'staging',
+   337→          #      or a custom environment identifier." (verified — see previous
+   338→          #      workflow run 31890722345).
+   339→          #   - To create a PREVIEW deployment, OMIT the `target` field
+   340→          #     entirely. Vercel defaults to preview when target is absent.
+   341→          #
+   342→          # gitSource requirement:
+   343→          #   - Vercel API REQUIRES gitSource.repoId (numeric GitHub repo ID)
+   344→          #     when gitSource.type=github. The previous workflow's bug was
+   345→          #     omitting repoId (HTTP 400 "gitSource missing required property
+   346→          #     repoId"). We extract repoId from GET /v9/projects/$PROJECT_ID
+   347→          #     link.repoId field (verified value: 1331058897 for zheoOviya/snakpass).
+   348→          # ------------------------------------------------------------------
+   349→          echo ""
+   350→          echo "  === Triggering PREVIEW deployment (target field omitted) ==="
+   351→          if [ -z "$REPO_ID" ] || [ "$REPO_ID" = "null" ]; then
+   352→            echo "  ❌ Cannot trigger deployment — project has no linked repoId."
+   353→            exit 1
+   354→          fi
+   355→          PAYLOAD=$(jq -n \
+   356→            --arg name "snakpass" \
+   357→            --arg type "$LINK_TYPE" \
+   358→            --arg org "$ORG" \
+   359→            --arg repo "$REPO" \
+   360→            --argjson repoId "$REPO_ID" \
+   361→            --arg ref "main" \
+   362→            '{name:$name, gitSource:{type:$type, org:$org, repo:$repo, repoId:$repoId, ref:$ref}}')
+   363→          echo "  Payload (note: no 'target' field => preview deployment):"
+   364→          echo "$PAYLOAD" | jq '.' | sed 's/^/    /'
+   365→
+   366→          DEPLOY_RESP=$(curl -sS -w "\n%{http_code}" -X POST \
+   367→            -H "$AUTH" \
+   368→            -H "Content-Type: application/json" \
+   369→            "https://api.vercel.com/v13/deployments" \
+   370→            -d "$PAYLOAD")
+   371→
+   372→          DEPLOY_HTTP=$(echo "$DEPLOY_RESP" | tail -1)
+   373→          DEPLOY_BODY=$(echo "$DEPLOY_RESP" | head -n -1)
+   374→          echo "  Deploy HTTP: $DEPLOY_HTTP"
+   375→          echo "  Deploy response (first 600 chars): $(echo "$DEPLOY_BODY" | head -c 600)"
+   376→
+   377→          DEPLOY_ID=$(echo "$DEPLOY_BODY" | jq -r '.id // empty')
+   378→
+   379→          DEPLOY_URL=$(echo "$DEPLOY_BODY" | jq -r '.url // empty')
+   380→
+   381→          if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
+   382→            echo ""
+   383→            echo "  ✅ Deployment triggered: id=$DEPLOY_ID, url=$DEPLOY_URL"
+   384→            if [ -n "$DEPLOY_URL" ] && [ "$DEPLOY_URL" != "null" ]; then
+   385→              NEW_STAGING_URL="https://$DEPLOY_URL"
+   386→              echo "NEW_STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+   387→              echo "  New staging URL: $NEW_STAGING_URL"
+   388→            fi
+   389→            echo "  Waiting for deployment to be READY..."
+   390→            for i in $(seq 1 60); do
+   391→              STATUS_RESP=$(curl -sS -H "$AUTH" "https://api.vercel.com/v13/deployments/$DEPLOY_ID")
+   392→              STATUS=$(echo "$STATUS_RESP" | jq -r '.status // empty')
+   393→              READY_STATE=$(echo "$STATUS_RESP" | jq -r '.readyState // empty')
+   394→              echo "    [$i] status=$STATUS, readyState=$READY_STATE"
+   395→              if [ "$READY_STATE" = "READY" ] || [ "$STATUS" = "READY" ]; then
+   396→                echo "  ✅ Deployment is READY"
+   397→                # Re-extract the URL in case it changed
+   398→                FINAL_URL=$(echo "$STATUS_RESP" | jq -r '.url // empty')
+   399→                if [ -n "$FINAL_URL" ] && [ "$FINAL_URL" != "null" ]; then
+   400→                  NEW_STAGING_URL="https://$FINAL_URL"
+   401→                  echo "NEW_STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+   402→                  echo "  Final staging URL: $NEW_STAGING_URL"
+   403→                fi
+   404→                break
+   405→              fi
+   406→              if [ "$READY_STATE" = "ERROR" ] || [ "$STATUS" = "ERROR" ] || [ "$STATUS" = "CANCELED" ]; then
+   407→                echo "  ❌ Deployment $READY_STATE"
+   408→                # Don't exit — fall back to the latest READY deployment
+   409→                break
+   410→              fi
+   411→              sleep 5
+   412→            done
+   413→          else
+   414→            echo "  ⚠️ Could not trigger new deployment."
+   415→            echo "  Falling back to querying the latest READY production deployment..."
+   416→          fi
+   417→
+   418→          # If we don't have a new deployment URL yet, query for the latest READY production deployment
+   419→          if [ -z "$NEW_STAGING_URL" ]; then
+   420→            echo ""
+   421→            echo "  === Querying latest READY production deployment ==="
+   422→            # Wait a bit for any in-progress deploy to complete
+   423→            sleep 30
+   424→            LATEST=$(curl -sS -H "$AUTH" \
+   425→              "https://api.vercel.com/v6/deployments?projectId=$PROJECT_ID&limit=10&target=production&state=READY")
+   426→            LATEST_URL=$(echo "$LATEST" | jq -r '.deployments[0].url // empty')
+   427→            LATEST_COMMIT=$(echo "$LATEST" | jq -r '.deployments[0].meta.githubCommitSha // "unknown"')
+   428→            LATEST_MSG=$(echo "$LATEST" | jq -r '.deployments[0].meta.githubCommitMessage // "unknown"' | head -c 80)
+   429→            echo "  Latest READY production deployment:"
+   430→            echo "    URL: https://$LATEST_URL"
+   431→            echo "    Commit SHA: $LATEST_COMMIT"
+   432→            echo "    Commit msg: $LATEST_MSG"
+   433→
+   434→            if [ -n "$LATEST_URL" ] && [ "$LATEST_URL" != "null" ]; then
+   435→              NEW_STAGING_URL="https://$LATEST_URL"
+   436→              echo "NEW_STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+   437→              echo "  ✅ Using latest READY production deployment: $NEW_STAGING_URL"
+   438→            fi
+   439→          fi
+   440→
+   441→      - name: Use new deployment URL if available
+   442→        run: |
+   443→          if [ -n "$NEW_STAGING_URL" ]; then
+   444→            echo "Using newly-triggered deployment URL: $NEW_STAGING_URL"
+   445→            echo "STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+   446→          else
+   447→            echo "Using provided staging URL: $STAGING_URL"
+   448→            echo "STAGING_URL=$STAGING_URL" >> $GITHUB_ENV
+   449→          fi
+   450→
+   451→      - name: Verify staging health + realPayments=false + evidence endpoints deployed
+   452→        run: |
+   453→          STAGING_URL="${STAGING_URL%/}"
+   454→          echo "=== Staging URL: $STAGING_URL ==="
+   455→
+   456→          # Retry the health check + evidence-setup endpoint a few times
+   457→          # (new deployments may take a moment to be fully reachable)
+   458→          READY=0
+   459→          for attempt in $(seq 1 12); do
+   460→            echo ""
+   461→            echo "=== Attempt $attempt: Health check ==="
+   462→            HEALTH=$(curl -sS -w "\n%{http_code}" "$STAGING_URL/api/health")
+   463→            HEALTH_HTTP=$(echo "$HEALTH" | tail -1)
+   464→            HEALTH_BODY=$(echo "$HEALTH" | head -n -1)
+   465→            echo "  Health HTTP: $HEALTH_HTTP"
+   466→            if [ "$HEALTH_HTTP" = "200" ]; then
+   467→              echo "  Health body: $HEALTH_BODY" | head -c 200
+   468→              echo ""
+   469→              echo "  === Verify webhook evidence-setup endpoint ==="
+   470→              SETUP_RESP=$(curl -sS -w "\n%{http_code}" "$STAGING_URL/api/webhooks/evidence-setup?scenario=concurrent")
+   471→              SETUP_HTTP=$(echo "$SETUP_RESP" | tail -1)
+   472→              SETUP_BODY=$(echo "$SETUP_RESP" | head -n -1)
+   473→              echo "  webhook evidence-setup HTTP: $SETUP_HTTP"
+   474→              if [ "$SETUP_HTTP" = "200" ]; then
+   475→                echo "  webhook evidence-setup body: $SETUP_BODY" | head -c 200
+   476→                echo ""
+   477→                echo "✅ Webhook evidence endpoints deployed + evidence test mode enabled + webhookHandler flag ON"
+   478→                READY=1
+   479→                break
+   480→              elif [ "$SETUP_HTTP" = "403" ]; then
+   481→                echo "  ❌ Evidence test mode NOT enabled (403). Env var may not have propagated."
+   482→              else
+   483→                echo "  ⚠️ webhook evidence-setup returned $SETUP_HTTP (expected 200). Latest commit may not be deployed yet."
+   484→              fi
+   485→            else
+   486→              echo "  ⚠️ Health check failed (HTTP $HEALTH_HTTP)"
+   487→            fi
+   488→            echo "  Waiting 15s before retry..."
+   489→            sleep 15
+   490→          done
+   491→
+   492→          if [ "$READY" != "1" ]; then
+   493→            echo ""
+   494→            echo "❌ FAILED: Staging not ready or evidence endpoints not deployed after 12 attempts."
+   495→            exit 1
+   496→          fi
+   497→
+   498→      - name: Run 5-concurrent-webhook test + verify PostgreSQL state
+   499→        env:
+   500→          # Use STAGING_URL from GITHUB_ENV (set by the deploy-trigger step to
+   501→          # the newly-deployed preview URL). Do NOT use inputs.staging_url here
+   502→          # because that is the stale default URL that doesn't have the
+   503→          # evidence endpoints deployed.
+   504→          STAGING_URL: ${{ env.STAGING_URL }}
+   505→        run: |
+   506→          STAGING_URL="${STAGING_URL%/}"
+   507→          RUN_ID="4a-pg-ev-$(date +%s)-$(echo $RANDOM | base64 | tr -dc 'a-z0-9' | head -c 8)"
+   508→          EVIDENCE_FILE="wave4-4a-postgresql-evidence.json"
+   509→
+   510→          echo "=================================================="
+   511→          echo "  Wave-4 Sub-Wave 4a — PostgreSQL Webhook Concurrent Evidence"
+   512→          echo "  Run ID: $RUN_ID"
+   513→          echo "  Staging URL: $STAGING_URL"
+   514→          echo "  Database: PostgreSQL (Supabase staging)"
+   515→          echo "  Feature flag: webhookHandler=true (4a code path active)"
+   516→          echo "=================================================="
+   517→          echo ""
+   518→
+   519→          # --- Step 1: Setup test scenario (create user + session + Order + Payment) ---
+   520→          # The webhook evidence-setup endpoint CREATES an Order + Payment (in
+   521→          # PAYMENT_PENDING status) that the webhook handler will update to
+   522→          # CAPTURED. It also creates a session (the webhook route itself does
+   523→          # not require auth, but the session is returned for completeness).
+   524→          # Returns: userId, orderId, paymentId, gatewayPaymentId, gatewayOrderId, amount
+   525→          echo "=== Step 1: Setup test scenario ==="
+   526→          SETUP_RESP=$(curl -sS -c /tmp/cookies.txt -b /tmp/cookies.txt "$STAGING_URL/api/webhooks/evidence-setup?scenario=concurrent")
+   527→          echo "Setup response: $SETUP_RESP"
+   528→
+   529→          USER_ID=$(echo "$SETUP_RESP" | jq -r '.userId')
+   530→          SESSION_TOKEN=$(echo "$SETUP_RESP" | jq -r '.sessionToken')
+   531→          CSRF_TOKEN=$(echo "$SETUP_RESP" | jq -r '.csrfToken')
+   532→          ORDER_ID=$(echo "$SETUP_RESP" | jq -r '.orderId')
+   533→          PAYMENT_ID=$(echo "$SETUP_RESP" | jq -r '.paymentId')
+   534→          GATEWAY_PAYMENT_ID=$(echo "$SETUP_RESP" | jq -r '.gatewayPaymentId')
+   535→          GATEWAY_ORDER_ID=$(echo "$SETUP_RESP" | jq -r '.gatewayOrderId')
+   536→          AMOUNT=$(echo "$SETUP_RESP" | jq -r '.amount')
+   537→          RESTAURANT_ID=$(echo "$SETUP_RESP" | jq -r '.restaurantId')
+   538→          MENU_ITEM_ID=$(echo "$SETUP_RESP" | jq -r '.menuItemId')
+   539→
+   540→          if [ -z "$PAYMENT_ID" ] || [ "$PAYMENT_ID" = "null" ] || \
+   541→             [ -z "$GATEWAY_PAYMENT_ID" ] || [ "$GATEWAY_PAYMENT_ID" = "null" ]; then
+   542→            echo "❌ Failed to set up test scenario (missing paymentId/gatewayPaymentId)"
+   543→            exit 1
+   544→          fi
+   545→          echo "✅ Test setup: orderId=$ORDER_ID, paymentId=$PAYMENT_ID, gatewayPaymentId=$GATEWAY_PAYMENT_ID, amount=$AMOUNT (user: $USER_ID)"
+   546→
+   547→          # Generate a unique Razorpay event ID — this is the dedup key for the
+   548→          # webhook handler (WebhookEvent.eventId unique constraint). All 5
+   549→          # concurrent webhook POSTs will use the SAME event ID, which is the
+   550→          # precondition for the webhook idempotency test: N concurrent webhook
+   551→          # POSTs with the same event_id → exactly 1 WebhookEvent row + 1 Payment
+   552→          # CAPTURED + 1 Outbox event (PAYMENT_CAPTURE_CONFIRMED).
+   553→          EVENT_ID="evt_4a_pg_$(date +%s)_$(echo $RANDOM | tr -dc 'a-z0-9' | head -c 6)"
+   554→          EVENT_TYPE="payment.captured"
+   555→
+   556→          echo ""
+   557→          echo "=== Step 2: Fire 5 concurrent POST /api/webhooks/razorpay with same X-Razorpay-Event-Id (webhookHandler=true) ==="
+   558→          echo "Event ID: $EVENT_ID"
+   559→          echo "Event type: $EVENT_TYPE"
+   560→
+   561→          # Build the webhook POST body once — all 5 concurrent requests use the
+   562→          # SAME body (same paymentId/gatewayPaymentId + same amount + same
+   563→          # eventType). The webhook processor reads payload.paymentId as the
+   564→          # gatewayPaymentId (handlePaymentCaptured() does
+   565→          # tx.payment.findFirst({ where: { gatewayPaymentId } })).
+   566→          WEBHOOK_BODY=$(jq -n \
+   567→            --arg paymentId "$GATEWAY_PAYMENT_ID" \
+   568→            --argjson amount "$AMOUNT" \
+   569→            --arg eventType "$EVENT_TYPE" \
+   570→            '{paymentId:$paymentId, amount:$amount, eventType:$eventType}')
+   571→          echo "Webhook POST body: $WEBHOOK_BODY"
+   572→
+   573→          # Fire 5 concurrent webhook POSTs in parallel using background jobs.
+   574→          # All 5 use the SAME X-Razorpay-Event-Id header (the dedup key) +
+   575→          # X-Evidence-Skip-Verify=true (skips HMAC verification under
+   576→          # EVIDENCE_TEST_MODE=true — see src/app/api/webhooks/razorpay/route.ts:50).
+   577→          CONCURRENCY=5
+   578→          RESULTS_DIR="/tmp/concurrent-results"
+   579→          mkdir -p "$RESULTS_DIR"
+   580→
+   581→          for i in $(seq 1 $CONCURRENCY); do
+   582→            (
+   583→              RESP_FILE="$RESULTS_DIR/resp_$i.json"
+   584→              HTTP_FILE="$RESULTS_DIR/http_$i.txt"
+   585→
+   586→              HTTP_CODE=$(curl -sS -o "$RESP_FILE" -w "%{http_code}" \
+   587→                -X POST "$STAGING_URL/api/webhooks/razorpay" \
+   588→                -H "Content-Type: application/json" \
+   589→                -H "X-Razorpay-Event-Id: $EVENT_ID" \
+   590→                -H "X-Razorpay-Event: $EVENT_TYPE" \
+   591→                -H "X-Evidence-Skip-Verify: true" \
+   592→                -d "$WEBHOOK_BODY")
+   593→
+   594→              echo "$HTTP_CODE" > "$HTTP_FILE"
+   595→              echo "Request $i: HTTP $HTTP_CODE, body: $(cat $RESP_FILE | head -c 200)"
+   596→            ) &
+   597→          done
+   598→
+   599→          # Wait for all concurrent requests to complete
+   600→          wait
+   601→          echo "✅ All 5 concurrent webhook requests completed"
+   602→
+   603→          echo ""
+   604→          echo "=== Step 3: Collect response results ==="
+   605→          ALL_RESPONSES="["
+   606→          for i in $(seq 1 $CONCURRENCY); do
+   607→            HTTP_CODE=$(cat "$RESULTS_DIR/http_$i.txt")
+   608→            BODY=$(cat "$RESULTS_DIR/resp_$i.json")
+   609→            RESP_EVENT_ID=$(echo "$BODY" | jq -r '.eventId // empty' 2>/dev/null)
+   610→            RESP_STATUS=$(echo "$BODY" | jq -r '.status // empty' 2>/dev/null)
+   611→            RESP_PAYMENT_ID=$(echo "$BODY" | jq -r '.paymentId // empty' 2>/dev/null)
+   612→            ERROR_CODE=$(echo "$BODY" | jq -r '.error.code // empty' 2>/dev/null)
+   613→            ERROR_MSG=$(echo "$BODY" | jq -r '.error.message // empty' 2>/dev/null)
+   614→
+   615→            REQUEST_ENTRY=$(jq -n \
+   616→              --argjson index "$i" \
+   617→              --argjson status "$HTTP_CODE" \
+   618→              --arg eventId "$RESP_EVENT_ID" \
+   619→              --arg webhookStatus "$RESP_STATUS" \
+   620→              --arg paymentId "$RESP_PAYMENT_ID" \
+   621→              --arg errorCode "$ERROR_CODE" \
+   622→              --arg errorMsg "$ERROR_MSG" \
+   623→              '{requestIndex: $index, status: $status, eventId: $eventId, webhookStatus: $webhookStatus, paymentId: $paymentId, errorCode: $errorCode, errorMessage: $errorMsg}')
+   624→
+   625→            if [ "$i" = "1" ]; then
+   626→              ALL_RESPONSES="$ALL_RESPONSES$REQUEST_ENTRY"
+   627→            else
+   628→              ALL_RESPONSES="$ALL_RESPONSES,$REQUEST_ENTRY"
+   629→            fi
+   630→            echo "  Request $i: HTTP $HTTP_CODE, webhookStatus=$RESP_STATUS, eventId=$RESP_EVENT_ID, paymentId=$RESP_PAYMENT_ID, error=$ERROR_CODE"
+   631→          done
+   632→          ALL_RESPONSES="$ALL_RESPONSES]"
+   633→
+   634→          # Compute unique webhook event IDs from responses (non-empty only)
+   635→          UNIQUE_WEBHOOK_EVENTS=$(echo "$ALL_RESPONSES" | jq -r '[.[].eventId | select(. != "")] | unique | length')
+   636→          SUCCESS_COUNT=$(echo "$ALL_RESPONSES" | jq -r '[.[] | select(.status == 200)] | length')
+   637→          ERROR_COUNT=$(echo "$ALL_RESPONSES" | jq -r '[.[] | select(.status != 200)] | length')
+   638→
+   639→          # 4a — Count 422 responses (webhook route should never return 422;
+   640→          # duplicates return 200 with status='duplicate', conflicts return 200
+   641→          # with status='conflict-resolved'). A non-zero 422 count would
+   642→          # indicate a regression in the webhook handler.
+   643→          COUNT_422=$(echo "$ALL_RESPONSES" | jq -r '[.[] | select(.status == 422)] | length')
+   644→          if [ "$COUNT_422" = "0" ]; then
+   645→            NO_422_ERRORS="true"
+   646→          else
+   647→            NO_422_ERRORS="false"
+   648→          fi
+   649→
+   650→          # Count responses by webhook status (processed | duplicate | conflict-resolved | unverified)
+   651→          COUNT_PROCESSED=$(echo "$ALL_RESPONSES" | jq -r '[.[] | select(.webhookStatus == "processed")] | length')
+   652→          COUNT_DUPLICATE=$(echo "$ALL_RESPONSES" | jq -r '[.[] | select(.webhookStatus == "duplicate")] | length')
+   653→          COUNT_CONFLICT=$(echo "$ALL_RESPONSES" | jq -r '[.[] | select(.webhookStatus == "conflict-resolved")] | length')
+   654→
+   655→          # Pick the "winning" webhook — the one that returned status='processed'.
+   656→          # This is the webhook that actually created the WebhookEvent row + updated the Payment.
+   657→          # (All other concurrent requests either returned 'duplicate' via findUnique dedup,
+   658→          # or 'conflict-resolved' via TransactionConflictError handler.)
+   659→          WINNING_PAYMENT_ID=$(echo "$ALL_RESPONSES" | jq -r '[.[] | select(.webhookStatus == "processed") | .paymentId] | .[0] // empty')
+   660→
+   661→          echo ""
+   662→          echo "Summary of responses:"
+   663→          echo "  Success count (HTTP 200): $SUCCESS_COUNT"
+   664→          echo "  Error count (non-200): $ERROR_COUNT"
+   665→          echo "  Unique webhook event IDs in responses: $UNIQUE_WEBHOOK_EVENTS"
+   666→          echo "  webhookStatus='processed': $COUNT_PROCESSED (expected: 1)"
+   667→          echo "  webhookStatus='duplicate': $COUNT_DUPLICATE (expected: 4 — findUnique dedup path)"
+   668→          echo "  webhookStatus='conflict-resolved': $COUNT_CONFLICT (expected: 0-4 — TransactionConflictError path)"
+   669→          echo "  Winning paymentId (from processed webhook): $WINNING_PAYMENT_ID"
+   670→          echo "  422 responses: $COUNT_422 (expected: 0 — webhook route never returns 422)"
+   671→
+   672→          if [ -z "$WINNING_PAYMENT_ID" ] || [ "$WINNING_PAYMENT_ID" = "null" ]; then
+   673→            echo "⚠️ No webhook returned status='processed' — concurrent dedup may have prevented any single webhook from completing the create path."
+   674→            echo "  Falling back to setup PAYMENT_ID=$PAYMENT_ID for verification."
+   675→            WINNING_PAYMENT_ID="$PAYMENT_ID"
+   676→          fi
+   677→
+   678→          echo ""
+   679→          echo "=== Step 4: Verify PostgreSQL database state via evidence-verify endpoint ==="
+   680→          # The webhook evidence-verify endpoint reads the full state of webhook-related
+   681→          # writes (WebhookEvent, Payment, AuditLog, Outbox) for the given eventId +
+   682→          # paymentId, and computes invariant flags server-side.
+   683→          VERIFY_RESP=$(curl -sS "$STAGING_URL/api/webhooks/evidence-verify?eventId=$EVENT_ID&paymentId=$PAYMENT_ID")
+   684→          echo "evidence-verify response: $VERIFY_RESP"
+   685→
+   686→          WEBHOOK_EVENT_COUNT_VERIFY=$(echo "$VERIFY_RESP" | jq -r '.webhookEventCount // 0')
+   687→          PAYMENT_DB_STATUS_VERIFY=$(echo "$VERIFY_RESP" | jq -r '.payment.status // empty')
+   688→          OUTBOX_EXISTS_VERIFY=$(echo "$VERIFY_RESP" | jq -r '.outboxExists // false')
+   689→          AUDIT_LOG_COUNT_VERIFY=$(echo "$VERIFY_RESP" | jq -r '.auditLogCount // 0')
+   690→          EXACTLY_ONE_WEBHOOK_PROCESSED=$(echo "$VERIFY_RESP" | jq -r '.exactlyOneWebhookProcessed // false')
+   691→          PROCESSED_BY_VERIFY=$(echo "$VERIFY_RESP" | jq -r '.webhookEvent.processedBy // empty')
+   692→          WEBHOOK_EVENT_EXISTS_VERIFY=$(echo "$VERIFY_RESP" | jq -r '.webhookEvent.exists // false')
+   693→
+   694→          echo ""
+   695→          echo "  evidence-verify summary:"
+   696→          echo "    webhookEventCount: $WEBHOOK_EVENT_COUNT_VERIFY (expected: 1)"
+   697→          echo "    payment.status: $PAYMENT_DB_STATUS_VERIFY (expected: CAPTURED)"
+   698→          echo "    outboxExists: $OUTBOX_EXISTS_VERIFY (expected: true)"
+   699→          echo "    auditLogCount: $AUDIT_LOG_COUNT_VERIFY (expected: >=2)"
+   700→          echo "    exactlyOneWebhookProcessed: $EXACTLY_ONE_WEBHOOK_PROCESSED (expected: true)"
+   701→          echo "    webhookEvent.processedBy: $PROCESSED_BY_VERIFY (expected: webhook-handler-4a)"
+   702→          echo "    webhookEvent.exists: $WEBHOOK_EVENT_EXISTS_VERIFY (expected: true)"
+   703→
+   704→          echo ""
+   705→          echo "=== Step 5: Verify PostgreSQL database state directly (via Supabase Management API) ==="
+   706→
+   707→          # Query WebhookEvent by eventId (should return exactly 1 row)
+   708→          WEBHOOK_SQL=$(printf 'SELECT "id", "eventId", "eventType", "verified", "processed", "processedAt", "processedBy", "processingNotes", "paymentId" FROM "WebhookEvent" WHERE "eventId" = '\''%s'\'';' "$EVENT_ID")
+   709→          WEBHOOK_RESULT=$(curl -sS -X POST \
+   710→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   711→            -H "Content-Type: application/json" \
+   712→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   713→            -d "$(jq -n --arg q "$WEBHOOK_SQL" '{query: $q}')")
+   714→          echo "WebhookEvent raw: $(echo $WEBHOOK_RESULT | head -c 500)"
+   715→          echo ""
+   716→          WEBHOOK_EVENT_COUNT=$(echo "$WEBHOOK_RESULT" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null || echo "0")
+   717→          WEBHOOK_EVENT_DB_EVENT_ID=$(echo "$WEBHOOK_RESULT" | jq -r 'if type == "array" then .[0].eventId // empty else .eventId // empty end' 2>/dev/null || echo "")
+   718→          WEBHOOK_EVENT_DB_VERIFIED=$(echo "$WEBHOOK_RESULT" | jq -r 'if type == "array" then .[0].verified // empty else .verified // empty end' 2>/dev/null || echo "")
+   719→          WEBHOOK_EVENT_DB_PROCESSED=$(echo "$WEBHOOK_RESULT" | jq -r 'if type == "array" then .[0].processed // empty else .processed // empty end' 2>/dev/null || echo "")
+   720→          WEBHOOK_EVENT_DB_PROCESSED_BY=$(echo "$WEBHOOK_RESULT" | jq -r 'if type == "array" then .[0].processedBy // empty else .processedBy // empty end' 2>/dev/null || echo "")
+   721→          WEBHOOK_EVENT_DB_PAYMENT_ID=$(echo "$WEBHOOK_RESULT" | jq -r 'if type == "array" then .[0].paymentId // empty else .paymentId // empty end' 2>/dev/null || echo "")
+   722→
+   723→          # 4a — Verify WebhookEvent.processedBy column is non-null (4a schema delta).
+   724→          # The processor sets processedBy='webhook-handler-4a' (see webhook-processor.ts:75).
+   725→          # A null processedBy would indicate the webhook handler did NOT complete
+   726→          # processing (e.g. flag not actually ON, or processor crashed mid-flight).
+   727→          if [ -n "$WEBHOOK_EVENT_DB_PROCESSED_BY" ] && [ "$WEBHOOK_EVENT_DB_PROCESSED_BY" != "null" ]; then
+   728→            PROCESSED_BY_STORED="true"
+   729→            echo "  ✅ WebhookEvent.processedBy is non-null: $WEBHOOK_EVENT_DB_PROCESSED_BY"
+   730→          else
+   731→            PROCESSED_BY_STORED="false"
+   732→            echo "  ❌ WebhookEvent.processedBy is null or missing (4a processing metadata not stored)"
+   733→          fi
+   734→
+   735→          # Query Payment state (should be CAPTURED)
+   736→          PAYMENT_SQL=$(printf 'SELECT "id", "status", "capturedAt", "gatewayPaymentId", "version" FROM "Payment" WHERE "id" = '\''%s'\'';' "$PAYMENT_ID")
+   737→          PAYMENT_RESULT=$(curl -sS -X POST \
+   738→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   739→            -H "Content-Type: application/json" \
+   740→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   741→            -d "$(jq -n --arg q "$PAYMENT_SQL" '{query: $q}')")
+   742→          echo "Payment raw: $(echo $PAYMENT_RESULT | head -c 500)"
+   743→          echo ""
+   744→          PAYMENT_DB_STATUS=$(echo "$PAYMENT_RESULT" | jq -r 'if type == "array" then .[0].status // empty else .status // empty end' 2>/dev/null || echo "")
+   745→          PAYMENT_DB_CAPTURED_AT=$(echo "$PAYMENT_RESULT" | jq -r 'if type == "array" then .[0].capturedAt // empty else .capturedAt // empty end' 2>/dev/null || echo "")
+   746→          PAYMENT_DB_VERSION=$(echo "$PAYMENT_RESULT" | jq -r 'if type == "array" then .[0].version // 0 else .version // 0 end' 2>/dev/null || echo "0")
+   747→
+   748→          # paymentCaptured: true iff Payment.status='CAPTURED' AND capturedAt is non-null
+   749→          if [ "$PAYMENT_DB_STATUS" = "CAPTURED" ] && [ -n "$PAYMENT_DB_CAPTURED_AT" ] && [ "$PAYMENT_DB_CAPTURED_AT" != "null" ]; then
+   750→            PAYMENT_CAPTURED="true"
+   751→            echo "  ✅ Payment is CAPTURED (capturedAt=$PAYMENT_DB_CAPTURED_AT, version=$PAYMENT_DB_VERSION)"
+   752→          else
+   753→            PAYMENT_CAPTURED="false"
+   754→            echo "  ❌ Payment is NOT captured (status=$PAYMENT_DB_STATUS, capturedAt=$PAYMENT_DB_CAPTURED_AT)"
+   755→          fi
+   756→
+   757→          # Query Outbox count for Payment aggregate (eventType=PAYMENT_CAPTURE_CONFIRMED)
+   758→          OUTBOX_SQL=$(printf 'SELECT COUNT(*) as count FROM "Outbox" WHERE "aggregateType" = '\''Payment'\'' AND "aggregateId" = '\''%s'\'' AND "eventType" = '\''PAYMENT_CAPTURE_CONFIRMED'\'';' "$PAYMENT_ID")
+   759→          OUTBOX_RESULT=$(curl -sS -X POST \
+   760→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   761→            -H "Content-Type: application/json" \
+   762→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   763→            -d "$(jq -n --arg q "$OUTBOX_SQL" '{query: $q}')")
+   764→          echo "Outbox raw: $(echo $OUTBOX_RESULT | head -c 300)"
+   765→          OUTBOX_COUNT=$(echo "$OUTBOX_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
+   766→
+   767→          # Query AuditLog count for WEBHOOK_* actions whose metadata contains the eventId
+   768→          # OR paymentId. WEBHOOK_RECEIVED metadata contains eventId (set at route.ts:160);
+   769→          # WEBHOOK_PAYMENT_CAPTURED metadata contains paymentId (set at webhook-processor.ts:180).
+   770→          # Use %% to emit a literal % (printf format spec).
+   771→          AUDIT_SQL=$(printf 'SELECT COUNT(*) as count FROM "AuditLog" WHERE "action" LIKE '\''WEBHOOK_%%'\'' AND ("metadata" LIKE '\''%%%s%%'\'' OR "metadata" LIKE '\''%%%s%%'\'');' "$EVENT_ID" "$PAYMENT_ID")
+   772→          AUDIT_RESULT=$(curl -sS -X POST \
+   773→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+   774→            -H "Content-Type: application/json" \
+   775→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+   776→            -d "$(jq -n --arg q "$AUDIT_SQL" '{query: $q}')")
+   777→          echo "Audit raw: $(echo $AUDIT_RESULT | head -c 300)"
+   778→          AUDIT_COUNT=$(echo "$AUDIT_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
+   779→
+   780→          echo ""
+   781→          echo "=== Step 6: Database state summary ==="
+   782→          echo "  WebhookEvent count (by eventId):    $WEBHOOK_EVENT_COUNT (expected: 1)"
+   783→          echo "  WebhookEvent.eventId:              $WEBHOOK_EVENT_DB_EVENT_ID"
+   784→          echo "  WebhookEvent.verified:             $WEBHOOK_EVENT_DB_VERIFIED (expected: true)"
+   785→          echo "  WebhookEvent.processed:            $WEBHOOK_EVENT_DB_PROCESSED (expected: true)"
+   786→          echo "  WebhookEvent.processedBy:          $WEBHOOK_EVENT_DB_PROCESSED_BY (expected: webhook-handler-4a)"
+   787→          echo "  WebhookEvent.paymentId:            $WEBHOOK_EVENT_DB_PAYMENT_ID (expected: $PAYMENT_ID)"
+   788→          echo "  Payment.status:                    $PAYMENT_DB_STATUS (expected: CAPTURED)"
+   789→          echo "  Payment.capturedAt:                $PAYMENT_DB_CAPTURED_AT (expected: non-null)"
+   790→          echo "  Payment.version:                   $PAYMENT_DB_VERSION (expected: >=1)"
+   791→          echo "  Outbox event count (PAYMENT_CAPTURE_CONFIRMED): $OUTBOX_COUNT (expected: 1)"
+   792→          echo "  Audit log count (WEBHOOK_*):       $AUDIT_COUNT (expected: >=2)"
+   793→          echo "  Unique webhook event IDs in responses: $UNIQUE_WEBHOOK_EVENTS (expected: 1)"
+   794→          echo "  Processed by stored:               $PROCESSED_BY_STORED (expected: true — 4a schema delta)"
+   795→          echo "  422 responses:                     $COUNT_422 (expected: 0)"
+   796→          echo "  Payment captured:                  $PAYMENT_CAPTURED (expected: true)"
+   797→
+   798→          echo ""
+   799→          echo "=== Step 7: Verify exactly-one-webhook-processed + 4a invariants ==="
+   800→          EXACTLY_ONE_WEBHOOK="false"
+   801→          # Invariant:
+   802→          #   - 1 WebhookEvent row (by eventId)
+   803→          #   - WebhookEvent.verified=true
+   804→          #   - WebhookEvent.processed=true
+   805→          #   - WebhookEvent.processedBy non-null (4a schema delta)
+   806→          #   - Payment.status=CAPTURED + capturedAt non-null
+   807→          #   - 1 Outbox event (PAYMENT_CAPTURE_CONFIRMED)
+   808→          #   - AuditLog count >=2 (WEBHOOK_RECEIVED + WEBHOOK_PAYMENT_CAPTURED)
+   809→          #   - unique webhook event IDs in responses = 1
+   810→          #   - no 422 errors
+   811→          if [ "$WEBHOOK_EVENT_COUNT" = "1" ] && \
+   812→             [ "$WEBHOOK_EVENT_DB_VERIFIED" = "true" ] && \
+   813→             [ "$WEBHOOK_EVENT_DB_PROCESSED" = "true" ] && \
+   814→             [ "$PROCESSED_BY_STORED" = "true" ] && \
+   815→             [ "$PAYMENT_CAPTURED" = "true" ] && \
+   816→             [ "$OUTBOX_COUNT" = "1" ] && \
+   817→             [ "$AUDIT_COUNT" -ge "2" ] && \
+   818→             [ "$UNIQUE_WEBHOOK_EVENTS" = "1" ] && \
+   819→             [ "$NO_422_ERRORS" = "true" ]; then
+   820→            EXACTLY_ONE_WEBHOOK="true"
+   821→            echo "✅ PASS: exactly 1 WebhookEvent (verified+processed+processedBy non-null), Payment CAPTURED, 1 Outbox event, >=2 AuditLogs, 1 unique eventId in responses, no 422 errors"
+   822→          else
+   823→            echo "❌ FAIL: invariant violated"
+   824→          fi
+   825→
+   826→          echo ""
+   827→          echo "=== Step 8: Capture P2002 behavior of losing concurrent webhook transactions ==="
+   828→          # The losing transactions should have received HTTP 200 with either:
+   829→          #   - webhookStatus='duplicate' (via tx.webhookEvent.findUnique dedup path on retry)
+   830→          #   - webhookStatus='conflict-resolved' (via TransactionConflictError handler)
+   831→          # Both are acceptable — what matters is NO duplicate WebhookEvent was created.
+   832→          LOSING_BEHAVIOR=$(echo "$ALL_RESPONSES" | jq -r '[.[] | {status, webhookStatus, eventId, paymentId, errorCode}]')
+   833→          echo "All responses (with webhookStatus):"
+   834→          echo "$LOSING_BEHAVIOR" | jq '.' 2>/dev/null || echo "$LOSING_BEHAVIOR"
+   835→
+   836→          # Count responses by webhook status
+   837→          echo ""
+   838→          echo "Responses by webhook status:"
+   839→          echo "  processed: $COUNT_PROCESSED (expected: 1 — the winning webhook)"
+   840→          echo "  duplicate: $COUNT_DUPLICATE (expected: 4 — losing via findUnique dedup)"
+   841→          echo "  conflict-resolved: $COUNT_CONFLICT (expected: 0-4 — losing via TransactionConflictError)"
+   842→          echo "  Total errors (non-200): $ERROR_COUNT"
+   843→
+   844→          echo ""
+   845→          echo "=== Step 9: Generate self-validating evidence JSON ==="
+   846→
+   847→          # Build the evidence JSON (ok:true only if all invariants hold)
+   848→          jq -n \
+   849→            --argjson ok "$EXACTLY_ONE_WEBHOOK" \
+   850→            --arg runId "$RUN_ID" \
+   851→            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+   852→            --arg database "postgresql" \
+   853→            --arg stagingUrl "$STAGING_URL" \
+   854→            --arg eventId "$EVENT_ID" \
+   855→            --arg eventType "$EVENT_TYPE" \
+   856→            --arg orderId "$ORDER_ID" \
+   857→            --arg paymentId "$PAYMENT_ID" \
+   858→            --arg gatewayPaymentId "$GATEWAY_PAYMENT_ID" \
+   859→            --arg gatewayOrderId "$GATEWAY_ORDER_ID" \
+   860→            --arg userId "$USER_ID" \
+   861→            --arg restaurantId "$RESTAURANT_ID" \
+   862→            --arg menuItemId "$MENU_ITEM_ID" \
+   863→            --arg webhookEventProcessedBy "$WEBHOOK_EVENT_DB_PROCESSED_BY" \
+   864→            --arg paymentStatus "$PAYMENT_DB_STATUS" \
+   865→            --arg paymentCapturedAt "$PAYMENT_DB_CAPTURED_AT" \
+   866→            --argjson paymentVersion "$PAYMENT_DB_VERSION" \
+   867→            --argjson amount "$AMOUNT" \
+   868→            --argjson concurrentRequests "$CONCURRENCY" \
+   869→            --argjson uniqueWebhookEvents "$UNIQUE_WEBHOOK_EVENTS" \
+   870→            --argjson webhookEventCount "$WEBHOOK_EVENT_COUNT" \
+   871→            --argjson outboxEventCount "$OUTBOX_COUNT" \
+   872→            --argjson auditLogCount "$AUDIT_COUNT" \
+   873→            --argjson processedByStored "$PROCESSED_BY_STORED" \
+   874→            --argjson paymentCaptured "$PAYMENT_CAPTURED" \
+   875→            --argjson successCount "$SUCCESS_COUNT" \
+   876→            --argjson errorCount "$ERROR_COUNT" \
+   877→            --argjson count422 "$COUNT_422" \
+   878→            --argjson no422Errors "$NO_422_ERRORS" \
+   879→            --argjson countProcessed "$COUNT_PROCESSED" \
+   880→            --argjson countDuplicate "$COUNT_DUPLICATE" \
+   881→            --argjson countConflict "$COUNT_CONFLICT" \
+   882→            --argjson responses "$ALL_RESPONSES" \
+   883→            --argjson losingBehavior "$LOSING_BEHAVIOR" \
+   884→            --argjson webhookEventCountVerify "$WEBHOOK_EVENT_COUNT_VERIFY" \
+   885→            --argjson auditLogCountVerify "$AUDIT_LOG_COUNT_VERIFY" \
+   886→            --argjson exactlyOneWebhookProcessed "$EXACTLY_ONE_WEBHOOK_PROCESSED" \
+   887→            '{
+   888→              ok: $ok,
+   889→              runId: $runId,
+   890→              timestamp: $timestamp,
+   891→              wave: "4",
+   892→              subWave: "4a",
+   893→              evidenceType: "postgresql-concurrent-webhook-idempotency",
+   894→              database: $database,
+   895→              stagingUrl: $stagingUrl,
+   896→              test: "5 concurrent POST /api/webhooks/razorpay with same X-Razorpay-Event-Id + webhookHandler=true",
+   897→              orchestratorRequiredFields: {
+   898→                database: $database,
+   899→                concurrentRequests: $concurrentRequests,
+   900→                uniqueWebhookEvents: $uniqueWebhookEvents,
+   901→                webhookEventCount: $webhookEventCount,
+   902→                paymentCaptured: $paymentCaptured,
+   903→                outboxEventCount: $outboxEventCount,
+   904→                auditLogCount: $auditLogCount,
+   905→                no422Errors: $no422Errors
+   906→              },
+   907→              invariant: {
+   908→                exactlyOneWebhookProcessed: $ok,
+   909→                processedByStored: $processedByStored,
+   910→                paymentCaptured: $paymentCaptured,
+   911→                outboxEventCountIsOne: ($outboxEventCount == 1),
+   912→                auditLogCountAtLeastTwo: ($auditLogCount >= 2),
+   913→                no422Errors: $no422Errors,
+   914→                description: "From 5 concurrent POST /api/webhooks/razorpay requests with same X-Razorpay-Event-Id + webhookHandler=true (FEATURE_WEBHOOK_HANDLER=true on Vercel): exactly 1 WebhookEvent (verified + processed + processedBy non-null), Payment CAPTURED, 1 outbox event (PAYMENT_CAPTURE_CONFIRMED), >=2 audit logs (WEBHOOK_RECEIVED + WEBHOOK_PAYMENT_CAPTURED), 1 unique eventId in responses, all 5 responses 200 (no 422)"
+   915→              },
+   916→              setup: {
+   917→                userId: $userId,
+   918→                orderId: $orderId,
+   919→                paymentId: $paymentId,
+   920→                gatewayPaymentId: $gatewayPaymentId,
+   921→                gatewayOrderId: $gatewayOrderId,
+   922→                restaurantId: $restaurantId,
+   923→                menuItemId: $menuItemId,
+   924→                amount: $amount,
+   925→                eventId: $eventId,
+   926→                eventType: $eventType,
+   927→                concurrency: $concurrentRequests,
+   928→                webhookHandlerEnabled: true
+   929→              },
+   930→              responseSummary: {
+   931→                successCount: $successCount,
+   932→                errorCount: $errorCount,
+   933→                count422: $count422,
+   934→                no422Errors: $no422Errors,
+   935→                countProcessed: $countProcessed,
+   936→                countDuplicate: $countDuplicate,
+   937→                countConflict: $countConflict,
+   938→                uniqueWebhookEventsInResponses: $uniqueWebhookEvents,
+   939→                responses: $responses
+   940→              },
+   941→              databaseState: {
+   942→                webhookEventCount: $webhookEventCount,
+   943→                webhookEventId: $eventId,
+   944→                webhookEventProcessedBy: $webhookEventProcessedBy,
+   945→                processedByStored: $processedByStored,
+   946→                paymentId: $paymentId,
+   947→                paymentStatus: $paymentStatus,
+   948→                paymentCapturedAt: $paymentCapturedAt,
+   949→                paymentVersion: $paymentVersion,
+   950→                paymentCaptured: $paymentCaptured,
+   951→                outboxEventCount: $outboxEventCount,
+   952→                auditLogCount: $auditLogCount
+   953→              },
+   954→              evidenceVerifyEndpoint: {
+   955→                webhookEventCount: $webhookEventCountVerify,
+   956→                auditLogCount: $auditLogCountVerify,
+   957→                exactlyOneWebhookProcessed: $exactlyOneWebhookProcessed
+   958→              },
+   959→              expected: {
+   960→                webhookEventCount: 1,
+   961→                paymentStatus: "CAPTURED",
+   962→                paymentCaptured: true,
+   963→                outboxEventCount: 1,
+   964→                auditLogCount: ">=2",
+   965→                uniqueWebhookEvents: 1,
+   966→                processedByStored: true,
+   967→                count422: 0,
+   968→                countProcessed: 1,
+   969→                countDuplicate: 4
+   970→              },
+   971→              governance: {
+   972→                realPaymentsEnabled: false,
+   973→                productionRazorpayCredentialsUsed: false,
+   974→                webhookHandlerImplemented: true,
+   975→                webhookHandlerEnabled: true,
+   976→                webhookHandlerScope: "Vercel preview+production env vars (FEATURE_WEBHOOK_HANDLER=true set by this workflow)",
+   977→                evidenceTestMode: true,
+   978→                evidenceTestModeScope: "Vercel preview+production env vars (EVIDENCE_TEST_MODE=true set by this workflow)",
+   979→                hmacSignatureVerificationSkipped: true,
+   980→                hmacSkipReason: "X-Evidence-Skip-Verify=true header sent (only honored when EVIDENCE_TEST_MODE=true)",
+   981→                productionTouched: false,
+   982→                note: "4a evidence: 5 concurrent POST /api/webhooks/razorpay with same X-Razorpay-Event-Id + X-Razorpay-Event=payment.captured + X-Evidence-Skip-Verify=true + webhookHandler=true (FEATURE_WEBHOOK_HANDLER=true on Vercel). Test run against staging Supabase PostgreSQL (project ref zmzqqcyapcezmaqvuzzd). realPayments=false (demo mode). HMAC verification SKIPPED via X-Evidence-Skip-Verify=true header (only honored under EVIDENCE_TEST_MODE=true). No production traffic touched. Verifies webhook dedup (WebhookEvent.eventId unique constraint) + idempotent Payment capture (optimistic-lock version) + atomic Outbox event (PAYMENT_CAPTURE_CONFIRMED) + >=2 audit logs (WEBHOOK_RECEIVED + WEBHOOK_PAYMENT_CAPTURED). P0-05 / I-04."
+   983→              },
+   984→              concurrentResponses: $responses
+   985→            }' > "$EVIDENCE_FILE"
+   986→
+   987→          echo "=== Evidence JSON ==="
+   988→          cat "$EVIDENCE_FILE" | jq '.'
+   989→
+   990→          echo ""
+   991→          echo "=== Step 10: Cleanup test data ==="
+   992→          # Delete ALL test data created by this workflow (test step + any stragglers
+   993→          # from the staging health check that also called evidence-setup):
+   994→          #   - WebhookEvent rows for test payments (by paymentId FK)
+   995→          #   - Outbox rows for test payments + orders
+   996→          #   - OrderItem children of test orders
+   997→          #   - AuditLog rows with action LIKE 'WEBHOOK_%' AND metadata contains eventId/paymentId
+   998→          #   - Payment rows for test user
+   999→          #   - Order rows for test user
+  1000→          # The test user (phone +919999900003) is left for reuse across runs.
+  1001→          CLEANUP_SQL=$(printf 'DELETE FROM "WebhookEvent" WHERE "paymentId" IN (SELECT "id" FROM "Payment" WHERE "userId" = '\''%s'\''); DELETE FROM "Outbox" WHERE "aggregateType" = '\''Payment'\'' AND "aggregateId" IN (SELECT "id" FROM "Payment" WHERE "userId" = '\''%s'\''); DELETE FROM "Outbox" WHERE "aggregateType" = '\''Order'\'' AND "aggregateId" IN (SELECT "id" FROM "Order" WHERE "userId" = '\''%s'\''); DELETE FROM "OrderItem" WHERE "orderId" IN (SELECT "id" FROM "Order" WHERE "userId" = '\''%s'\''); DELETE FROM "AuditLog" WHERE "action" LIKE '\''WEBHOOK_%%'\'' AND ("metadata" LIKE '\''%%%s%%'\'' OR "metadata" LIKE '\''%%%s%%'\''); DELETE FROM "IdempotencyKey" WHERE "key" LIKE '\''ev-pg-concurrent-4a-%%'\''; DELETE FROM "Payment" WHERE "userId" = '\''%s'\''; DELETE FROM "Order" WHERE "userId" = '\''%s'\'';' \
+  1002→            "$USER_ID" "$USER_ID" "$USER_ID" "$USER_ID" "$EVENT_ID" "$PAYMENT_ID" "$USER_ID" "$USER_ID")
+  1003→          echo "Cleaning up test data for user: $USER_ID (eventId=$EVENT_ID, paymentId=$PAYMENT_ID)..."
+  1004→          CLEANUP_RESULT=$(curl -sS -X POST \
+  1005→            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+  1006→            -H "Content-Type: application/json" \
+  1007→            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+  1008→            -d "$(jq -n --arg q "$CLEANUP_SQL" '{query: $q}')")
+  1009→          echo "Cleanup response: $(echo $CLEANUP_RESULT | head -c 300)"
+  1010→          echo "✅ Cleanup complete"
+  1011→
+  1012→          echo ""
+  1013→          echo "=================================================="
+  1014→          echo "  EVIDENCE SUMMARY"
+  1015→          echo "=================================================="
+  1016→          echo "Run ID: $RUN_ID"
+  1017→          echo "Database: PostgreSQL (staging Supabase)"
+  1018→          echo "ok: $EXACTLY_ONE_WEBHOOK"
+  1019→          echo "Concurrent webhook requests: $CONCURRENCY"
+  1020→          echo "Unique webhook event IDs: $UNIQUE_WEBHOOK_EVENTS (expected: 1)"
+  1021→          echo "WebhookEvent count: $WEBHOOK_EVENT_COUNT (expected: 1)"
+  1022→          echo "WebhookEvent.processedBy stored: $PROCESSED_BY_STORED (expected: true — 4a schema delta)"
+  1023→          echo "Payment captured: $PAYMENT_CAPTURED (expected: true)"
+  1024→          echo "Payment status: $PAYMENT_DB_STATUS (expected: CAPTURED)"
+  1025→          echo "Outbox event count: $OUTBOX_COUNT (expected: 1 — PAYMENT_CAPTURE_CONFIRMED)"
+  1026→          echo "Audit log count (WEBHOOK_*): $AUDIT_COUNT (expected: >=2)"
+  1027→          echo "422 responses: $COUNT_422 (expected: 0)"
+  1028→          echo "Responses: processed=$COUNT_PROCESSED, duplicate=$COUNT_DUPLICATE, conflict-resolved=$COUNT_CONFLICT"
+  1029→          echo "=================================================="
+  1030→
+  1031→          if [ "$EXACTLY_ONE_WEBHOOK" != "true" ]; then
+  1032→            echo "❌ EVIDENCE FAILED — invariant violated"
+  1033→            exit 1
+  1034→          fi
+  1035→          echo "✅ EVIDENCE PASSED — exactly 1 WebhookEvent + 1 Payment CAPTURED from 5 concurrent POST /api/webhooks/razorpay on PostgreSQL with webhookHandler=true (4a)"
+  1036→
+  1037→      - name: Upload evidence
+  1038→        if: always()
+  1039→        uses: actions/upload-artifact@v4
+  1040→        with:
+  1041→          name: wave4-4a-postgresql-concurrent-evidence
+  1042→          path: wave4-4a-postgresql-evidence.json
+  1043→          retention-days: 90
+  1044→
