@@ -7300,3 +7300,79 @@ M16 closure applies ONLY to the operational outbox-lag remediation scope. M16 is
 - Wave-3/4/5A CLOSED — immutable.
 - Next governance checkpoint: Orchestrator directive on M3/M9/M10 (individually authorized) OR CLASS B/D/E (separate authorization boundary) OR 5C full closure OR Wave-6/Wave-7. IDE will not begin any until separate explicit directive.
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5c-m3-gate-review — Wave-5 5C M3 Missing Capture Status: READ/PLAN-FIRST Gate Review
+
+Timestamp: 2026-08-16 (Orchestrator WAVE5-5C-M3-READ-PLAN-FIRST-01 directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized M3 READ/PLAN-FIRST Gate Review (Directive ID: `WAVE5-5C-M3-READ-PLAN-FIRST-01`). Read-only planning — no implementation, no code changes, no schema changes, no evidence execution.
+
+### Governance boundaries honored
+- ✅ READ/PLAN-FIRST ONLY — no implementation, no code changes, no schema changes, no migrations.
+- ✅ No financial mutation. No Razorpay API calls. No outbox enqueue. No status repair.
+- ✌️ No feature-flag changes. No production deployment. No evidence execution.
+- ✅ No M9/M10 implementation. No 5C closure.
+- ✅ Wave-3/4/5A/5B/5C-M16 CLOSED — immutable. M3 does not touch them.
+- ✅ Wave-6 / Wave-7 remain LOCKED.
+
+### Work Log
+- Read M3 detector implementation (`detectM3MissingCaptureStatus` in `src/lib/reconciliation.ts`):
+  - Triggering condition: Payment.status='CAPTURE_PENDING' + createdAt < now-30min + has capture ledger pair (Dr GATEWAY_RECEIVABLE + Cr CONSUMER_REVENUE) + outbox NOT PENDING/CLAIMED.
+  - Severity: HIGH.
+  - Distinguishes from M9: M3 fires when outbox is PUBLISHED/FAILED (publisher processed it but status wasn't flipped); M9 fires when outbox is PENDING/CLAIMED past TTL or FAILED (publisher hasn't processed it).
+- Read complete Payment capture state machine:
+  - Capture route (`src/app/api/payments/route.ts`): creates Payment with status=CAPTURE_PENDING, capturedAt=null. Defers capture to publisher (4c pattern).
+  - Publisher capture handler (`mini-services/outbox-publisher/index.ts`): calls captureRazorpayPayment() OUTSIDE txn. On success: `Payment.updateMany WHERE status='CAPTURE_PENDING' → CAPTURED` (conditional, race-safe). On failure: increments retryCount, leaves status CAPTURE_PENDING.
+  - Webhook handler (`src/lib/webhook-processor.ts`): `handlePaymentCaptured` uses `tx.payment.updateMany WHERE id=:id AND version=:version AND status!='CAPTURED'` (conditional, idempotent — if already CAPTURED, count=0, no-op).
+- Read existing Razorpay SDK functions in `src/lib/razorpay.ts`:
+  - Confirmed: NO `fetchRazorpayPaymentStatus()` exists. M3 implementation would need to add this new function (`instance.payments.fetch(razorpayPaymentId)` — a GET, read-only, idempotent).
+- Re-read TRANSACTION_RETRY_INVARIANT.md:
+  - Confirmed: external calls MUST be OUTSIDE any withTransaction body. The gateway-fetch (GET) must follow the same pattern as capture/refund (Option C — outbox pattern). A P2034 retry must NOT re-fire the gateway API call.
+- Analyzed race/concurrency (5 scenarios):
+  - E.1 Race with capture webhook: SAFE — conditional updateMany WHERE status=CAPTURE_PENDING (if webhook won, count=0, skip).
+  - E.2 Race with capture route: SAFE — Payment.orderId unique constraint + idempotency cache (Wave-3 3b).
+  - E.3 Race with publisher capture retry: SAFE — publisher checks status===CAPTURED → skip (4c idempotency).
+  - E.4 Race with another M3 worker: SAFE — RemediationAction unique constraint (findingId, repairType).
+  - E.5 Race with future M9 remediation: SAFE — both converge on conditional updateMany + publisher idempotency.
+- Analyzed idempotency: RemediationAction dedup + conditional updateMany + idempotent GET = fully idempotent.
+- Analyzed failure/ambiguity: gateway `captured` → flip; `authorized`/`failed`/`refunded` → escalate; error/timeout → abort + retry later; `gatewayPaymentId=null` → escalate.
+- Verified CLOSED-wave compatibility: M3 mutates ONLY Payment.status (conditional updateMany) + RemediationAction + AuditLog + ReconciliationFinding. Does NOT touch LedgerEntry, Outbox, WebhookEvent, IdempotencyKey, Refund.
+- Produced `WAVE5_5C_M3_GATE_REVIEW.md` — 14 sections (A-N):
+  - A. M3 detector definition (triggering condition + state snapshot)
+  - B. Exact triggering condition (SQL-like predicate)
+  - C. Authoritative gateway truth required (fetchRazorpayPaymentStatus + 5 gateway outcomes)
+  - D. Proposed state transition (conditional updateMany + audit writes)
+  - E. Race/concurrency analysis (5 scenarios — all SAFE)
+  - F. Idempotency analysis (RemediationAction dedup + conditional updateMany + idempotent GET)
+  - G. External call / transaction boundary (gateway-fetch OUTSIDE txn — TRANSACTION_RETRY_INVARIANT)
+  - H. Failure and ambiguity behavior (5 scenarios — captured/authorized/failed/refunded/error)
+  - I. CLOSED-wave invariant compatibility (Wave-3/4/5A/5B/5C-M16 — all preserved)
+  - J. Classification: CLASS C (requires external Razorpay verification)
+  - K. Proposed SQLite evidence scenarios (M3-E1 through M3-E8)
+  - L. Proposed PostgreSQL evidence scenarios (M3-E9 through M3-E12, 4 mandatory)
+  - M. Required safety invariants (M3-SI-1 through M3-SI-13)
+  - N. Explicit recommendation: CONDITIONAL GO
+
+### Key decisions documented in the Gate Review
+- **Classification: CLASS C** (requires external Razorpay verification). M3 is a status mutation (not a ledger mutation) — lower risk than CLASS B but higher risk than CLASS A (M16).
+- **Recommendation: CONDITIONAL GO.** M3 is the safest gateway-dependent remediation candidate because: (1) status mutation (not ledger), (2) conditional updateMany (proven safe in 4c/5a), (3) idempotent, (4) only FETCHES gateway state (does NOT capture/refund), (5) escalates on ambiguity.
+- **6 conditions for GO:** (1) add fetchRazorpayPaymentStatus(), (2) new code path (don't modify CLOSED waves), (3) follow all 13 safety invariants, (4) feature-flagged, (5) SQLite E1-E8 must PASS, (6) PostgreSQL E9-E12 must PASS.
+- **13 safety invariants (M3-SI-1 through M3-SI-13):** re-validation, idempotency, gateway ambiguity = no repair, conditional updateMany, external call outside txn, audit records, post-repair verification, feature-flagged, no ledger mutation, no outbox enqueue, no capture/refund call, escalate on non-captured.
+- **Key finding: `fetchRazorpayPaymentStatus()` does NOT exist yet.** M3 implementation would need to add this new function to `src/lib/razorpay.ts` — a new external call that must be OUTSIDE any txn body.
+
+### Stage Summary
+- **M3 READ/PLAN-FIRST Gate Review: ✅ COMPLETE.**
+- `WAVE5_5C_M3_GATE_REVIEW.md` produced (14 sections, CLASS C classification, CONDITIONAL GO recommendation).
+- **Recommendation: CONDITIONAL GO** — M3 is safe enough to implement with the right safety invariants, but NOT safe enough to implement without a separate evidence package + Orchestrator authorization.
+- NO code modified. NO schema changed. NO evidence run. NO production touched.
+- Wave-3/4/5A/5B/5C-M16 CLOSED — immutable. M3 does not touch them.
+- `realPayments` / `webhookHandler` / `requestHashEnforcement` / `reconciliationAutoRepair` remain OFF.
+- Wave-6 / Wave-7 remain LOCKED.
+- M9 / M10 remain on HOLD.
+- Next governance checkpoint: Orchestrator decision on M3 implementation authorization (separate directive required).
+- IDE is STOPPING after commit + push. Awaiting Orchestrator decision.
