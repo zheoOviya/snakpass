@@ -6105,3 +6105,31 @@ Stage Summary:
 - Production NOT touched. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF.
 - IDE is STOPPING. Not starting 4d. Awaiting Orchestrator authorization.
 
+
+---
+Task ID: 4d-gate-review
+Agent: Software Architect / Gate Reviewer (Plan agent + IDE)
+Task: Sub-Wave 4d READ/PLAN-FIRST Gate Review (orphan_business_count fix)
+
+Work Log:
+- Initial sub-agent ran on stale local clone (152 commits behind origin/main). Found no WAVE2/WAVE4 files locally, produced REMEDIATION REQUIRED recommendation.
+- IDE detected the stale clone issue, fetched + reset to origin/main (commit 8269079).
+- All Wave-2/Wave-3/Wave-4 files now present. Schema is postgresql with Outbox model. Alert-evaluator has orphan_business_count at line 183-186.
+- Re-read all relevant files: WAVE2_FINAL_AUDIT.md §Audit 2 (orphan_business_count defect), mini-services/alert-evaluator/index.ts:181-192 (current SQL query), WAVE4_GATE_REVIEW.md §6.3.4 (4d scope ~13 LOC).
+- Produced proper WAVE4_4D_GATE_REVIEW.md with correct context.
+- Root cause: orphan_business_count query has NO timestamp filter — counts ALL orders without outbox events, including pre-outbox historical orders (71 in staging).
+- Fix: 1-line SQL change — add `AND o."createdAt" >= (SELECT MIN("createdAt") FROM "Outbox")` to WHERE clause.
+- No schema change, no migration, no feature flag needed.
+- Risk: LOW (read-only query fix, zero blast radius).
+- Recommendation: GO.
+
+Stage Summary:
+- Document: WAVE4_4D_GATE_REVIEW.md (D1-D10 decisions + GO recommendation)
+- Root cause: missing timestamp filter in orphan_business_count SQL query
+- Fix: 1-line SQL WHERE clause addition
+- No schema/migration/feature-flag needed
+- No existing CLOSED evidence affected
+- Production-launch prerequisite (alert storm risk)
+- Risk: LOW
+- Recommendation: GO
+
