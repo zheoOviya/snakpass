@@ -178,12 +178,17 @@ async function evaluateAlertRules(): Promise<EvaluationCycle> {
   evaluateAndFire(results, 'outbox-publish-failed', 'outbox_failed_count', outboxFailedCount, 0, 'gt')
 
   // 10. Orphan business entities (orders without corresponding outbox events)
+  // Sub-Wave 4d fix: exclude historical pre-outbox orders via timestamp filter.
+  // Only count orders created AFTER the first outbox event was written
+  // (i.e., orders that SHOULD have an outbox event but don't).
+  // Without this filter, pre-outbox historical orders would trigger false alerts.
   let orphanBusinessCount = 0
   try {
     const orphanOrders = await db.$queryRaw`
       SELECT COUNT(*)::int as count FROM "Order" o
       LEFT JOIN "Outbox" ob ON ob."aggregateId" = o.id AND ob."aggregateType" = 'Order'
       WHERE ob.id IS NULL
+        AND o."createdAt" >= (SELECT MIN("createdAt") FROM "Outbox")
     ` as Array<{ count: number }>
     orphanBusinessCount = orphanOrders[0]?.count ?? 0
   } catch {
