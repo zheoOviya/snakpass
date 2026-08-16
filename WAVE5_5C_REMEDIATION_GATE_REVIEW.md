@@ -1,13 +1,13 @@
-# Wave-5 Sub-Wave 5C — P0-03 Reconciliation Remediation: READ/PLAN-FIRST Gate Review
+# Wave-5 Sub-Wave 5C — P0-03 Reconciliation Remediation: M16 S5 PASS / CLOSED
 
-**Document type:** Gate Review (READ/PLAN-FIRST — NO implementation authorization).
-**Directive ID:** `WAVE5-5C-P0-03-REMEDIATION-GATE`
+**Document type:** Gate Review (READ/PLAN-FIRST → M16 IMPLEMENTATION → M16 S5 PASS / CLOSED).
+**Directive IDs:** `WAVE5-5C-P0-03-REMEDIATION-GATE` (Gate Review) → `WAVE5-5C-P0-03-IMPLEMENT-M16-FIRST` (M16 implementation) → `S5-5C-M16-P0-03-CLOSE` (M16 closure).
 **Author:** IDE (read-only synthesis from repository + 5B evidence).
-**Orchestrator directive:** Sub-Wave 5C READ/PLAN-FIRST AUTHORIZED. 5C implementation 🔒 NOT YET AUTHORIZED. 5C financial mutation 🔒 NOT AUTHORIZED.
+**Orchestrator directive:** Sub-Wave 5C — M16 is S5 PASS / CLOSED (Directive ID: `S5-5C-M16-P0-03-CLOSE`, 2026-08-16). M3/M9/M10 + CLASS B/D/E remain LOCKED. 5C is PARTIALLY CLOSED (M16 only).
 **Created:** 2026-08-16
 **Scope:** P0-03 Reconciliation Remediation — repair of findings detected by Sub-Wave 5B.
 
-> **Governance rule:** This document is a READ-ONLY planning artifact. It does NOT authorize implementation, schema change, migration, evidence workflow, remediation worker, or any financial mutation. The IDE has NOT written any 5C code. 5C implementation requires a separate Orchestrator directive after this Gate Review is reviewed.
+> **M16 Closure (Orchestrator Directive `S5-5C-M16-P0-03-CLOSE`):** M16 (outbox lag — operational, non-financial remediation) is S5 PASS / CLOSED. The closure is based on SQLite E1-E8 (8/8 PASS) + PostgreSQL E9-E12 (8/8 PASS) + `moneyStateUnchanged=true` + `noDuplicateRemediationActions=true` + `financialMutation=false` + `falsePositives=0`. M16 closure applies ONLY to the operational outbox-lag remediation scope. It does NOT authorize M3/M9/M10 (CLASS C — gateway-verified status mutation), CLASS B (ledger synthesis), CLASS D (quarantine), or CLASS E (never auto-repaired). The `reconciliationAutoRepair` flag remains OFF in production. See `WAVE5_EVIDENCE.md` §8 for the full M16 implementation + evidence + closure record.
 
 > **Orchestrator constraint honored:** 5B's successful E4/E5/E6 proved **detection safety**. **Repair safety has NOT been proven.** Detection safety does not transfer to repair safety. 5C is a distinct safety boundary that requires its own evidence package. The Orchestrator's default preference is CONDITIONAL GO (limited remediation for explicitly approved classes), NOT blanket automatic remediation.
 

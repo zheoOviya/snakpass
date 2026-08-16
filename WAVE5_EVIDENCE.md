@@ -1,11 +1,12 @@
 # Wave-5 Evidence Document
 
-**Status:** ✅ Wave-5 COMPLETE / CLOSED — Sub-Wave 5a (P0-04 Refund) + Sub-Wave 5b (P0-03 Reconciliation) both S5 PASS / CLOSED. Remediation 🔒 LOCKED (separate authorization boundary).
+**Status:** ✅ Wave-5 5A + 5B CLOSED. Sub-Wave 5C PARTIALLY CLOSED (M16 only — S5 PASS / CLOSED; M3/M9/M10 + CLASS B/D/E remain LOCKED). Remediation is narrowly scoped + feature-flagged OFF.
 **Created:** 2026-08-16
 **Sub-Wave 5a Implementation:** 2026-08-16 (IDE — task ID `wave5a-p0-04-refund`)
 **Sub-Wave 5a S5 Closure:** 2026-08-16 (Orchestrator Decision — 5A S5 PASS / CLOSED)
 **Sub-Wave 5b S5 Closure:** 2026-08-16 (Orchestrator Decision — 5B S5 PASS / CLOSED; Directive ID `S5-5B-P0-03-CLOSE`)
-**Authorization:** Orchestrator Decision — Wave-5 AUTHORIZED (P0-04 Refund + P0-03 Reconciliation). Both sub-waves CLOSED.
+**Sub-Wave 5C M16 S5 Closure:** 2026-08-16 (Orchestrator Decision — M16 S5 PASS / CLOSED; Directive ID `S5-5C-M16-P0-03-CLOSE`)
+**Authorization:** Orchestrator Decision — Wave-5 AUTHORIZED (P0-04 Refund + P0-03 Reconciliation). 5A + 5B CLOSED. 5C M16 CLOSED. 5C M3/M9/M10 + CLASS B/D/E remain LOCKED.
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence. Each row reflects actual evidence artifacts committed to the repo and (for PostgreSQL) actual GitHub Actions runs against the staging Supabase database.
 
@@ -19,6 +20,7 @@
 |----------|-------|--------|
 | 5a | P0-04 Refund flow (mirror of 4c capture pattern) | ✅ **S5 PASS / CLOSED** (SQLite E1-E5 PASS + PostgreSQL E1-E5 PASS + PostgreSQL E6 PASS) |
 | 5b | P0-03 Reconciliation (detection-only) | ✅ **S5 PASS / CLOSED** (SQLite E1-E6 PASS + PostgreSQL E1-E6 PASS; Directive ID `S5-5B-P0-03-CLOSE`) |
+| 5c | P0-03 Reconciliation Remediation | 🟡 **PARTIALLY CLOSED** — M16 S5 PASS / CLOSED (Directive ID `S5-5C-M16-P0-03-CLOSE`); M3/M9/M10 + CLASS B/D/E remain LOCKED |
 
 ---
 
@@ -346,9 +348,9 @@ Per-scenario results (PostgreSQL, staging Supabase):
 
 ---
 
-## 6. Canonical Governance State (Authoritative — 5B S5 PASS / CLOSED)
+## 6. Canonical Governance State (Authoritative — 5C M16 S5 PASS / CLOSED)
 
-> **Orchestrator Directive `S5-5B-P0-03-CLOSE` (2026-08-16):** Sub-Wave 5B is S5 PASS / CLOSED. The closure applies ONLY to the detection-only P0-03 reconciliation scope. It does NOT authorize remediation, financial repair, or production deployment. Remediation (5C) remains a separate authorization boundary. The IDE does NOT self-authorize remediation.
+> **Orchestrator Directive `S5-5C-M16-P0-03-CLOSE` (2026-08-16):** Sub-Wave 5C — M16 (outbox lag — operational, non-financial remediation) is S5 PASS / CLOSED. The closure applies ONLY to M16. It does NOT authorize M3/M9/M10, CLASS B/D/E remediation, production deployment, or feature-flag activation. 5C is PARTIALLY CLOSED (M16 only).
 
 ```text
 Wave-0        ✅ CLOSED
@@ -377,7 +379,20 @@ Wave-5
               ├─ E6 scale           ✅ (1000 payments, 2331ms < 30s SLA, falsePositives=0)
               └─ Detection-only contract CLOSED
 
-  Remediation  🔒 LOCKED — separate authorization boundary (5C)
+  5C          🟡 PARTIALLY CLOSED (M16 only — S5 PASS / CLOSED)
+              ├─ Gate Review          ✅ COMPLETE (Directive WAVE5-5C-P0-03-REMEDIATION-GATE)
+              ├─ M16 Implementation   ✅ COMPLETE (Directive WAVE5-5C-P0-03-IMPLEMENT-M16-FIRST)
+              ├─ M16 SQLite E1-E8     ✅ 8/8 PASS (moneyStateUnchanged=true, financialMutation=false)
+              ├─ M16 PostgreSQL E9-E12 ✅ 8/8 PASS (noDuplicateRemediationActions=true, falsePositives=0)
+              ├─ M16 S5               ✅ PASS / CLOSED (Directive S5-5C-M16-P0-03-CLOSE)
+              ├─ M3                   🔒 HOLD — separate authorization required
+              ├─ M9                   🔒 HOLD — separate authorization required
+              ├─ M10                  🔒 HOLD — separate authorization required
+              ├─ M2/M7/M13            🔒 HOLD (CLASS B — ledger synthesis HIGH RISK)
+              ├─ M11/M12/M14          🔒 HOLD (CLASS D — quarantine + manual review)
+              └─ M1/M4/M5/M6/M8/M15/M17 🔒 NO AUTO-REPAIR (CLASS E — accounting/forensic)
+
+  reconciliationAutoRepair 🚫 OFF (default; was set ON only during evidence, removed after)
 
 Production               🚫 NOT AUTHORIZED
 realPayments             🚫 OFF
@@ -392,50 +407,39 @@ Wave-7                   🔒 LOCKED (P0-07 Pickup Attribution)
 
 ## 7. Stop Point
 
-Sub-Wave 5b is **S5 PASS / CLOSED** (Orchestrator Directive `S5-5B-P0-03-CLOSE`). Wave-5 is now COMPLETE / CLOSED (both 5A and 5B). The IDE is STOPPING.
+Sub-Wave 5C — M16 is **S5 PASS / CLOSED** (Orchestrator Directive `S5-5C-M16-P0-03-CLOSE`). 5C is PARTIALLY CLOSED (M16 only — M3/M9/M10 + CLASS B/D/E remain LOCKED). The IDE is STOPPING.
 
-> **Closure scope (Orchestrator directive):** 5B closure applies ONLY to the detection-only P0-03 reconciliation scope. The IDE does NOT self-authorize remediation, financial repair, or production deployment. Remediation (5C) remains a separate authorization boundary.
+> **M16 closure scope (Orchestrator directive):** M16 closure applies ONLY to the operational outbox-lag remediation scope. M16 is closed as an **operational remediation**, NOT as a financial-state repair mechanism. The IDE does NOT self-authorize M3/M9/M10, CLASS B/D/E remediation, production deployment, or feature-flag activation. The `reconciliationAutoRepair` flag remains OFF in production.
 
-**Evidence record (preserved — NOT regenerated):**
-- 5b implementation is COMPLETE (detection-only model, 17 mismatch classes, Class-2 additive schema, mini-service, evidence endpoints).
-- SQLite evidence E1-E6 all PASS (6/6), including the CRITICAL E4 safety property (no money-state mutation).
-- PostgreSQL evidence E1-E6 all PASS (6/6) on staging Supabase, including the 3 PostgreSQL-mandatory scenarios:
-  - E4 (CRITICAL SAFETY): `moneyStateMutated=false`, `financialMutation=false`, `moneyStateDiffs=[]`.
-  - E5 (concurrency): 2 concurrent runs → 1 finding, `duplicateFindings=0`.
-  - E6 (scale): 1000 payments + 3 anomalies, runtime 2331ms (< 30000ms SLA), `falsePositives=0`.
-- 5b is **CLOSED** — S5 PASS / CLOSED per Orchestrator Directive `S5-5B-P0-03-CLOSE`.
-- Remediation (automatic repair) is LOCKED — separate authorization boundary (5C).
-- Wave-6 / Wave-7 remain LOCKED.
-- Production remains NOT AUTHORIZED. All production flags remain OFF.
+**M16 evidence record (preserved — NOT regenerated):**
+- M16 implementation is COMPLETE (operational remediation: re-validation → idempotent RemediationAction → publisher trigger → post-repair verification).
+- SQLite evidence E1-E8 all PASS (8/8), including no money-state mutation.
+- PostgreSQL evidence E9-E12 all PASS (8/8) on staging Supabase, including the PostgreSQL-mandatory checks:
+  - `moneyStateUnchanged=true` (zero money-state row diffs on PostgreSQL).
+  - `noDuplicateRemediationActions=true` (unique constraint dedup under real PostgreSQL row-level locking).
+  - `financialMutation=false`.
+  - `falsePositives=0`.
+  - `reconciliationAutoRepair` flag respected: DISABLED when OFF, executes when ON.
+- M16 is **CLOSED** — S5 PASS / CLOSED per Orchestrator Directive `S5-5C-M16-P0-03-CLOSE`.
+- `EVIDENCE_TEST_MODE` + `FEATURE_RECONCILIATION_AUTO_REPAIR` removed from Vercel after evidence run (safe state restored).
+- Test data cleaned up from staging Supabase.
+- Wave-3/4/5A CLOSED invariants untouched (M16 is read-only w.r.t. money-state tables — E4/E11 prove 0 mutation).
 
-**S5 decision rule (Orchestrator's criteria — all conditions met):**
-```text
-SQLite E1-E6       ✅ (6/6 PASS)
-PostgreSQL E1-E6   ✅ (6/6 PASS)
-        +
-E4 no mutation     ✅ (moneyStateMutated=false, financialMutation=false)
-E5 concurrency     ✅ (duplicateFindings=0)
-E6 scale           ✅ (1000 payments, 2331ms < 30s SLA, falsePositives=0)
-        +
-17 detectors       ✅ (M1-M17 implemented, all read-only)
-        +
-detection-only     ✅ (no writes to money-state tables)
-        +
-no remediation     ✅ (remediation LOCKED — separate boundary)
-```
+**M16 operational boundary (remains in force):**
+- M16 does NOT mutate Payment, Refund, LedgerEntry, WebhookEvent, IdempotencyKey, AuditLog.
+- M16 does NOT directly mutate Outbox rows (it triggers the publisher via HTTP, which is an operational action).
+- M16 does NOT call Razorpay, capture payments, issue refunds, or repair financial state.
 
-**5B is CLOSED.** Remediation (5C) is NOT authorized by this closure.
+**Not authorized (even after M16 closure):**
+- ❌ M3 / M9 / M10 implementation (CLASS C — gateway-verified status mutation — separate authorization required).
+- ❌ M2 / M7 / M13 remediation (CLASS B — ledger synthesis HIGH RISK — separate authorization required).
+- ❌ M11 / M12 / M14 remediation (CLASS D — quarantine + manual review — always escalated, never auto-repaired).
+- ❌ M1 / M4 / M5 / M6 / M8 / M15 / M17 remediation (CLASS E — never auto-repaired — accounting/forensic review only).
+- ❌ 5C full closure (5C is PARTIALLY CLOSED — M16 only).
+- ❌ Production deployment / feature-flag activation (`reconciliationAutoRepair` remains OFF).
+- ❌ Wave-6 / Wave-7.
 
-**Mandatory boundary (remains explicitly unauthorized):**
-- ❌ writes to `Payment`, `Refund`, `LedgerEntry`, `Outbox`, `WebhookEvent`, `IdempotencyKey`, `AuditLog`
-- ❌ Razorpay API calls from reconciliation
-- ❌ automatic capture/refund
-- ❌ automatic ledger correction
-- ❌ automatic status repair
-- ❌ production deployment / migration
-- ❌ feature-flag activation (`realPayments`, `webhookHandler`, `requestHashEnforcement`)
-
-**Next governance checkpoint:** Orchestrator directive on 5C/Remediation (separate authorization boundary) OR Wave-6 (P0-06 State Separation) OR Wave-7 (P0-07 Pickup Attribution) OR Production. The IDE will not begin any of these until a separate explicit Orchestrator directive is issued.
+**Next governance checkpoint:** Orchestrator directive on M3/M9/M10 (individually authorized) OR CLASS B/D/E (separate authorization boundary) OR 5C full closure (when all authorized classes are closed) OR Wave-6 (P0-06 State Separation) OR Wave-7 (P0-07 Pickup Attribution). The IDE will not begin any of these until a separate explicit Orchestrator directive is issued.
 
 ---
 
