@@ -6078,3 +6078,30 @@ Stage Summary:
 - Workflow run: https://github.com/zheoOviya/snakpass/actions/runs/31927563085 (conclusion: success).
 - realPayments remains OFF (demo mode). Wave-5 NOT started. Production NOT touched.
 - STOP: IDE is not self-closing 4c. Awaiting Orchestrator S5 decision.
+
+---
+Task ID: 4c-s5-closure
+Agent: IDE (main)
+Task: Sub-Wave 4c S5 PASS / CLOSED — Orchestrator decision formalization
+
+Work Log:
+- Received Orchestrator S5 PASS decision for Sub-Wave 4c (TRANSACTION_RETRY_INVARIANT Mitigation).
+- E5 remediation complete (previous task). All 5/5 scenarios PASS (SQLite + PostgreSQL).
+- Updated WAVE4_EVIDENCE.md:
+  - Status: 4a + 4b + 4c S5 PASS / CLOSED
+  - Sub-Wave 4c: ✅ S5 PASS / CLOSED
+  - Added 4c S5 PASS closure section with evidence summary (E1-E5) + E5 key proof
+  - Sub-Wave 4d: 🔒 PENDING (awaiting authorization)
+- Updated docs/TRANSACTION_RETRY_INVARIANT.md:
+  - Status: IMPLEMENTED / VERIFIED — Wave-4 4c S5 PASS / CLOSED
+  - §8.3 resolution: IMPLEMENTED / VERIFIED (publisher retry idempotency empirically proven via 4c-E5)
+- 4c will NOT reopen for evidence.
+
+Stage Summary:
+- Sub-Wave 4a: ✅ S5 PASS / CLOSED
+- Sub-Wave 4b: ✅ S5 PASS / CLOSED
+- Sub-Wave 4c: ✅ S5 PASS / CLOSED
+- Sub-Wave 4d: 🔒 PENDING (awaiting separate Orchestrator authorization)
+- Production NOT touched. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF.
+- IDE is STOPPING. Not starting 4d. Awaiting Orchestrator authorization.
+

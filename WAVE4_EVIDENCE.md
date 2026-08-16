@@ -1,10 +1,11 @@
 # Wave-4 Evidence Document
 
-**Status:** 🟢 4a S5 PASS / CLOSED | 🟢 4b S5 PASS / CLOSED | 🟡 4c Implementation Authorized
+**Status:** 🟢 4a S5 PASS / CLOSED | 🟢 4b S5 PASS / CLOSED | 🟢 4c S5 PASS / CLOSED
 **Created:** 2026-08-16
 **Sub-Wave 4a Closure:** 2026-08-16 (Orchestrator S5 PASS decision)
 **Sub-Wave 4b Closure:** 2026-08-16 (Orchestrator S5 PASS decision)
-**Authorization:** Orchestrator Decision (4a + 4b S5 PASS / CLOSED + 4c implementation authorized)
+**Sub-Wave 4c Closure:** 2026-08-16 (Orchestrator S5 PASS decision)
+**Authorization:** Orchestrator Decision (4a + 4b + 4c S5 PASS / CLOSED)
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence.
 
@@ -16,8 +17,8 @@
 |----------|-------|--------|
 | 4a | P0-05 Webhook handler (HMAC verify + dedup + idempotent processing) | ✅ S5 PASS / CLOSED |
 | 4b | P0-02 Ledger formalization | ✅ S5 PASS / CLOSED |
-| 4c | TRANSACTION_RETRY_INVARIANT mitigation | 🟢 IMPLEMENTATION AUTHORIZED |
-| 4d | orphan_business_count fix | 🟢 AUTHORIZED (folded into 4b/4c) |
+| 4c | TRANSACTION_RETRY_INVARIANT mitigation | ✅ S5 PASS / CLOSED |
+| 4d | orphan_business_count fix | 🔒 PENDING (awaiting authorization) |
 
 ---
 
@@ -213,8 +214,33 @@ database = postgresql
 > **Orchestrator authorized Sub-Wave 4c implementation.**
 > Primary objective: Move `captureRazorpayPayment()` out of `withTransaction()` body.
 > SQLite + PostgreSQL evidence REQUIRED. No production. realPayments OFF.
-> 4c NOT self-closed. Await Orchestrator S5 review.
 
-### Status: 🟡 IMPLEMENTATION IN PROGRESS
+### ✅ S5 PASS / CLOSED (Orchestrator Decision — 2026-08-16)
 
-(Evidence will be appended after implementation + SQLite + PostgreSQL tests pass.)
+**Decisive Evidence:**
+- **SQLite:** 5/5 PASS (E1-E5)
+- **PostgreSQL:** PASS (E1/E4/E5 concurrent + publisher retry)
+- **Workflow runs:** 31925497313 (E1/E4), 31927563085 (E5)
+
+#### 4c Evidence Summary
+
+| # | Scenario | Status | Evidence |
+|---|----------|--------|----------|
+| 4c-E1 | Capture returns CAPTURE_PENDING (not CAPTURED) | ✅ PASS | SQLite + PostgreSQL |
+| 4c-E2 | Payment state consistent (Dr/Cr + balance + idempotency) | ✅ PASS | SQLite |
+| 4c-E3 | Idempotency preserved (same key → same Payment) | ✅ PASS | SQLite |
+| 4c-E4 | 5 concurrent → exactly 1 Payment, no duplicate | ✅ PASS | SQLite + PostgreSQL |
+| **4c-E5** | **Publisher retry → no duplicate capture** | **✅ PASS** | **SQLite + PostgreSQL** |
+
+#### E5 Key Proof
+
+```text
+Publisher attempt #1:
+    captureCalled = true     → external side-effect executed
+    Payment → CAPTURED
+Publisher retry:
+    captureCalled = false    → external side-effect NOT repeated ✅
+    idempotencySkipped = true → Payment.status === CAPTURED check prevented duplicate ✅
+```
+
+4c will NOT reopen for evidence.

@@ -3,7 +3,7 @@
 **Document ID:** `3a-arch-doc`
 **Author:** Architectural Documentation Specialist
 **Wave/Sub-Wave:** Wave-3 / Sub-Wave 3a (PROVISIONAL PASS — evidence completion phase)
-**Status:** IMPLEMENTED — Wave-4 4c mitigation complete (capture call moved to publisher). Full enforcement mechanism (lint rule / code-review checklist / CI gate) remains Wave-3b/3c scope, but the catastrophic-case capture call is no longer inside any `withTransaction()` body.
+**Status:** IMPLEMENTED / VERIFIED — Wave-4 4c S5 PASS / CLOSED. `captureRazorpayPayment()` is no longer inside any `withTransaction()` body. Publisher retry idempotency empirically proven (4c-E5: second publisher run skips capture call). Full enforcement mechanism (lint rule / code-review checklist / CI gate) remains post-production scope.
 **Related worklog entries:** `3a-evidence`, `Task 89 (Sub-Wave 3a Implementation)`.
 
 ---
@@ -500,7 +500,7 @@ it should include:
 ### 8.3 Resolution status
 
 ```text
-IMPLEMENTED — Wave-4 4c mitigation complete (capture call moved to publisher).
+IMPLEMENTED / VERIFIED — Wave-4 4c S5 PASS / CLOSED (capture call moved to publisher, publisher retry idempotency empirically proven via 4c-E5).
 ```
 
 As of Wave-4 Sub-Wave 4c (Phase 1), `captureRazorpayPayment()` has been
