@@ -1,0 +1,285 @@
+   540→```
+   541→
+   542→**Backward compatibility:** Additive — clients that don't recognize `IDEMPOTENCY_KEY_REUSE` will see a generic 4xx error and can retry with a new key. No existing 200/409/500 response shape changes.
+   543→
+   544→### 7.3 Code changes
+   545→
+   546→| File | Change | Lines (est.) | Risk |
+   547→|------|--------|--------------|------|
+   548→| `prisma/schema.prisma` | Add `requestHash String?` column to `IdempotencyKey` model. | +1 | LOW |
+   549→| `prisma/scripts/wave3-subwave-3c-migration.sql` | NEW migration SQL (Class-2 additive `ALTER TABLE`). | +15 | LOW |
+   550→| `src/lib/idempotency.ts` | (1) Add `IdempotencyKeyReuseError` class. (2) Modify `getCachedResponse` to accept `incomingRequestHash?: string` parameter + compare with stored hash (gated by `requestHashEnforcement` flag + null-hash short-circuit). (3) Modify `storeIdempotencyRecord` to accept `requestHash?: string` parameter + store it. (4) Add `canonicalize(body)` helper (or use `fast-json-stable-stringify`). (5) Add `computeRequestHash(body)` helper using Web Crypto API. | +60 | MEDIUM (shared library, both routes affected) |
+   551→| `src/lib/deployment.ts` | Add `requestHashEnforcement` feature flag (default `false`). | +5 | LOW |
+   552→| `src/app/api/orders/route.ts` | (1) Compute `requestHash` from validated body BEFORE `withTransaction`. (2) Pass `requestHash` to `getCachedResponse` + `storeIdempotencyRecord`. (3) Add `catch (error) { if (error instanceof IdempotencyKeyReuseError) return apiError('IDEMPOTENCY_KEY_REUSE', ..., 422, {...details}) }`. | +20 | MEDIUM |
+   553→| `src/app/api/payments/route.ts` | Same as orders/route.ts but for Payment capture body. | +20 | MEDIUM |
+   554→| `src/app/api/orders/evidence-verify/route.ts` | Add `requestHash: true` to the `select` clause (line 88) + include `requestHash` in response body. | +3 | LOW |
+   555→| `src/app/api/payments/evidence-verify/route.ts` | Same as orders/evidence-verify but for Payment. | +3 | LOW |
+   556→| `src/app/api/orders/evidence-setup/route.ts` | (Optional) Add `?preInsertIdempotencyKey=true` query param to support 3c-E3/E4 (manually insert a pre-3c record with `requestHash=null`). | +15 | LOW (dev-only, gated by `EVIDENCE_TEST_MODE`) |
+   557→| `scripts/wave3-3c-evidence.mjs` | NEW evidence runner script. Mirrors `wave3-3b-evidence.mjs` structure. Runs 3c-E1..3c-E4 (SQLite local). | +200 | LOW (dev-only) |
+   558→| `scripts/run-3c-evidence.sh` | NEW shell wrapper (starts dev server with `EVIDENCE_TEST_MODE=true` + `requestHashEnforcement=true` + runs evidence script). | +20 | LOW (dev-only) |
+   559→| `.github/workflows/subwave-3c-postgresql-concurrent-evidence.yml` | NEW workflow. Mirrors 3b workflow. Sets `requestHashEnforcement=true` + `EVIDENCE_TEST_MODE=true` on Vercel preview + runs 3c-E5. | +800 | LOW (workflow-only) |
+   560→| `.github/workflows/wave3-3c-staging-migration.yml` | NEW workflow to apply the migration to staging Supabase. | +200 | LOW (workflow-only) |
+   561→
+   562→**Total:** ~14 files touched/created, ~1362 lines added. Most are dev-only (evidence + workflow) — production code changes are limited to `idempotency.ts` (~60 lines), `deployment.ts` (~5 lines), `orders/route.ts` (~20 lines), `payments/route.ts` (~20 lines), `schema.prisma` (~1 line). Total production code delta: ~106 lines.
+   563→
+   564→### 7.4 Migration class summary
+   565→
+   566→- **Schema:** Class-2 expand-migrate-contract (additive nullable column).
+   567→- **API:** Additive (new 422 error response; no existing response shape changed).
+   568→- **Code:** Additive (new error class, new optional parameters, new feature flag).
+   569→- **Feature flag:** New `requestHashEnforcement` flag, default OFF. Code path is dormant until flag is enabled.
+   570→- **Rollback:** Git revert + `ALTER TABLE IdempotencyKey DROP COLUMN requestHash` (safe because column is nullable + code path is feature-flagged OFF).
+   571→
+   572→---
+   573→
+   574→## 8. Risk / Rollback Analysis
+   575→
+   576→### 8.1 Risk level: **MEDIUM**
+   577→
+   578→**Justification:**
+   579→
+   580→- **MEDIUM, not LOW**, because C1 modifies the **shared idempotency library** (`src/lib/idempotency.ts`) that both critical paths (`/api/orders` + `/api/payments`) depend on. A bug in the hash computation or comparison logic could break ALL idempotent writes, not just one route. Blast radius = Order creation + Payment capture = the two most critical paths in the system.
+   581→- **MEDIUM, not HIGH**, because:
+   582→  - The feature flag (`requestHashEnforcement`, default OFF) provides a kill-switch. Even after deploy, the new code path is dormant. A bug in the hash-computation code would NOT affect production behavior until the flag is flipped ON.
+   583→  - The schema migration is Class-2 expand-migrate-contract (additive nullable column). Old code (pre-3c) reads the new column as `null` and continues to work. No breaking change to existing rows.
+   584→  - The null-hash short-circuit provides backward compatibility for pre-3c records. Even with the flag ON, old records continue to behave per Option A.
+   585→  - The 3a/3b evidence (11 scenarios, S5 PASS / CLOSED) remains valid for the flag-OFF path. The flag-OFF path is byte-identical to 3b behavior. So even if 3c introduces a bug, the 3a/3b evidence proves the flag-OFF path is safe.
+   586→
+   587→### 8.2 Rollback plan
+   588→
+   589→| Implementation scope | Rollback procedure | Time | Safe by default? |
+   590→|----------------------|---------------------|------|------------------|
+   591→| Schema only (add column) | `ALTER TABLE IdempotencyKey DROP COLUMN requestHash` (safe — column is nullable + no indexes depend on it). | <5 min | YES |
+   592→| Code only (idempotency.ts + deployment.ts + routes) | Git revert. No DB rollback needed (column remains nullable; old code reads `null` for all new rows, which triggers the null-hash short-circuit). | <10 min | YES |
+   593→| Feature flag flip (OFF → ON) | Flip flag back to OFF (via Vercel env var or deployment.ts `getFlag` default). No code deploy needed if flag is read at runtime. | <1 min | YES |
+   594→| Full 3c deploy (schema + code + flag ON) | (1) Flip flag to OFF. (2) Git revert code. (3) `DROP COLUMN requestHash`. All three steps are independent and safe. | <15 min | YES |
+   595→
+   596→### 8.3 Blast radius
+   597→
+   598→**HIGH** — C1 touches the shared idempotency library used by Order POST + Payment POST. A bug in `getCachedResponse` could:
+   599→- Block all Order creation (consumers can't place orders → revenue impact).
+   600→- Block all Payment capture (consumers can't pay for orders → revenue impact).
+   601→- Spuriously 422 valid retries (clients see "IDEMPOTENCY_KEY_REUSE" when retrying the SAME body due to a hash-canon bug).
+   602→
+   603→**Mitigations:**
+   604→1. Feature flag (`requestHashEnforcement`, default OFF) — dormant code path until explicitly enabled.
+   605→2. Staging-first deployment (Vercel preview). Evidence scenarios (3c-E1..3c-E5) MUST pass on staging PostgreSQL before any production consideration.
+   606→3. Production deployment is NOT authorized in 3c (per Orchestrator directive).
+   607→4. The `EVIDENCE_TEST_MODE` gate ensures evidence endpoints are NOT accessible in production.
+   608→5. The hash-canon algorithm is testable in isolation (unit test the `canonicalize` + `computeRequestHash` functions against known inputs/outputs) — this should be the first unit test added, before any integration test.
+   609→
+   610→### 8.4 P0 dependencies that could complicate 3c
+   611→
+   612→| Dependency | Status | Complication risk for 3c |
+   613→|-----------|--------|--------------------------|
+   614→| P0-17 (idempotency infrastructure) | ✅ S5 PASS (Wave-1 1a) | LOW — C1 extends the library; old functions unchanged. The 3a regression analysis confirmed retry-safety of all 4 callers. |
+   615→| P0-24 (transactional outbox) | ✅ S5 PASS (Wave-2 CLOSED) | NONE — C1 does not touch outbox. |
+   616→| P0-25 (concurrency + duplicate-exec) | ✅ S5 PASS (Wave-1 Track B) | LOW — C1's hash check is positioned BEFORE the optimistic-lock decrement; no interaction with P0-25's race-prevention logic. 3c-E5 verifies concurrency preserved. |
+   617→| P0-01 (Razorpay capture, 3a) | ✅ S5 PASS / CLOSED | LOW — C1 modifies the shared library used by `/api/payments`. The 3a evidence (3a-E1..3a-PG-E1) remains valid for the flag-OFF path. With flag ON, a NEW Payment-side 3c-style evidence scenario would be required — but 3c does NOT enable the flag, so 3a evidence stays valid. (If the flag is enabled in a future wave, that wave must run a Payment-specific 3c-E2 equivalent.) |
+   618→| P0-08 (Order idempotency, 3b) | ✅ S5 PASS / CLOSED | LOW — same as P0-01. |
+   619→| P0-27 (deployment & rollback, 3 classes) | ✅ S5 PASS | LOW — C1 is Class-2 expand-migrate-contract. Rollback procedure is well-defined (§8.2). |
+   620→
+   621→**No blocking dependencies.** All predecessors are CLOSED/S5.
+   622→
+   623→### 8.5 Does C1 interact with `withTransaction` retry? (explicit answer)
+   624→
+   625→**YES, but safely.** The hash check happens INSIDE the txn body (in `getCachedResponse`, which is the FIRST call inside `withTransaction`). On retry:
+   626→
+   627→1. `withTransaction` catches a retryable conflict (P2002/P1008/P2024/P2034/P2036).
+   628→2. Backoff + retry — the SAME `fn` callback is invoked fresh.
+   629→3. `getCachedResponse(tx, key, incomingRequestHash)` re-runs.
+   630→4. Reads the same `IdempotencyKey` row (either committed by the prior attempt, or by a sibling transaction).
+   631→5. Hash check: `incomingRequestHash` (computed once outside the txn — same value on every retry) compared with `record.requestHash` (deterministic — same value on every read).
+   632→6. **If hash matches:** cached response returned → short-circuit (same as today).
+   633→7. **If hash mismatches:** `IdempotencyKeyReuseError` thrown → propagates out of `withTransaction` (NOT a retryable conflict — `isRetryableConflict` returns `false` for non-Prisma errors). Route handler catches it → HTTP 422.
+   634→
+   635→**Is this correct?** YES. If the hash mismatches on retry, it will mismatch on every retry (the stored hash is committed; the incoming hash is fixed). Retrying would be wasteful. The 422 is the correct terminal behavior — the client must generate a new `Idempotency-Key`.
+   636→
+   637→**Edge case:** What if the FIRST attempt's txn committed (stored hash = H1), but the client's retry sends a DIFFERENT body (hash = H2)? The hash check correctly returns 422. The client must generate a new key. This is the intended Option B behavior — no bug.
+   638→
+   639→**Edge case:** What if the FIRST attempt's txn rolled back (no row stored), and the retry sends the SAME body (hash = H1)? `getCachedResponse` returns `null` (no row) → proceeds with business write → stores row with `requestHash = H1`. No 422. Correct behavior — this is the 3b-E5 phantom-block scenario, preserved.
+   640→
+   641→### 8.6 Hazards explicitly out of scope for 3c
+   642→
+   643→- ❌ `realPayments` flag — remains OFF. No Razorpay gateway changes. The Payment-side hash check applies to the request body (`orderId`, `razorpayPaymentId`, `razorpaySignature`), NOT to gateway-side state.
+   644→- ❌ `requestHashEnforcement` flag enablement — flag is IMPLEMENTED (default OFF) but NOT enabled. Enablement requires separate Orchestrator authorization in a future wave.
+   645→- ❌ Webhook handler — Wave-4 scope. WebhookEvent model remains schema-only.
+   646→- ❌ Refund flow — Wave-5 scope.
+   647→- ❌ Reconciliation job — Wave-5 scope.
+   648→- ❌ `withTransaction` retry-list expansion — already done in 3a, NOT touched in 3c.
+   649→- ❌ Move `captureRazorpayPayment()` outside the txn body — out of 3c scope. The `TRANSACTION_RETRY_INVARIANT.md` hazard remains documented but unmitigated (gated by `realPayments=false`).
+   650→- ❌ Production deployment — NOT authorized.
+   651→- ❌ Wave-4+ — NOT started.
+   652→
+   653→---
+   654→
+   655→## 9. Exit Criteria
+   656→
+   657→3c is declared **S5 PASS** when ALL of the following are true:
+   658→
+   659→| # | Criterion | Verification |
+   660→|---|-----------|--------------|
+   661→| 1 | All NEW evidence scenarios (3c-E1, 3c-E2, 3c-E3, 3c-E4) PASS on SQLite local | Self-validating JSON with `ok:true` for each; saved to `evidence/wave3-3c/evidence-3c-ev-<runId>.json` |
+   662→| 2 | 3c-E5 (PostgreSQL concurrency, flag-ON) PASS with `ok:true, database: 'postgresql', uniqueOrderIds: 1, orderCount: 1, idempotencyRecordExists: true, idempotencyRecord.requestHash` non-null | GitHub Actions workflow run, evidence JSON saved to `evidence/wave3-3c/evidence-postgresql-3c-pg-ev.json` |
+   663→| 3 | 3a/3b evidence NOT re-run (already CLOSED) | Confirmed by worklog — 3c does NOT re-execute 3a-E1..3a-PG-E1 or 3b-E1..3b-PG-E1 |
+   664→| 4 | No regression in existing tests | 3a/3b evidence JSONs unchanged; lint PASS; typecheck PASS for `withTransaction` surface; existing unit tests (if any) PASS |
+   665→| 5 | Lint PASS | `bun run lint` exit 0 |
+   666→| 6 | Production untouched | No production deploy, no production env vars modified, no production migration |
+   667→| 7 | `realPayments` OFF | Confirmed via `src/lib/deployment.ts` (flag defaults to false) |
+   668→| 8 | `requestHashEnforcement` flag OFF in production (staging may be ON for evidence) | Confirmed via Vercel env vars — flag is set to `true` ONLY on the staging Vercel preview during evidence runs; production Vercel target has flag unset (defaults to false) |
+   669→| 9 | Cross-P0 invariants preserved (documented in §5 of this Gate Review) | Each invariant in the §5.1 matrix verified SAFE; no regression in 3a/3b closure criteria |
+   670→| 10 | Schema/env restored to production state after evidence runs | `prisma/schema.prisma` provider = `postgresql`; `.env` clean (no temp SQLite params); Prisma client regenerated for PostgreSQL; `requestHash` column exists on staging but is nullable + unused in production code path (flag OFF) |
+   671→| 11 | WAVE3_EVIDENCE.md updated with Sub-Wave 3c evidence section | All 5 NEW scenarios documented with PASS/FAIL + evidence JSON links; §11 "Sub-Wave 3c — S5 PASS / CLOSED" section added |
+   672→| 12 | No external gateway side-effect inside any `withTransaction` body (per `docs/TRANSACTION_RETRY_INVARIANT.md`) | Code-review checklist — C1 does NOT add any external call inside the txn body. The hash computation happens OUTSIDE the txn (before `withTransaction`); the hash comparison happens INSIDE the txn (in `getCachedResponse`) but is pure DB read + in-memory string compare. No HTTP, no gateway, no I/O outside DB. |
+   673→| 13 | C1 `requestHash` enforcement is FEATURE-FLAGGED OFF by default | Confirmed via `src/lib/deployment.ts` — `requestHashEnforcement` flag defaults to `false`. Production code path is dormant. |
+   674→| 14 | 3c does NOT enable the flag, does NOT deploy to production, does NOT touch `realPayments`, does NOT start Wave-4+ | Worklog confirms; governance state at end of 3c: `Sub-Wave 3c ✅ S5 PASS / CLOSED`, `requestHashEnforcement = OFF (dormant)`, `Production 🚫 NOT AUTHORIZED`, `realPayments 🚫 OFF`, `Wave-4 🔒 LOCKED`. |
+   675→
+   676→---
+   677→
+   678→## 10. Recommendation
+   679→
+   680→### **CONDITIONAL-GO**
+   681→
+   682→**Justification:**
+   683→
+   684→3c implementation is **feasible, well-scoped, and medium-risk** — provided the following conditions are met:
+   685→
+   686→#### Conditions (must be honored by the 3c implementation agent)
+   687→
+   688→1. **Schema change is Class-2 expand-migrate-contract ONLY.** Add nullable `requestHash String?` column to `IdempotencyKey`. Do NOT add NOT NULL constraints, do NOT add indexes on `requestHash`, do NOT modify existing columns. Migration applied to staging ONLY (via GitHub Actions workflow, mirror of 3a/3b staging-migration pattern). Production migration is NOT authorized in 3c.
+   689→
+   690→2. **Feature flag `requestHashEnforcement` MUST be implemented with default OFF.** The code path computes the hash on insert (stored for all new records) but `getCachedResponse` SKIPS the comparison check when the flag is OFF. This provides a kill-switch for new records in addition to the null-hash short-circuit for old records. The flag is set to `true` ONLY on the staging Vercel preview during evidence runs.
+   691→
+   692→3. **DO NOT enable the flag in production.** 3c IMPLEMENTS the flag (default OFF) but does NOT flip it to ON in production. Flag enablement requires separate Orchestrator authorization in a future wave (3d or later), with a fresh Gate Review confirming the production-impact analysis.
+   693→
+   694→4. **DO NOT modify `withTransaction` (`src/lib/db.ts`).** The retry-list expansion (P2002/P1008/P2024) was done in 3a and is regression-analyzed (PASS-WITH-DOCUMENTED-RISK). The new `IdempotencyKeyReuseError` is NOT a retryable conflict — it must NOT be added to `isRetryableConflict`. The retry loop must treat it as "non-retryable, rethrow as-is."
+   695→
+   696→5. **DO NOT move `captureRazorpayPayment()` outside the txn body.** This is out of 3c scope (TRANSACTION_RETRY_INVARIANT.md hazard mitigation is Wave-3b/3c-adjacent but separate). 3c only adds the hash check; it does NOT change where external calls happen. `realPayments` remains OFF.
+   697→
+   698→6. **REUSE the 3b evidence infrastructure pattern.** Extend `src/app/api/orders/evidence-verify/route.ts` to expose `idempotencyRecord.requestHash` in the response (add `requestHash: true` to the `select` clause). Optionally extend `src/app/api/orders/evidence-setup/route.ts` to support `?preInsertIdempotencyKey=true` for 3c-E3/E4 (manually insert a pre-3c record with `requestHash=null`). Create parallel `evidence-setup`/`evidence-verify` extensions for `/api/payments/` if a Payment-side 3c evidence scenario is desired (optional — 3c-E1..3c-E5 cover Order POST; Payment-side is structurally identical and can be inferred).
+   699→
+   700→7. **PostgreSQL-native concurrency evidence (3c-E5) is REQUIRED for S5 closure** (Option B parallel — same precedent as 3a-PG-E1 + 3b-PG-E1). 3c-E5 must run on staging PostgreSQL (Supabase) and produce a self-validating JSON with `database: 'postgresql', ok: true, uniqueOrderIds: 1, idempotencyRecordExists: true, idempotencyRecord.requestHash` non-null. SQLite-only evidence is NOT sufficient (same bar as 3a + 3b).
+   701→
+   702→8. **Implement 4 NEW SQLite evidence scenarios (3c-E1, 3c-E2, 3c-E3, 3c-E4) + 1 NEW PostgreSQL scenario (3c-E5).** Total: 5 NEW scenarios. Do NOT re-run the 11 CLOSED 3a/3b scenarios — they remain valid proof for the flag-OFF path.
+   703→
+   704→9. **Implement the hash computation using a CANONICAL JSON form.** Use `fast-json-stable-stringify` (or equivalent) for canonicalization. Do NOT use raw `JSON.stringify(body)` — key ordering is not guaranteed across clients. Hash algorithm: SHA-256 (Web Crypto API `crypto.subtle.digest` for Edge-runtime compatibility, OR Node.js `crypto.createHash` since route handlers run on Node.js).
+   705→
+   706→10. **Hash scope: BODY ONLY.** Do NOT include URL path, HTTP method, or headers in the hash. The body is the dominant signal of client intent. The `resourceType` column already records which resource the key created (audit trail without needing URL/method in the hash).
+   707→
+   708→11. **Error response shape follows §3.3 of this Gate Review.** HTTP 422 with `error.code: 'IDEMPOTENCY_KEY_REUSE'`, `error.details.retryStrategy: 'new-key'`, `error.details.storedResourceId`, `error.details.storedRequestHash` (truncated to first 16 chars), `error.details.receivedRequestHash` (truncated to first 16 chars). Do NOT include the full 64-char hash in the response (defense-in-depth against hash-inversion attacks).
+   709→
+   710→12. **DO NOT start Wave-4+ .** 3c remains the final Sub-Wave of Wave-3. Wave-4 (webhook handler) requires separate Orchestrator authorization. After 3c S5 PASS, the IDE MUST STOP and await Orchestrator direction.
+   711→
+   712→#### Why CONDITIONAL-GO (not GO)?
+   713→
+   714→- The implementation is feasible (5 NEW scenarios, 3b-infra reuse, Class-2 migration, feature-flagged). A GO would be appropriate if the Orchestrator is willing to accept the medium-risk scope (shared library change, both critical paths affected).
+   715→- The CONDITIONAL qualifier reflects the **medium risk** (shared `idempotency.ts` modification, blast radius HIGH for both critical paths) and the **flag-enablement deferral** (3c implements but does NOT enable — production enablement is a separate decision).
+   716→
+   717→#### Why CONDITIONAL-GO (not NO-GO)?
+   718→
+   719→- The C1 design is well-specified (canonicalization, hash algorithm, error shape, backward-compat all defined in this Gate Review).
+   720→- The 3a/3b evidence (11 scenarios, S5 PASS / CLOSED) remains valid for the flag-OFF path — 3c does not regress 3a/3b.
+   721→- The feature flag provides a kill-switch — even after deploy, the new code path is dormant until explicitly enabled.
+   722→- All P0-08/P0-01/P0-17 predecessors are CLOSED/S5 — no blocking dependencies.
+   723→- The 3a regression analysis confirms `withTransaction` retry-safety for all 4 callers; C1's `IdempotencyKeyReuseError` is non-retryable and propagates cleanly out of the retry loop.
+   724→- The 3a architectural invariant (`TRANSACTION_RETRY_INVARIANT.md`) is preserved — C1 does not move or add external calls.
+   725→
+   726→#### Decision points for Orchestrator resolution
+   727→
+   728→1. **D1 (3c scope):** Authorize C1 implementation + 5 NEW evidence scenarios + feature-flagged-OFF deploy to staging only? Default recommendation: **YES** (CONDITIONAL-GO).
+   729→2. **D2 (flag enablement):** Authorize `requestHashEnforcement` flag enablement in production as part of 3c, or defer to 3d? Default recommendation: **DEFER to 3d** (or later) — 3c implements but does NOT enable.
+   730→3. **D3 (Payment-side evidence):** Require a Payment-side 3c-E2 equivalent (same-key + different-body → 422 for `/api/payments`), or accept Order-side 3c-E2 as structurally-transferable proof? Default recommendation: **ACCEPT Order-side as transferable** (the shared `idempotency.ts` library means the hash-check logic is identical for both routes; a Payment-side test would be redundant). If the Orchestrator wants the extra rigor, a Payment-side 3c-E2 can be added (mirrors Order-side, swaps body schema + URL).
+   731→4. **D4 (hash algorithm):** SHA-256 (recommended), SHA-3, or BLAKE3? Default recommendation: **SHA-256** (FIPS standard, universally available, adequate security for 24h-TTL cache).
+   732→5. **D5 (canonicalization):** `fast-json-stable-stringify` (recommended library), RFC 8785 full implementation, or hand-rolled? Default recommendation: **`fast-json-stable-stringify`** (well-maintained, covers key sorting + compact output; sufficient for SnakZap's integer-only body schemas).
+   733→
+   734→#### Next steps for Orchestrator decision
+   735→
+   736→1. **Resolve Decision D1** (authorize 3c implementation scope — C1 + 5 NEW scenarios + flag-OFF staging deploy).
+   737→2. **Resolve Decision D2** (flag-enablement timing — defer to 3d or later).
+   738→3. **Resolve Decision D3** (Payment-side evidence scope — accept Order-side as transferable, or require Payment-side).
+   739→4. **Resolve Decision D4** (hash algorithm — SHA-256 default).
+   740→5. **Resolve Decision D5** (canonicalization library — `fast-json-stable-stringify` default).
+   741→6. **Authorize 3c implementation** with the chosen scope.
+   742→7. **Do NOT authorize production deploy. Do NOT enable `realPayments`. Do NOT enable `requestHashEnforcement` in production. Do NOT start Wave-4.**
+   743→
+   744→---
+   745→
+   746→## 11. Governance Compliance
+   747→
+   748→This Gate Review was conducted under the Orchestrator's READ/PLAN-FIRST authorization for Sub-Wave 3c. The following constraints were honored:
+   749→
+   750→| Constraint | Status |
+   751→|-----------|--------|
+   752→| No source-code modification (`.ts` files) | ✅ HONORED — no `.ts` files were edited |
+   753→| No `prisma/schema.prisma` modification | ✅ HONORED — schema file unchanged |
+   754→| No migration files created | ✅ HONORED — no new SQL migration scripts |
+   755→| No evidence tests executed | ✅ HONORED — no test runs; only file reads + analysis |
+   756→| No production deploy | ✅ HONORED — production untouched |
+   757→| No `realPayments` enable | ✅ HONORED — `realPayments` flag unchanged (defaults to false, per `src/lib/deployment.ts`) |
+   758→| No `requestHashEnforcement` flag added | ✅ HONORED — flag does NOT exist yet (3c implementation would add it, default OFF; this Gate Review only DESCRIBES the flag, does not create it) |
+   759→| No Sub-Wave 3c implementation start | ✅ HONORED — only this document produced |
+   760→| No Wave-4+ start | ✅ HONORED — Wave-4 remains LOCKED |
+   761→| Files read, analyzed, and Gate Review document produced | ✅ DONE — see §11.1 for the file inventory |
+   762→| Worklog appended | ✅ DONE — appended as Task ID `3c-gate-review` |
+   763→
+   764→### 11.1 Files read for this Gate Review
+   765→
+   766→| File | Lines | Purpose |
+   767→|------|-------|---------|
+   768→| `/home/z/my-project/worklog.md` (lines 4840–5236) | ~400 | Sub-Wave 3a closure + 3b Gate Review + 3b workflow-adapt + 3b PostgreSQL evidence + 3b S5 closure records — establishes that 3a + 3b are CLOSED, C1 deferred to 3c |
+   769→| `/home/z/my-project/src/lib/idempotency.ts` | 99 | IdempotencyKey library (getCachedResponse, storeIdempotencyRecord, parseCachedResponse) — primary modification target for C1 |
+   770→| `/home/z/my-project/src/lib/db.ts` | 176 | withTransaction helper (retry logic, MAX_RETRIES=5, retryable error codes P2002/P1008/P2024/P2034/P2036) — verifies retry-safety of new IdempotencyKeyReuseError |
+   771→| `/home/z/my-project/src/lib/outbox.ts` | 108 | Outbox helper (enqueueOutboxEvent) — verifies C1 does not break outbox atomicity |
+   772→| `/home/z/my-project/src/lib/razorpay.ts` | 137 | Razorpay SDK wrapper — confirms C1 does not change external-call placement |
+   773→| `/home/z/my-project/src/lib/validation.ts` | 112 | createOrderBodySchema + captureBodySchema — confirms body schemas are distinct + Zod-validated (hash computed post-validation) |
+   774→| `/home/z/my-project/src/middleware.ts` | 195 | CSRF + rate limiting — confirms `/api/orders` and `/api/payments` are classified as `payment` rate limit (10/min); evidence endpoints are exempt |
+   775→| `/home/z/my-project/src/app/api/orders/route.ts` | 395 | Order POST route — primary idempotency surface (uses getCachedResponse + storeIdempotencyRecord) |
+   776→| `/home/z/my-project/src/app/api/payments/route.ts` | 299 | Payment POST route — second idempotency surface (uses same library) |
+   777→| `/home/z/my-project/src/app/api/orders/[id]/status/route.ts` | 169 | Order status PATCH — uses optimistic-lock, NOT idempotency (boundary is clean) |
+   778→| `/home/z/my-project/src/app/api/orders/evidence-setup/route.ts` | 108 | 3b evidence-setup endpoint — base pattern for 3c evidence infra reuse |
+   779→| `/home/z/my-project/src/app/api/orders/evidence-verify/route.ts` | 169 | 3b evidence-verify endpoint — needs `requestHash` added to `select` clause for 3c |
+   780→| `/home/z/my-project/src/app/api/payments/evidence-setup/route.ts` | 119 | 3a evidence-setup endpoint — base pattern |
+   781→| `/home/z/my-project/src/app/api/payments/evidence-verify/route.ts` | 167 | 3a evidence-verify endpoint |
+   782→| `/home/z/my-project/prisma/schema.prisma` | 427 | IdempotencyKey model (current schema) — C1 would add `requestHash String?` column |
+   783→| `/home/z/my-project/SUBWAVE_3B_GATE_REVIEW.md` | 597 | 3b Gate Review — has C1 candidate analysis in §5.3 (deferred to 3c) |
+   784→| `/home/z/my-project/SUBWAVE_3_GATE_REVIEW.md` | 142 | Original Sub-Wave 3 Gate Review — has 3c scope outline in §Q5 |
+   785→| `/home/z/my-project/WAVE3_EVIDENCE.md` | 943 | Wave-3 evidence (3a + 3b sections, both S5 PASS / CLOSED) |
+   786→| `/home/z/my-project/evidence/wave3-3a/evidence-postgresql-3a-pg-ev.json` | 135 | 3a PostgreSQL evidence (workflow 31896343466, `ok:true`) |
+   787→| `/home/z/my-project/evidence/wave3-3b/evidence-postgresql-3b-pg-ev.json` | 133 | 3b PostgreSQL evidence (workflow 31912679504, `ok:true`) |
+   788→| `/home/z/my-project/evidence/wave3-3b/evidence-3b-ev-1786832887563-41ed55ac.json` | 241 | 3b SQLite evidence (5/5 PASS, includes 3b-E3 conflict test — Option A behavior) |
+   789→| `/home/z/my-project/evidence/wave3-3a/regression-analysis.md` | 357 | withTransaction regression analysis (4 callers, retry-safety, PASS-WITH-DOCUMENTED-RISK) |
+   790→| `/home/z/my-project/docs/TRANSACTION_RETRY_INVARIANT.md` | 536 | Architectural invariant doc (external gateway side-effect ≠ blind DB retry) |
+   791→| `/home/z/my-project/P0_TRACEABILITY_MAP.md` | 192 | P0 traceability (P0-08 → I-02, I-10; P0-17 → I-04, I-10) |
+   792→| `/home/z/my-project/P0_DEPENDENCY_GRAPH.md` | 408 | P0 dependencies (P0-08 depends on P0-24 + P0-25, both CLOSED/S5) |
+   793→
+   794→### 11.2 Confirmed governance state at end of this Gate Review
+   795→
+   796→```text
+   797→Wave-0        ✅ CLOSED
+   798→Wave-1        ✅ CLOSED
+   799→Wave-2        ✅ CLOSED
+   800→
+   801→Wave-3        🔓 UNLOCKED
+   802→
+   803→Sub-Wave 3a   ✅ S5 PASS / CLOSED — WILL NOT REOPEN
+   804→Sub-Wave 3b   ✅ S5 PASS / CLOSED — WILL NOT REOPEN
+   805→Sub-Wave 3c   🟡 READ/PLAN-FIRST GATE REVIEW COMPLETE
+   806→              ├─ Recommendation: CONDITIONAL-GO
+   807→              ├─ Awaiting Orchestrator decision on D1–D5
+   808→              ├─ Implementation NOT started
+   809→              └─ No code/schema/migration/evidence changes made
+   810→
+   811→Wave-4+       🔒 LOCKED — NOT AUTHORIZED
+   812→Production    🚫 NOT AUTHORIZED
+   813→realPayments  🚫 OFF
+   814→requestHashEnforcement  🚫 DOES NOT EXIST YET (3c implementation would add it, default OFF)
+   815→```
+   816→
+   817→---
+   818→
+   819→**End of Sub-Wave 3c READ/PLAN-FIRST Gate Review.**
+   820→
+   821→**Recommendation: CONDITIONAL-GO.** Awaiting Orchestrator decision on the 5 decision points (D1–D5) and authorization to implement 3c (C1 + 5 NEW evidence scenarios + feature-flagged-OFF staging deploy only).
+   822→
+   823→**STOP. No implementation started. No Wave-4 started. No production touched. `realPayments` OFF. `requestHashEnforcement` does not exist yet.**
+   824→
