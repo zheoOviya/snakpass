@@ -5654,3 +5654,25 @@ Stage Summary:
 - STOP: IDE is not self-closing 4a. Awaiting Orchestrator S5 decision.
 - Production NOT touched. realPayments OFF. webhookHandler OFF (production). 3a/3b/3c NOT reopened.
 
+
+---
+Task ID: 4a-s5-closure + 4b-implementation-start
+Agent: IDE (main)
+Task: 4a S5 PASS / CLOSED formalization + 4b implementation authorized
+
+Work Log:
+- Received Orchestrator S5 PASS decision for Sub-Wave 4a (P0-05 Webhook Handler).
+- Updated WAVE4_EVIDENCE.md:
+  - Status: 4a S5 PASS / CLOSED + 4b Implementation Authorized
+  - Sub-Wave 4a: ✅ S5 PASS / CLOSED
+  - Sub-Wave 4b: 🟡 Implementation Authorized (awaiting evidence)
+  - Added §3 "Sub-Wave 4a — S5 PASS / CLOSED (Orchestrator Decision)" section
+  - Added §4 "Sub-Wave 4b — P0-02 Ledger Formalization (Implementation Authorized)" section
+- 4a will NOT reopen for evidence.
+
+Stage Summary:
+- Sub-Wave 4a: ✅ S5 PASS / EVIDENCE-COMPLETE / CLOSED
+- Sub-Wave 4b: 🟡 Implementation Authorized — beginning implementation
+- Production NOT touched. realPayments OFF. webhookHandler OFF (production). 4c NOT started.
+- IDE proceeding with 4b implementation (P0-02 Ledger Formalization).
+

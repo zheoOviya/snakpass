@@ -1,9 +1,9 @@
 # Wave-4 Evidence Document
 
-**Status:** 🟡 Sub-Wave 4a — Evidence-Complete (4/4 SQLite PASS + PostgreSQL PASS, awaiting Orchestrator S5 review)
+**Status:** 🟢 Sub-Wave 4a — S5 PASS / CLOSED | 🟡 Sub-Wave 4b — Implementation Authorized (awaiting evidence)
 **Created:** 2026-08-16
-**Sub-Wave 4a Evidence Complete:** 2026-08-16
-**Authorization:** Orchestrator Decision (Wave-4 implementation authorized, 4a P0-05 Webhook Handler)
+**Sub-Wave 4a Closure:** 2026-08-16 (Orchestrator S5 PASS decision)
+**Authorization:** Orchestrator Decision (4a S5 PASS + 4b implementation authorized)
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence.
 
@@ -13,8 +13,8 @@
 
 | Sub-Wave | Scope | Status |
 |----------|-------|--------|
-| 4a | P0-05 Webhook handler (HMAC verify + dedup + idempotent processing) | 🟡 Evidence-Complete (awaiting S5 review) |
-| 4b | P0-02 Ledger formalization | 🔒 LOCKED (not yet authorized) |
+| 4a | P0-05 Webhook handler (HMAC verify + dedup + idempotent processing) | ✅ S5 PASS / CLOSED |
+| 4b | P0-02 Ledger formalization | 🟡 Implementation Authorized (awaiting evidence) |
 | 4c | TRANSACTION_RETRY_INVARIANT mitigation | 🟡 CONDITIONALLY AUTHORIZED (after 4a/4b) |
 | 4d | orphan_business_count fix | 🟢 AUTHORIZED (folded into 4b/4c) |
 
@@ -122,3 +122,55 @@ webhookHandler (production) 🚫 OFF
 ```
 
 **STOP — IDE is not self-closing 4a. Awaiting Orchestrator S5 decision.**
+
+---
+
+## 3. Sub-Wave 4a — S5 PASS / CLOSED (Orchestrator Decision)
+
+> **ORCHESTRATOR DECISION — Sub-Wave 4a = S5 PASS / EVIDENCE-COMPLETE / CLOSED.**
+
+**Date:** 2026-08-16
+**Decision:** Sub-Wave 4a (P0-05 Webhook Handler) authorized scope fulfilled. Declared **S5 PASS** and **CLOSED**.
+
+### Decisive Evidence
+
+- **PostgreSQL Evidence:** `evidence/wave4-4a/evidence-postgresql-4a-pg-ev.json` (`ok: true`, `database: postgresql`)
+- **Workflow:** GitHub Actions run `31921274765`
+- **Staging Migration:** GitHub Actions run `31921235580`
+
+### Proven
+
+```text
+concurrentRequests = 5
+uniqueWebhookEvents = 1
+webhookEventCount = 1
+paymentCaptured = true
+outboxEventCount = 1
+auditLogCount = 2
+no422Errors = true
+ok = true
+database = postgresql
+```
+
+### Important Production Boundary
+
+**S5 PASS का अर्थ production authorization नहीं है।**
+- `webhookHandler` = OFF in production (enablement is a separate Orchestrator decision)
+- Production deployment = NOT AUTHORIZED
+- `realPayments` = OFF
+
+4a will NOT reopen for evidence.
+
+---
+
+## 4. Sub-Wave 4b — P0-02 Ledger Formalization (Implementation Authorized)
+
+> **Orchestrator authorized Sub-Wave 4b implementation.**
+> Scope: P0-02 ledger formalization evidence + `orphan_business_count` fix (if bounded/mechanically related).
+> 4c NOT started. Production NOT touched. `realPayments` OFF. `webhookHandler` OFF in production.
+> PostgreSQL-native evidence REQUIRED for S5.
+> After implementation + evidence, STOP and report to Orchestrator. Do NOT self-close.
+
+### Status: 🟡 IMPLEMENTATION IN PROGRESS
+
+(Evidence will be appended after implementation + SQLite + PostgreSQL tests pass.)
