@@ -136,6 +136,114 @@ export function isRazorpayConfigured(): boolean {
 }
 
 // ----------------------------------------------------------------------------
+// P0-03 Wave-5 Sub-Wave 5C — Razorpay payment status fetch (READ-ONLY)
+// ----------------------------------------------------------------------------
+// fetchRazorpayPaymentStatus() is a READ-ONLY gateway query used by the M3
+// remediation handler to verify whether a capture actually succeeded at the
+// gateway before flipping Payment.status from CAPTURE_PENDING to CAPTURED.
+//
+// SAFETY CONTRACT (Orchestrator hard boundary for 5C-M3):
+//   - This function is FETCH ONLY. It MUST NOT capture, refund, or mutate
+//     any gateway state.
+//   - It MUST be called OUTSIDE any withTransaction() body (TRANSACTION_RETRY_INVARIANT).
+//   - In demo mode (realPayments=false), it returns a mock status for evidence testing.
+//   - In real mode (realPayments=true), it calls instance.payments.fetch().
+//
+// The returned status is used by the M3 handler to decide:
+//   'captured'    → proceed with Payment.status flip (CAPTURE_PENDING → CAPTURED)
+//   'authorized'  → DO NOT flip (capture didn't happen — escalate)
+//   'failed'      → DO NOT flip (payment failed — escalate)
+//   'refunded'    → DO NOT flip (multi-state drift — escalate)
+//   error/timeout → DO NOT flip (ambiguous — abort + retry later)
+
+export type RazorpayPaymentStatus =
+  | 'captured'
+  | 'authorized'
+  | 'failed'
+  | 'refunded'
+  | 'unknown'
+
+export interface RazorpayPaymentStatusResponse {
+  status: RazorpayPaymentStatus
+  gatewayPaymentId: string
+  amount: number // paise
+  currency: string
+  captured: boolean // Razorpay's captured flag
+  raw?: unknown // raw response for audit (real mode only)
+}
+
+/**
+ * Fetch the current status of a Razorpay payment.
+ *
+ * This is a READ-ONLY gateway query. It does NOT capture, refund, or mutate
+ * any gateway state. It MUST be called OUTSIDE any withTransaction() body
+ * (TRANSACTION_RETRY_INVARIANT — mirrors the capture/refund external-call pattern).
+ *
+ * In demo mode (realPayments=false): returns a mock status based on the
+ * EVIDENCE_TEST_MODE flag + optional EVIDENCE_GATEWAY_STATUS env var (for
+ * M3 evidence scenarios that need to simulate different gateway responses).
+ *
+ * In real mode (realPayments=true): calls instance.payments.fetch(razorpayPaymentId)
+ * + maps the Razorpay status to our internal RazorpayPaymentStatus type.
+ *
+ * @param razorpayPaymentId - The Razorpay payment ID (pay_*)
+ * @returns RazorpayPaymentStatusResponse — the authoritative gateway truth
+ */
+export async function fetchRazorpayPaymentStatus(
+  razorpayPaymentId: string,
+): Promise<RazorpayPaymentStatusResponse> {
+  if (!isFeatureEnabled('realPayments')) {
+    // Demo mode: return mock status for evidence testing.
+    // EVIDENCE_GATEWAY_STATUS env var controls the mock response (default: 'captured').
+    // This lets evidence scenarios simulate 'authorized', 'failed', 'error', etc.
+    const mockStatus = (process.env.EVIDENCE_GATEWAY_STATUS as RazorpayPaymentStatus) ?? 'captured'
+    return {
+      status: mockStatus,
+      gatewayPaymentId: razorpayPaymentId,
+      amount: 0, // unknown in mock mode — M3 handler doesn't use this
+      currency: 'INR',
+      captured: mockStatus === 'captured',
+    }
+  }
+
+  const instance = getRazorpayInstance()!
+  const payment = await instance.payments.fetch(razorpayPaymentId)
+
+  // Map Razorpay's status field to our internal type.
+  // Razorpay payment statuses: 'created', 'authorized', 'captured', 'failed',
+  // 'refunded'. We map 'created' → 'unknown' (shouldn't happen for a
+  // CAPTURE_PENDING payment).
+  const razorpayStatus = payment.status ?? 'unknown'
+  let status: RazorpayPaymentStatus
+  switch (razorpayStatus) {
+    case 'captured':
+      status = 'captured'
+      break
+    case 'authorized':
+      status = 'authorized'
+      break
+    case 'failed':
+      status = 'failed'
+      break
+    case 'refunded':
+      status = 'refunded'
+      break
+    default:
+      status = 'unknown'
+      break
+  }
+
+  return {
+    status,
+    gatewayPaymentId: razorpayPaymentId,
+    amount: payment.amount ?? 0,
+    currency: payment.currency ?? 'INR',
+    captured: payment.captured ?? false,
+    raw: payment,
+  }
+}
+
+// ----------------------------------------------------------------------------
 // P0-04 Wave-5 Sub-Wave 5a — Razorpay refund (mirrors 4c capture pattern)
 // ----------------------------------------------------------------------------
 

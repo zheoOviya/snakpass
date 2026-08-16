@@ -1284,3 +1284,440 @@ export async function processM16Remediations(): Promise<M16RemediationResult[]> 
 
   return results
 }
+
+// ============================================================================
+// P0-03 Wave-5 Sub-Wave 5C — M3 Remediation Handler (M3-ONLY)
+// ============================================================================
+// Orchestrator Directive WAVE5-5C-M3-IMPLEMENT-01:
+//   ONLY M3 (missing capture status — gateway-verified status flip) is authorized.
+//   M9/M10 + CLASS B/D/E are NOT authorized.
+//
+// SAFETY CONTRACT (Orchestrator hard boundary for 5C-M3):
+//   - M3 remediation ONLY mutates Payment.status (CAPTURE_PENDING → CAPTURED).
+//   - M3 remediation NEVER mutates Refund, LedgerEntry, Outbox, WebhookEvent,
+//     IdempotencyKey.
+//   - M3 remediation NEVER captures, refunds, or mutates gateway state.
+//   - M3 remediation calls fetchRazorpayPaymentStatus() OUTSIDE any txn body
+//     (TRANSACTION_RETRY_INVARIANT).
+//   - M3 remediation ONLY proceeds if the gateway returns 'captured'.
+//   - Any other gateway status (authorized/failed/refunded/unknown/error) →
+//     escalate to ExceptionQueue, NO Payment mutation.
+//
+// Safety Invariants satisfied (per WAVE5_5C_M3_GATE_REVIEW.md §M):
+//   M3-SI-1: Re-validation before repair (re-read Payment.status; if not CAPTURE_PENDING → skip)
+//   M3-SI-2: Repair idempotency (RemediationAction unique constraint)
+//   M3-SI-3: Gateway ambiguity = no repair (non-captured → escalate)
+//   M3-SI-4: Conditional updateMany (WHERE status=CAPTURE_PENDING — race-safe)
+//   M3-SI-5: Gateway-fetch OUTSIDE txn body (TRANSACTION_RETRY_INVARIANT)
+//   M3-SI-6: RemediationAction audit record created
+//   M3-SI-7: AuditLog entry created (RECONCILIATION_REPAIR_M3_CAPTURE_STATUS_FLIPPED)
+//   M3-SI-8: Post-repair verification (re-read Payment.status to confirm CAPTURED)
+//   M3-SI-9: Feature-flagged (reconciliationAutoRepair, default OFF)
+//   M3-SI-10: NO LedgerEntry mutation
+//   M3-SI-11: NO Outbox enqueue
+//   M3-SI-12: NO Razorpay capture/refund call (only FETCH)
+//   M3-SI-13: Escalate on any non-captured gateway status
+// ============================================================================
+
+/**
+ * M3 remediation result.
+ */
+export interface M3RemediationResult {
+  findingId: string
+  repairType: string
+  status: 'SUCCEEDED' | 'SKIPPED' | 'FAILED' | 'DISABLED' | 'ESCALATED'
+  reason: string
+  gatewayStatus: string | null
+  paymentStatusBefore: string | null
+  paymentStatusAfter: string | null
+  remediationActionId: string | null
+}
+
+/**
+ * Re-validate the M3 finding: re-read the current Payment state.
+ * If the Payment is no longer CAPTURE_PENDING, the finding is stale (SI-1).
+ *
+ * @param findingId The ReconciliationFinding id to re-validate.
+ * @returns The current Payment data if still CAPTURE_PENDING, else null (stale).
+ */
+async function revalidateM3Finding(
+  findingId: string,
+): Promise<{ paymentId: string; gatewayPaymentId: string | null; amount: number } | null> {
+  const finding = await db.reconciliationFinding.findUnique({
+    where: { id: findingId },
+    select: { mismatchClass: true, entityId: true, resolvedAt: true },
+  })
+  if (!finding || finding.mismatchClass !== 'M3_MISSING_CAPTURE_STATUS' || finding.resolvedAt !== null) {
+    return null
+  }
+  // Re-read the CURRENT Payment state (not the finding snapshot)
+  const payment = await db.payment.findUnique({
+    where: { id: finding.entityId },
+    select: { id: true, status: true, gatewayPaymentId: true, amount: true },
+  })
+  if (!payment || payment.status !== 'CAPTURE_PENDING') {
+    return null // stale — status was already flipped by webhook/publisher/another M3 run
+  }
+  return {
+    paymentId: payment.id,
+    gatewayPaymentId: payment.gatewayPaymentId,
+    amount: payment.amount,
+  }
+}
+
+/**
+ * Attempt to repair a single M3 finding.
+ *
+ * Flow (per WAVE5_5C_M3_GATE_REVIEW.md §D + §G):
+ *   1. Check feature flag (SI-9). If OFF → return DISABLED.
+ *   2. Re-validate the finding (SI-1). If stale → mark resolved + return SKIPPED.
+ *   3. Create a RemediationAction row (idempotent via unique constraint — SI-2).
+ *      If a repair action already exists → return SKIPPED.
+ *   4. [OUTSIDE txn] Call fetchRazorpayPaymentStatus() (SI-5, SI-12).
+ *   5. If gateway says 'captured' → proceed to step 6.
+ *      If gateway says anything else → escalate (SI-3, SI-13) + return ESCALATED.
+ *      If gateway call throws → abort + return FAILED (SI-3).
+ *   6. [INSIDE txn] Conditional updateMany WHERE status=CAPTURE_PENDING → CAPTURED
+ *      (SI-4) + RemediationAction update + AuditLog (SI-7) + ReconciliationFinding
+ *      resolution.
+ *   7. [OUTSIDE txn] Post-repair verification (SI-8): re-read Payment.status.
+ *
+ * SAFETY: This function NEVER writes to Refund, LedgerEntry, Outbox,
+ * WebhookEvent, or IdempotencyKey. It only writes to Payment.status (conditional
+ * updateMany) + RemediationAction + AuditLog + ReconciliationFinding.
+ *
+ * @param findingId The ReconciliationFinding id to repair.
+ * @returns The M3RemediationResult.
+ */
+export async function remediateM3MissingCaptureStatus(findingId: string): Promise<M3RemediationResult> {
+  const traceId = newTraceId()
+
+  // 1. Feature flag check (SI-9)
+  if (!isFeatureEnabled('reconciliationAutoRepair')) {
+    logInfo('m3-remediation-disabled-flag-off', { findingId, traceId }, traceId)
+    return {
+      findingId,
+      repairType: 'M3_GATEWAY_VERIFIED_STATUS_FLIP',
+      status: 'DISABLED',
+      reason: 'reconciliationAutoRepair feature flag is OFF',
+      gatewayStatus: null,
+      paymentStatusBefore: null,
+      paymentStatusAfter: null,
+      remediationActionId: null,
+    }
+  }
+
+  // 2. Re-validate the finding (SI-1)
+  const current = await revalidateM3Finding(findingId)
+  if (!current) {
+    logInfo('m3-remediation-stale-finding-auto-resolved', { findingId, traceId }, traceId)
+    await db.reconciliationFinding.update({
+      where: { id: findingId },
+      data: {
+        resolvedAt: new Date(),
+        resolutionNote: 'Stale finding — Payment.status already changed (webhook/publisher/another M3 run).',
+      },
+    }).catch(() => {})
+    return {
+      findingId,
+      repairType: 'M3_GATEWAY_VERIFIED_STATUS_FLIP',
+      status: 'SKIPPED',
+      reason: 'Stale finding — Payment.status already changed (re-validation passed)',
+      gatewayStatus: null,
+      paymentStatusBefore: null,
+      paymentStatusAfter: null,
+      remediationActionId: null,
+    }
+  }
+
+  // Check: gatewayPaymentId must be non-null to fetch gateway state
+  if (!current.gatewayPaymentId) {
+    logWarn('m3-remediation-no-gateway-payment-id', { findingId, paymentId: current.paymentId, traceId }, traceId)
+    // Escalate — cannot verify gateway state without a gatewayPaymentId
+    const exceptionId = await reportInvariantViolation({
+      invariant: 'M3_MISSING_CAPTURE_STATUS',
+      entityType: 'Payment',
+      entityId: current.paymentId,
+      description: `M3 remediation: cannot verify gateway state — gatewayPaymentId is null for payment ${current.paymentId}`,
+      stateSnapshot: { paymentId: current.paymentId, reason: 'null gatewayPaymentId' },
+      traceId,
+    }).catch(() => null)
+    return {
+      findingId,
+      repairType: 'M3_GATEWAY_VERIFIED_STATUS_FLIP',
+      status: 'ESCALATED',
+      reason: 'Cannot verify gateway state — gatewayPaymentId is null',
+      gatewayStatus: null,
+      paymentStatusBefore: 'CAPTURE_PENDING',
+      paymentStatusAfter: 'CAPTURE_PENDING',
+      remediationActionId: null,
+    }
+  }
+
+  // 3. Create RemediationAction row (idempotent via unique constraint — SI-2)
+  let remediationActionId: string | null = null
+  try {
+    const action = await db.remediationAction.create({
+      data: {
+        findingId,
+        repairType: 'M3_GATEWAY_VERIFIED_STATUS_FLIP',
+        status: 'ATTEMPTED',
+        actionSnapshot: JSON.stringify({
+          paymentId: current.paymentId,
+          paymentStatusBefore: 'CAPTURE_PENDING',
+          gatewayPaymentId: current.gatewayPaymentId,
+        }),
+      },
+    })
+    remediationActionId = action.id
+  } catch (err) {
+    // P2002 — unique constraint violation → a repair action already exists (SI-2)
+    logInfo('m3-remediation-idempotent-skip', { findingId, traceId, error: (err as Error).message }, traceId)
+    return {
+      findingId,
+      repairType: 'M3_GATEWAY_VERIFIED_STATUS_FLIP',
+      status: 'SKIPPED',
+      reason: 'Idempotent skip — a repair action already exists for this finding',
+      gatewayStatus: null,
+      paymentStatusBefore: 'CAPTURE_PENDING',
+      paymentStatusAfter: 'CAPTURE_PENDING',
+      remediationActionId: null,
+    }
+  }
+
+  // 4. [OUTSIDE txn] Call fetchRazorpayPaymentStatus() (SI-5, SI-12)
+  // This is the AUTHORITATIVE gateway truth. It MUST be outside any txn body.
+  let gatewayResult: { status: string; captured: boolean }
+  try {
+    // Dynamic import to avoid circular dependency issues in the standalone mini-service
+    const { fetchRazorpayPaymentStatus } = await import('./razorpay')
+    const response = await fetchRazorpayPaymentStatus(current.gatewayPaymentId)
+    gatewayResult = { status: response.status, captured: response.captured }
+  } catch (err) {
+    // Gateway call failed (network error, timeout, etc.) — SI-3: abort, do NOT flip
+    logWarn('m3-remediation-gateway-fetch-failed', { findingId, paymentId: current.paymentId, error: (err as Error).message, traceId }, traceId)
+    await db.remediationAction.update({
+      where: { id: remediationActionId },
+      data: {
+        status: 'FAILED',
+        completedAt: new Date(),
+        error: `Gateway fetch failed: ${(err as Error).message}`,
+        actionSnapshot: JSON.stringify({
+          paymentId: current.paymentId,
+          paymentStatusBefore: 'CAPTURE_PENDING',
+          gatewayPaymentId: current.gatewayPaymentId,
+          gatewayError: (err as Error).message,
+        }),
+      },
+    }).catch(() => {})
+    return {
+      findingId,
+      repairType: 'M3_GATEWAY_VERIFIED_STATUS_FLIP',
+      status: 'FAILED',
+      reason: `Gateway fetch failed: ${(err as Error).message}`,
+      gatewayStatus: null,
+      paymentStatusBefore: 'CAPTURE_PENDING',
+      paymentStatusAfter: 'CAPTURE_PENDING',
+      remediationActionId,
+    }
+  }
+
+  // 5. Check gateway status — ONLY 'captured' permits the repair (SI-3, SI-13)
+  if (gatewayResult.status !== 'captured') {
+    // Non-captured gateway status → escalate, do NOT flip (SI-3, SI-13)
+    logWarn('m3-remediation-gateway-not-captured', {
+      findingId, paymentId: current.paymentId, gatewayStatus: gatewayResult.status, traceId,
+    }, traceId)
+    // Update RemediationAction with the gateway result
+    await db.remediationAction.update({
+      where: { id: remediationActionId },
+      data: {
+        status: 'FAILED',
+        completedAt: new Date(),
+        error: `Gateway status is ${gatewayResult.status} (not captured) — escalated`,
+        actionSnapshot: JSON.stringify({
+          paymentId: current.paymentId,
+          paymentStatusBefore: 'CAPTURE_PENDING',
+          gatewayPaymentId: current.gatewayPaymentId,
+          gatewayStatus: gatewayResult.status,
+          gatewayCaptured: gatewayResult.captured,
+          escalated: true,
+        }),
+      },
+    }).catch(() => {})
+    // Escalate to ExceptionQueue
+    await reportInvariantViolation({
+      invariant: 'M3_MISSING_CAPTURE_STATUS',
+      entityType: 'Payment',
+      entityId: current.paymentId,
+      description: `M3 remediation: gateway status is '${gatewayResult.status}' (not captured). Payment ${current.paymentId} should NOT be flipped to CAPTURED. Escalating for manual review.`,
+      stateSnapshot: { paymentId: current.paymentId, gatewayStatus: gatewayResult.status, findingId },
+      traceId,
+    }).catch(() => null)
+    return {
+      findingId,
+      repairType: 'M3_GATEWAY_VERIFIED_STATUS_FLIP',
+      status: 'ESCALATED',
+      reason: `Gateway status is ${gatewayResult.status} (not captured) — escalated`,
+      gatewayStatus: gatewayResult.status,
+      paymentStatusBefore: 'CAPTURE_PENDING',
+      paymentStatusAfter: 'CAPTURE_PENDING',
+      remediationActionId,
+    }
+  }
+
+  // 6. [INSIDE txn] Conditional updateMany WHERE status=CAPTURE_PENDING → CAPTURED (SI-4)
+  //    + RemediationAction update + AuditLog (SI-7) + ReconciliationFinding resolution.
+  //    This txn does NOT include the gateway-fetch call — that already happened above (SI-5).
+  await db.$transaction(async (tx) => {
+    // Race-safe: only update if status is still CAPTURE_PENDING (SI-4)
+    const updated = await tx.payment.updateMany({
+      where: {
+        id: current.paymentId,
+        status: 'CAPTURE_PENDING',
+      },
+      data: {
+        status: 'CAPTURED',
+        capturedAt: new Date(),
+        version: { increment: 1 },
+      },
+    })
+
+    if (updated.count > 0) {
+      // AuditLog — RECONCILIATION_REPAIR_M3_CAPTURE_STATUS_FLIPPED (SI-7)
+      await tx.auditLog.create({
+        data: {
+          actorId: null,
+          actorRole: 'SYSTEM',
+          action: 'RECONCILIATION_REPAIR_M3_CAPTURE_STATUS_FLIPPED',
+          metadata: JSON.stringify({
+            paymentId: current.paymentId,
+            findingId,
+            remediationActionId,
+            gatewayStatus: gatewayResult.status,
+            gatewayPaymentId: current.gatewayPaymentId,
+            source: 'm3-remediation',
+          }),
+        },
+      })
+    }
+
+    // Update RemediationAction with success
+    await tx.remediationAction.update({
+      where: { id: remediationActionId },
+      data: {
+        status: updated.count > 0 ? 'SUCCEEDED' : 'SKIPPED',
+        completedAt: new Date(),
+        actionSnapshot: JSON.stringify({
+          paymentId: current.paymentId,
+          paymentStatusBefore: 'CAPTURE_PENDING',
+          paymentStatusAfter: updated.count > 0 ? 'CAPTURED' : 'CAPTURE_PENDING (already changed)',
+          gatewayPaymentId: current.gatewayPaymentId,
+          gatewayStatus: gatewayResult.status,
+          gatewayCaptured: gatewayResult.captured,
+          rowsUpdated: updated.count,
+          findingResolved: updated.count > 0,
+        }),
+        error: updated.count > 0 ? null : 'Payment.status was already changed by a concurrent path (conditional updateMany returned 0 rows)',
+      },
+    })
+
+    // Resolve the finding if the status was flipped
+    if (updated.count > 0) {
+      await tx.reconciliationFinding.update({
+        where: { id: findingId },
+        data: {
+          resolvedAt: new Date(),
+          resolutionNote: `M3 remediation: gateway confirmed 'captured'. Payment.status flipped CAPTURE_PENDING → CAPTURED (action ${remediationActionId}).`,
+        },
+      })
+    }
+  })
+
+  // 7. [OUTSIDE txn] Post-repair verification (SI-8): re-read Payment.status
+  const afterPayment = await db.payment.findUnique({
+    where: { id: current.paymentId },
+    select: { status: true },
+  }).catch(() => null)
+  const paymentStatusAfter = afterPayment?.status ?? 'UNKNOWN'
+
+  logInfo('m3-remediation-complete', {
+    findingId, remediationActionId, paymentId: current.paymentId,
+    gatewayStatus: gatewayResult.status, paymentStatusAfter, traceId,
+  }, traceId)
+
+  return {
+    findingId,
+    repairType: 'M3_GATEWAY_VERIFIED_STATUS_FLIP',
+    status: paymentStatusAfter === 'CAPTURED' ? 'SUCCEEDED' : 'SKIPPED',
+    reason: paymentStatusAfter === 'CAPTURED'
+      ? `Gateway confirmed 'captured'. Payment.status flipped to CAPTURED.`
+      : `Gateway confirmed 'captured' but Payment.status is ${paymentStatusAfter} (concurrent path won the race).`,
+    gatewayStatus: gatewayResult.status,
+    paymentStatusBefore: 'CAPTURE_PENDING',
+    paymentStatusAfter,
+    remediationActionId,
+  }
+}
+
+/**
+ * Process all unresolved M3 findings (called by the remediation worker or
+ * the reconciliation mini-service's /trigger-remediation endpoint).
+ *
+ * Only processes M3_MISSING_CAPTURE_STATUS findings. CLASS B/D/E + M9/M10
+ * findings are NEVER processed by this function.
+ *
+ * @returns Array of M3RemediationResult for each finding processed.
+ */
+export async function processM3Remediations(): Promise<M3RemediationResult[]> {
+  const traceId = newTraceId()
+
+  // Feature flag check (SI-9)
+  if (!isFeatureEnabled('reconciliationAutoRepair')) {
+    logInfo('m3-remediation-batch-disabled', { reason: 'flag OFF', traceId }, traceId)
+    return []
+  }
+
+  // Find all unresolved M3 findings
+  const m3Findings = await db.reconciliationFinding.findMany({
+    where: {
+      mismatchClass: 'M3_MISSING_CAPTURE_STATUS',
+      resolvedAt: null,
+    },
+    select: { id: true },
+  })
+
+  logInfo('m3-remediation-batch-start', { count: m3Findings.length, traceId }, traceId)
+
+  const results: M3RemediationResult[] = []
+  for (const finding of m3Findings) {
+    try {
+      const result = await remediateM3MissingCaptureStatus(finding.id)
+      results.push(result)
+    } catch (err) {
+      logError('m3-remediation-batch-item-error', { findingId: finding.id, error: (err as Error).message, traceId }, traceId)
+      results.push({
+        findingId: finding.id,
+        repairType: 'M3_GATEWAY_VERIFIED_STATUS_FLIP',
+        status: 'FAILED',
+        reason: `Unexpected error: ${(err as Error).message}`,
+        gatewayStatus: null,
+        paymentStatusBefore: null,
+        paymentStatusAfter: null,
+        remediationActionId: null,
+      })
+    }
+  }
+
+  logInfo('m3-remediation-batch-complete', {
+    count: results.length,
+    succeeded: results.filter((r) => r.status === 'SUCCEEDED').length,
+    skipped: results.filter((r) => r.status === 'SKIPPED').length,
+    failed: results.filter((r) => r.status === 'FAILED').length,
+    escalated: results.filter((r) => r.status === 'ESCALATED').length,
+    disabled: results.filter((r) => r.status === 'DISABLED').length,
+    traceId,
+  }, traceId)
+
+  return results
+}
