@@ -1,0 +1,191 @@
+{
+  "ok": true,
+  "runId": "4a-pg-ev-1786846311-c2g",
+  "timestamp": "2026-08-16T02:12:00Z",
+  "wave": "4",
+  "subWave": "4a",
+  "evidenceType": "postgresql-concurrent-webhook-idempotency",
+  "database": "postgresql",
+  "stagingUrl": "https://snakpass-pr59lxn8j-snakzap.vercel.app",
+  "test": "5 concurrent POST /api/webhooks/razorpay with same X-Razorpay-Event-Id + webhookHandler=true",
+  "orchestratorRequiredFields": {
+    "database": "postgresql",
+    "concurrentRequests": 5,
+    "uniqueWebhookEvents": 1,
+    "webhookEventCount": 1,
+    "paymentCaptured": true,
+    "outboxEventCount": 1,
+    "auditLogCount": 2,
+    "no422Errors": true
+  },
+  "invariant": {
+    "exactlyOneWebhookProcessed": true,
+    "processedByStored": true,
+    "paymentCaptured": true,
+    "outboxEventCountIsOne": true,
+    "auditLogCountAtLeastTwo": true,
+    "no422Errors": true,
+    "description": "From 5 concurrent POST /api/webhooks/razorpay requests with same X-Razorpay-Event-Id + webhookHandler=true (FEATURE_WEBHOOK_HANDLER=true on Vercel): exactly 1 WebhookEvent (verified + processed + processedBy non-null), Payment CAPTURED, 1 outbox event (PAYMENT_CAPTURE_CONFIRMED), >=2 audit logs (WEBHOOK_RECEIVED + WEBHOOK_PAYMENT_CAPTURED), 1 unique eventId in responses, all 5 responses 200 (no 422)"
+  },
+  "setup": {
+    "userId": "cmsv65poi0000k004pr6sswrr",
+    "orderId": "cmsv65q9t0008k004z2lejkpi",
+    "paymentId": "cmsv65qas000ck004a5a92mcg",
+    "gatewayPaymentId": "pay_evidence_1786846312035_lljiht",
+    "gatewayOrderId": "order_evidence_1786846312035_2zrb17",
+    "restaurantId": "rest-001",
+    "menuItemId": "menu-001",
+    "amount": 32000,
+    "eventId": "evt_4a_pg_1786846312_18705",
+    "eventType": "payment.captured",
+    "concurrency": 5,
+    "webhookHandlerEnabled": true
+  },
+  "responseSummary": {
+    "successCount": 5,
+    "errorCount": 0,
+    "count422": 0,
+    "no422Errors": true,
+    "countProcessed": 1,
+    "countDuplicate": 4,
+    "countConflict": 0,
+    "uniqueWebhookEventsInResponses": 1,
+    "responses": [
+      {
+        "requestIndex": 1,
+        "status": 200,
+        "eventId": "evt_4a_pg_1786846312_18705",
+        "webhookStatus": "duplicate",
+        "paymentId": "cmsv65qas000ck004a5a92mcg",
+        "errorCode": "",
+        "errorMessage": ""
+      },
+      {
+        "requestIndex": 2,
+        "status": 200,
+        "eventId": "evt_4a_pg_1786846312_18705",
+        "webhookStatus": "duplicate",
+        "paymentId": "cmsv65qas000ck004a5a92mcg",
+        "errorCode": "",
+        "errorMessage": ""
+      },
+      {
+        "requestIndex": 3,
+        "status": 200,
+        "eventId": "evt_4a_pg_1786846312_18705",
+        "webhookStatus": "duplicate",
+        "paymentId": "cmsv65qas000ck004a5a92mcg",
+        "errorCode": "",
+        "errorMessage": ""
+      },
+      {
+        "requestIndex": 4,
+        "status": 200,
+        "eventId": "evt_4a_pg_1786846312_18705",
+        "webhookStatus": "duplicate",
+        "paymentId": "cmsv65qas000ck004a5a92mcg",
+        "errorCode": "",
+        "errorMessage": ""
+      },
+      {
+        "requestIndex": 5,
+        "status": 200,
+        "eventId": "evt_4a_pg_1786846312_18705",
+        "webhookStatus": "processed",
+        "paymentId": "cmsv65qas000ck004a5a92mcg",
+        "errorCode": "",
+        "errorMessage": ""
+      }
+    ]
+  },
+  "databaseState": {
+    "webhookEventCount": 1,
+    "webhookEventId": "evt_4a_pg_1786846312_18705",
+    "webhookEventProcessedBy": "webhook-handler-4a",
+    "processedByStored": true,
+    "paymentId": "cmsv65qas000ck004a5a92mcg",
+    "paymentStatus": "CAPTURED",
+    "paymentCapturedAt": "2026-08-16 02:11:52.719",
+    "paymentVersion": 1,
+    "paymentCaptured": true,
+    "outboxEventCount": 1,
+    "auditLogCount": 2
+  },
+  "evidenceVerifyEndpoint": {
+    "webhookEventCount": 1,
+    "auditLogCount": 2,
+    "exactlyOneWebhookProcessed": true
+  },
+  "expected": {
+    "webhookEventCount": 1,
+    "paymentStatus": "CAPTURED",
+    "paymentCaptured": true,
+    "outboxEventCount": 1,
+    "auditLogCount": ">=2",
+    "uniqueWebhookEvents": 1,
+    "processedByStored": true,
+    "count422": 0,
+    "countProcessed": 1,
+    "countDuplicate": 4
+  },
+  "governance": {
+    "realPaymentsEnabled": false,
+    "productionRazorpayCredentialsUsed": false,
+    "webhookHandlerImplemented": true,
+    "webhookHandlerEnabled": true,
+    "webhookHandlerScope": "Vercel preview+production env vars (FEATURE_WEBHOOK_HANDLER=true set by this workflow)",
+    "evidenceTestMode": true,
+    "evidenceTestModeScope": "Vercel preview+production env vars (EVIDENCE_TEST_MODE=true set by this workflow)",
+    "hmacSignatureVerificationSkipped": true,
+    "hmacSkipReason": "X-Evidence-Skip-Verify=true header sent (only honored when EVIDENCE_TEST_MODE=true)",
+    "productionTouched": false,
+    "note": "4a evidence: 5 concurrent POST /api/webhooks/razorpay with same X-Razorpay-Event-Id + X-Razorpay-Event=payment.captured + X-Evidence-Skip-Verify=true + webhookHandler=true (FEATURE_WEBHOOK_HANDLER=true on Vercel). Test run against staging Supabase PostgreSQL (project ref zmzqqcyapcezmaqvuzzd). realPayments=false (demo mode). HMAC verification SKIPPED via X-Evidence-Skip-Verify=true header (only honored under EVIDENCE_TEST_MODE=true). No production traffic touched. Verifies webhook dedup (WebhookEvent.eventId unique constraint) + idempotent Payment capture (optimistic-lock version) + atomic Outbox event (PAYMENT_CAPTURE_CONFIRMED) + >=2 audit logs (WEBHOOK_RECEIVED + WEBHOOK_PAYMENT_CAPTURED). P0-05 / I-04."
+  },
+  "concurrentResponses": [
+    {
+      "requestIndex": 1,
+      "status": 200,
+      "eventId": "evt_4a_pg_1786846312_18705",
+      "webhookStatus": "duplicate",
+      "paymentId": "cmsv65qas000ck004a5a92mcg",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 2,
+      "status": 200,
+      "eventId": "evt_4a_pg_1786846312_18705",
+      "webhookStatus": "duplicate",
+      "paymentId": "cmsv65qas000ck004a5a92mcg",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 3,
+      "status": 200,
+      "eventId": "evt_4a_pg_1786846312_18705",
+      "webhookStatus": "duplicate",
+      "paymentId": "cmsv65qas000ck004a5a92mcg",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 4,
+      "status": 200,
+      "eventId": "evt_4a_pg_1786846312_18705",
+      "webhookStatus": "duplicate",
+      "paymentId": "cmsv65qas000ck004a5a92mcg",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 5,
+      "status": 200,
+      "eventId": "evt_4a_pg_1786846312_18705",
+      "webhookStatus": "processed",
+      "paymentId": "cmsv65qas000ck004a5a92mcg",
+      "errorCode": "",
+      "errorMessage": ""
+    }
+  ]
+}

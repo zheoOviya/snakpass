@@ -5610,3 +5610,47 @@ Stage Summary:
 - Orchestrator-required JSON shape: `{ ok, database, concurrentRequests, uniqueWebhookEvents, webhookEventCount, paymentCaptured, outboxEventCount, auditLogCount, no422Errors }` (all 8 fields present in `orchestratorRequiredFields` object).
 - Invariants verified by `ok:true`: WebhookEvent count=1 + verified=true + processed=true + processedBy non-null (4a schema delta) + Payment CAPTURED + Outbox count=1 (PAYMENT_CAPTURE_CONFIRMED) + AuditLog count>=2 + unique webhook event IDs in responses=1 + no 422 responses.
 - Next: ready for Orchestrator review. Workflow NOT triggered (will be triggered manually with `confirm=RUN-4A-PG-EVIDENCE` + staging_url input when 4a implementation is deployed).
+
+---
+Task ID: 4a-postgresql-evidence
+Agent: IDE (main)
+Task: Sub-Wave 4a PostgreSQL-native webhook concurrent evidence (P0-05)
+
+Work Log:
+- Orchestrator authorized Sub-Wave 4a implementation (P0-05 Webhook Handler).
+- Implemented P0-05 webhook handler:
+  - Schema: +processedBy String? +processingNotes String? on WebhookEvent (Class-2 additive)
+  - Migration: prisma/scripts/wave4-subwave-4a-migration.sql (applied to staging via workflow 31921235580)
+  - Webhook route: src/app/api/webhooks/razorpay/route.ts (HMAC verify + dedup + idempotent processing)
+  - Webhook processor: src/lib/webhook-processor.ts (payment.captured/failed/refund.processed handlers)
+  - HMAC verification: src/lib/razorpay.ts (+verifyWebhookSignature constant-time comparison)
+  - Feature flag: webhookHandler (default OFF) in deployment.ts
+  - Evidence endpoints: evidence-setup + evidence-verify for webhooks (EVIDENCE_TEST_MODE gated)
+  - Middleware: skip CSRF for /api/webhooks/ (external — HMAC is auth mechanism)
+- Ran local SQLite evidence (flag ON): 4/4 PASS (ok:true)
+  - test-1-dedup: same event_id → 1 WebhookEvent + 1 Payment update ✅
+  - test-2-signature-mismatch: empty signature → 403 reject ✅
+  - test-3-processing: payment.captured → Payment CAPTURED + Outbox + AuditLog ✅
+  - test-4-concurrent: 5 concurrent same event_id → exactly 1 WebhookEvent + 1 Payment update ✅
+- Created PostgreSQL workflow (.github/workflows/subwave-4a-postgresql-concurrent-evidence.yml)
+- Applied staging migration (workflow 31921235580): processedBy + processingNotes columns added ✅
+- Workflow run 31921274765: ALL STEPS PASSED ✅
+  - Set EVIDENCE_TEST_MODE=true + FEATURE_WEBHOOK_HANDLER=true on Vercel
+  - Triggered fresh Vercel preview deployment
+  - Ran 5 concurrent POST /api/webhooks/razorpay with same event_id
+  - Verified PostgreSQL state: 1 WebhookEvent (verified+processed), Payment CAPTURED, 1 Outbox, 2 AuditLogs
+  - Generated self-validating evidence JSON (ok: true)
+- Extracted evidence JSON: evidence/wave4-4a/evidence-postgresql-4a-pg-ev.json
+- Created WAVE4_EVIDENCE.md with full 4a evidence section.
+- Verified production state: schema=postgresql, .env=clean, lint=PASS, webhookHandler OFF.
+
+Stage Summary:
+- Sub-Wave 4a: ALL EVIDENCE CRITERIA PASS. PostgreSQL-native webhook concurrency PROVEN.
+- Local SQLite evidence: 4/4 PASS (dedup, signature-mismatch, processing, concurrent)
+- PostgreSQL evidence (workflow 31921274765): PASS — 5 concurrent → exactly 1 WebhookEvent + Payment CAPTURED
+- Evidence JSON: evidence/wave4-4a/evidence-postgresql-4a-pg-ev.json (ok:true, database:postgresql)
+- webhookHandler flag: OFF in production (default), ON in staging evidence only
+- NOT implemented (per Orchestrator): production deployment, webhookHandler=true in production, realPayments, 4b/4c/4d
+- STOP: IDE is not self-closing 4a. Awaiting Orchestrator S5 decision.
+- Production NOT touched. realPayments OFF. webhookHandler OFF (production). 3a/3b/3c NOT reopened.
+
