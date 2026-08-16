@@ -22,6 +22,13 @@ import { createHash } from 'crypto'
 import { appendFile, mkdir } from 'fs/promises'
 import { existsSync } from 'fs'
 import { join } from 'path'
+// Wave-4 Sub-Wave 4c Phase 2 — capture handler imports.
+// The publisher is a standalone Bun service (NOT the Next.js app), so it imports
+// the razorpay helper directly via a relative path rather than the `@/lib/*`
+// alias (which is a tsconfig path mapping only resolved by the Next.js bundler).
+// In demo mode (realPayments=false) captureRazorpayPayment() returns mock
+// success immediately — no real Razorpay API calls are made.
+import { captureRazorpayPayment } from '../../src/lib/razorpay'
 
 // Transport configuration:
 // - HTTP mode: publisher POSTs events to CONSUMER_URL/api/test/consume-event
@@ -80,6 +87,12 @@ const EVENT_TYPE_TO_SOCKET: Record<string, string> = {
   KILL_SWITCH_TOGGLED: 'killswitch:toggled',
 }
 
+// Wave-4 4c Phase 2 — command event types that are NOT transport handoffs.
+// These events trigger a business operation (e.g., capture) rather than a
+// realtime fanout. They are dispatched to dedicated handlers and never reach
+// the EVENT_TYPE_TO_SOCKET lookup (which would throw "Unknown event type").
+const COMMAND_EVENT_TYPES: Set<string> = new Set(['PAYMENT_CAPTURE_REQUESTED'])
+
 interface LogEntry {
   timestamp: string
   level: 'info' | 'warn' | 'error'
@@ -89,6 +102,276 @@ interface LogEntry {
   workerId?: string
   attempt?: number
   error?: string
+  paymentId?: string
+  orderId?: string
+  count?: number
+}
+
+// ----------------------------------------------------------------------------
+// Wave-4 Sub-Wave 4c Phase 2 — PAYMENT_CAPTURE_REQUESTED handler
+// ----------------------------------------------------------------------------
+// Command-event handler: consumes a PAYMENT_CAPTURE_REQUESTED outbox row and
+// performs the actual Razorpay capture (safely OUTSIDE any transaction body).
+//
+// Safety properties (the whole point of Wave-4 4c):
+//   1. captureRazorpayPayment() is called OUTSIDE any DB transaction. If the
+//      success-path txn retries (Prisma P2034 conflict), the capture call is
+//      NOT re-executed — preventing double-charge at the gateway.
+//   2. Idempotency: if Payment.status is already CAPTURED (e.g., a webhook
+//      raced ahead), the handler marks the outbox event PUBLISHED and exits.
+//   3. Race-safe Payment update: conditional updateMany (WHERE status='CAPTURE_PENDING')
+//      prevents overwriting CAPTURED/FAILED status set by a concurrent path.
+//   4. Atomic success commit: Payment.status=CAPTURED + capturedAt + AuditLog +
+//      Outbox.status=PUBLISHED all commit in the SAME txn — no half-states.
+//
+// On capture failure: Payment.retryCount is incremented + failureReason set,
+// status is left as CAPTURE_PENDING, and the handler throws — the publisher's
+// existing retry/backoff/FAILED logic then drives the outbox event's lifecycle.
+// ----------------------------------------------------------------------------
+
+interface CaptureRequestedPayload {
+  paymentId: string
+  orderId: string
+  gatewayPaymentId: string
+  amount: number
+}
+
+async function processPaymentCaptureRequested(event: {
+  id: string
+  eventId: string
+  aggregateId: string
+  payload: string
+  attempts: number
+}): Promise<void> {
+  // Parse payload (written by capture route's enqueueOutboxEvent call)
+  let payload: CaptureRequestedPayload
+  try {
+    payload = JSON.parse(event.payload) as CaptureRequestedPayload
+  } catch {
+    // Malformed payload — non-retryable; mark outbox PUBLISHED to stop retries.
+    // (This should never happen since enqueueOutboxEvent JSON.stringify's the payload.)
+    await db.outbox.update({
+      where: { id: event.id },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        claimedAt: null,
+        claimUntil: null,
+        workerId: null,
+        lastError: 'malformed-payload-marked-published',
+      },
+    })
+    await log({
+      level: 'error',
+      message: 'capture-payload-malformed',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_CAPTURE_REQUESTED',
+    })
+    return
+  }
+
+  // 1. Read the Payment (aggregateId = paymentId per the capture route's
+  //    enqueueOutboxEvent({ aggregateType: 'Payment', aggregateId: payment.id, ... }))
+  const payment = await db.payment.findUnique({
+    where: { id: event.aggregateId },
+    select: {
+      id: true,
+      status: true,
+      amount: true,
+      currency: true,
+      gatewayPaymentId: true,
+      retryCount: true,
+      version: true,
+    },
+  })
+
+  if (!payment) {
+    // Payment row missing — non-retryable; mark outbox PUBLISHED to stop
+    // retrying. (By design this is impossible: the capture route writes Payment
+    // + Outbox in the SAME txn, so an outbox row can't exist without a Payment.)
+    await db.outbox.update({
+      where: { id: event.id },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        claimedAt: null,
+        claimUntil: null,
+        workerId: null,
+        lastError: `payment-not-found:aggregateId=${event.aggregateId}`,
+      },
+    })
+    await log({
+      level: 'error',
+      message: 'capture-payment-not-found',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_CAPTURE_REQUESTED',
+      paymentId: event.aggregateId,
+    })
+    return
+  }
+
+  // 2. Idempotency: if already CAPTURED (e.g., a webhook raced ahead and
+  //    captured first, or a prior publisher invocation captured but failed to
+  //    mark the outbox PUBLISHED), the capture command has already succeeded.
+  //    Mark the outbox event PUBLISHED and exit.
+  if (payment.status === 'CAPTURED') {
+    await db.outbox.update({
+      where: { id: event.id },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        claimedAt: null,
+        claimUntil: null,
+        workerId: null,
+      },
+    })
+    await log({
+      level: 'info',
+      message: 'capture-already-captured-idempotent',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_CAPTURE_REQUESTED',
+      paymentId: payment.id,
+    })
+    return
+  }
+
+  // 3. If Payment is in a non-capture-pending state (FAILED, FROZEN, etc.),
+  //    do NOT attempt capture. Throw so the publisher's existing retry path
+  //    handles it; if it exhausts retries, the outbox event becomes FAILED +
+  //    alerts fire (manual intervention required).
+  if (payment.status !== 'CAPTURE_PENDING') {
+    throw new Error(
+      `Payment ${payment.id} status is ${payment.status} (expected CAPTURE_PENDING) — capture skipped`,
+    )
+  }
+
+  // 4. Call captureRazorpayPayment() OUTSIDE any transaction body.
+  //    This is the Wave-4 4c safety improvement: if the success-path txn
+  //    retries (P2034 conflict), this call is NOT re-executed.
+  //    In demo mode (realPayments=false), this returns mock success immediately.
+  const gatewayPaymentId = payment.gatewayPaymentId ?? payload.gatewayPaymentId
+  let captureResult
+  try {
+    captureResult = await captureRazorpayPayment(
+      gatewayPaymentId,
+      payment.amount,
+      payment.currency,
+    )
+  } catch (captureError) {
+    // Capture call failed (network error, gateway 5xx, etc.) — record the
+    // failure on the Payment row, then rethrow so the publisher's existing
+    // retry/backoff/FAILED logic drives the outbox event's lifecycle.
+    // Payment.status is left as CAPTURE_PENDING (capture may succeed on retry).
+    const errorMsg = (captureError as Error).message || 'unknown-capture-error'
+    await db.payment.update({
+      where: { id: payment.id },
+      data: {
+        retryCount: { increment: 1 },
+        failureReason: `Capture failed: ${errorMsg}`,
+      },
+    })
+    await log({
+      level: 'warn',
+      message: 'capture-call-failed',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_CAPTURE_REQUESTED',
+      paymentId: payment.id,
+      attempt: event.attempts + 1,
+      error: errorMsg,
+    })
+    throw captureError
+  }
+
+  // If the gateway returned captured=false (decline), treat as failure.
+  if (!captureResult.captured) {
+    await db.payment.update({
+      where: { id: payment.id },
+      data: {
+        retryCount: { increment: 1 },
+        failureReason: 'Gateway declined capture (captured=false)',
+      },
+    })
+    await log({
+      level: 'warn',
+      message: 'capture-declined-by-gateway',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_CAPTURE_REQUESTED',
+      paymentId: payment.id,
+      attempt: event.attempts + 1,
+    })
+    throw new Error('Gateway declined capture (captured=false)')
+  }
+
+  // 5. Capture succeeded — open a NEW transaction and atomically:
+  //    (a) Update Payment status CAPTURE_PENDING → CAPTURED + capturedAt (race-safe)
+  //    (b) AuditLog (PAYMENT_CAPTURED)
+  //    (c) Mark outbox event PUBLISHED
+  //    All three commit in the SAME txn — no half-states.
+  //
+  //    NOTE: this txn does NOT include captureRazorpayPayment() — that call
+  //    already happened above (outside the txn). This is the Wave-4 4c safety
+  //    improvement: a P2034 retry would re-run only the DB writes, NOT the
+  //    capture HTTP call (no double-charge risk).
+  await db.$transaction(async (tx) => {
+    // Race-safe: only update if status is still CAPTURE_PENDING.
+    // If a concurrent path (e.g., webhook) already captured, count === 0 —
+    // we still mark the outbox PUBLISHED (capture command effectively done)
+    // but skip writing a duplicate AuditLog.
+    const updated = await tx.payment.updateMany({
+      where: {
+        id: payment.id,
+        status: 'CAPTURE_PENDING',
+      },
+      data: {
+        status: 'CAPTURED',
+        capturedAt: new Date(),
+        version: { increment: 1 },
+      },
+    })
+
+    if (updated.count > 0) {
+      // AuditLog — PAYMENT_CAPTURED (publisher-driven).
+      // Distinct from WEBHOOK_PAYMENT_CAPTURED (webhook-driven) so audit
+      // consumers can distinguish capture-confirmation paths.
+      await tx.auditLog.create({
+        data: {
+          actorId: null,
+          actorRole: 'SYSTEM',
+          action: 'PAYMENT_CAPTURED',
+          metadata: JSON.stringify({
+            paymentId: payment.id,
+            orderId: payload.orderId,
+            gatewayPaymentId: captureResult.gatewayPaymentId,
+            amount: payment.amount,
+            source: 'outbox-publisher',
+            outboxEventId: event.eventId,
+          }),
+        },
+      })
+    }
+
+    // Mark outbox event PUBLISHED (whether or not we updated Payment —
+    // the capture command's business effect has been achieved either way).
+    await tx.outbox.update({
+      where: { id: event.id },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        claimedAt: null,
+        claimUntil: null,
+        workerId: null,
+      },
+    })
+  })
+
+  await log({
+    level: 'info',
+    message: 'capture-completed',
+    eventId: event.eventId,
+    eventType: 'PAYMENT_CAPTURE_REQUESTED',
+    paymentId: payment.id,
+    orderId: payload.orderId,
+  })
 }
 
 async function log(entry: Omit<LogEntry, 'timestamp'>): Promise<void> {
@@ -167,6 +450,20 @@ async function publishPendingEvents(): Promise<{
   // or FAILED (max retries). PUBLISHED is NOT set on failure.
   for (const event of claimedEvents) {
     try {
+      // Wave-4 4c Phase 2: PAYMENT_CAPTURE_REQUESTED is a "command event" —
+      // it triggers a business operation (capture payment) rather than a
+      // transport handoff. The handler fully owns its own outbox state
+      // transitions (PUBLISHED on success, PENDING+attempts on failure via
+      // thrown error → publisher's existing catch block handles retry/backoff).
+      // It must NOT fall through to the EVENT_TYPE_TO_SOCKET lookup below
+      // (which would throw "Unknown event type" since command events are
+      // intentionally not in that map).
+      if (COMMAND_EVENT_TYPES.has(event.eventType)) {
+        await processPaymentCaptureRequested(event)
+        result.published++
+        continue
+      }
+
       const socketEventName = EVENT_TYPE_TO_SOCKET[event.eventType]
       if (!socketEventName) {
         throw new Error(`Unknown event type: ${event.eventType}`)
