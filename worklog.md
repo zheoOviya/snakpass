@@ -5953,3 +5953,46 @@ Stage Summary:
 - Known limitation (real mode only, NOT demo): if the success-path txn fails to commit AFTER a real capture succeeded, the next publisher retry will call captureRazorpayPayment() again. Razorpay's capture API rejects re-capture attempts ("already captured"), which would surface as a capture-call failure → Payment.retryCount++. Self-healing relies on either (a) the webhook arriving in the interim (webhook-processor updates Payment to CAPTURED → publisher idempotency path) or (b) manual reconciliation via the alerting system. This is a real-mode concern; demo mode is unaffected. Full real-mode reconciliation is Wave-5 scope.
 - Next: 4c evidence runner (if required by Orchestrator) can now verify the full CAPTURE_PENDING → CAPTURED transition end-to-end (no publisher stub needed).
 - Production NOT touched. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF. Wave-5 NOT started.
+
+
+---
+Task ID: 4c-postgresql-evidence
+Agent: IDE (main)
+Task: Sub-Wave 4c PostgreSQL concurrent-idempotency evidence collection (Wave-4 4c E1) — GitHub Actions run 31925497313
+
+Work Log:
+- Queried GitHub Actions run 31925497313 (workflow_dispatch "Wave-4 4c — PostgreSQL Concurrent-Idempotency Evidence") via api.github.com/repos/zheoOviya/snakpass/actions/runs/31925497313:
+  - status: completed, conclusion: success ✅
+  - html_url: https://github.com/zheoOviya/snakpass/actions/runs/31925497313
+  - job 95112309321 "4c-PG-E1 — 5 concurrent requests, same idempotency key, on PostgreSQL": all 25 steps success.
+- Downloaded job logs via api.github.com/repos/zheoOviya/snakpass/actions/jobs/95112309321/logs (103523 bytes; returned as UTF-8 text).
+- Located "=== Evidence JSON ===" markers — 2 occurrences in the log:
+  - 1st occurrence (log line ~971): the `echo "=== Evidence JSON ==="` shell command (marker only, no JSON payload).
+  - 2nd occurrence (log line ~1106): the actual printed JSON output. Extracted per task spec (2nd occurrence).
+- Stripped GitHub Actions timestamp prefixes (`YYYY-MM-DDTHH:MM:SS.ffffffZ `), brace-depth-tracked to capture the complete object, validated via json.loads (parsed OK), and saved to:
+  evidence/wave4-4c/evidence-postgresql-4c-pg-ev.json (3595 bytes, 17 top-level keys).
+- Evidence invariants CONFIRMED:
+  - ok: true
+  - runId: 3a-pg-ev-1786852800-wo, timestamp: 2026-08-16T04:00:13Z
+  - wave: 3, subWave: 4c, evidenceType: postgresql-transaction-retry-invariant, database: postgresql
+  - stagingUrl: https://snakpass-hbp3ox8ji-snakzap.vercel.app
+  - Test: 5 concurrent requests, same idempotency key (ev-pg-concurrent-1786852801-14265), against staging PostgreSQL.
+  - Result: exactly 1 Payment (status CAPTURE_PENDING), 1 ledger Dr/Cr pair (2 entries: 1 debit + 1 credit), 1 outbox event, 1 idempotency record, 1 audit log.
+  - responseSummary: successCount=5, errorCount=0, uniquePaymentIdsInResponses=1, winningPaymentId=cmsva0u7t0009jj04z64xw7ux, responsesReturningWinningPaymentId=5, all 5 losingBehavior entries returned 200 with the winning paymentId (idempotent replay).
+  - invariant.exactlyOneCapturePending: true ✅
+- Governance safeguards CONFIRMED in the evidence JSON (per project hard constraints):
+  - governance.realPaymentsEnabled: false ✅ (realPayments NOT enabled)
+  - governance.productionRazorpayCredentialsUsed: false ✅
+  - governance.webhookHandlerImplemented: false ✅
+  - governance.subWave3bOr3cStarted: false ✅ (Wave-5 NOT started)
+  - governance.productionTouched: false ✅
+  - governance.note: "Test run against staging Supabase PostgreSQL (project ref zmzqqcyapcezmaqvuzzd). realPayments=false (demo mode). No production systems touched."
+- Committed + pushed evidence JSON + this worklog entry to the repo (git add + commit + push).
+
+Stage Summary:
+- Wave-4 4c PostgreSQL concurrent-idempotency evidence (E1) PASSED on real staging PostgreSQL.
+- 5 concurrent requests sharing one idempotency key produced exactly 1 capture (CAPTURE_PENDING) — the idempotency layer held under real concurrency against PostgreSQL row-level contention. No duplicate Payments, no double ledger entries, no duplicate outbox events.
+- Evidence artifact: evidence/wave4-4c/evidence-postgresql-4c-pg-ev.json (ok:true, database:postgresql, runId:3a-pg-ev-1786852800-wo).
+- Workflow run: https://github.com/zheoOviya/snakpass/actions/runs/31925497313 (conclusion: success).
+- realPayments remains OFF (demo mode). webhookHandler OFF. requestHashEnforcement OFF. Wave-5 NOT started. Production NOT touched.
+- STOP: IDE is not self-closing 4c. Awaiting Orchestrator S5 decision.

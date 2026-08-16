@@ -1,0 +1,135 @@
+{
+  "ok": true,
+  "runId": "3a-pg-ev-1786852800-wo",
+  "timestamp": "2026-08-16T04:00:13Z",
+  "wave": "3",
+  "subWave": "4c",
+  "evidenceType": "postgresql-transaction-retry-invariant",
+  "database": "postgresql",
+  "stagingUrl": "https://snakpass-hbp3ox8ji-snakzap.vercel.app",
+  "test": "5 concurrent requests, same idempotency key, against staging PostgreSQL",
+  "orchestratorRequiredFields": {
+    "database": "postgresql",
+    "concurrentRequests": 5,
+    "uniquePaymentIds": 1,
+    "paymentCount": 1,
+    "ledgerPairCount": 1,
+    "outboxEventCount": 1,
+    "idempotencyRecordCount": 1
+  },
+  "invariant": {
+    "exactlyOneCapturePending": true,
+    "description": "From 5 concurrent requests with same idempotency key: exactly 1 Payment, 1 ledger Dr/Cr pair, 1 outbox event, 1 idempotency record"
+  },
+  "setup": {
+    "orderId": "cmsva0tiw0005jj042nntrwhu",
+    "userId": "cmsulcehs0000i804sdsrnqr7",
+    "idempotencyKey": "ev-pg-concurrent-1786852801-14265",
+    "concurrency": 5
+  },
+  "responseSummary": {
+    "successCount": 5,
+    "errorCount": 0,
+    "uniquePaymentIdsInResponses": 1,
+    "winningPaymentId": "cmsva0u7t0009jj04z64xw7ux",
+    "responsesReturningWinningPaymentId": 5,
+    "losingBehavior": [
+      {
+        "status": 200,
+        "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+        "errorCode": ""
+      },
+      {
+        "status": 200,
+        "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+        "errorCode": ""
+      },
+      {
+        "status": 200,
+        "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+        "errorCode": ""
+      },
+      {
+        "status": 200,
+        "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+        "errorCode": ""
+      },
+      {
+        "status": 200,
+        "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+        "errorCode": ""
+      }
+    ]
+  },
+  "databaseState": {
+    "paymentCount": 1,
+    "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+    "paymentStatus": "CAPTURE_PENDING",
+    "orderStatus": "PAID",
+    "ledgerEntries": {
+      "total": 2,
+      "debit": 1,
+      "credit": 1
+    },
+    "outboxEventCount": 1,
+    "idempotencyRecordCount": 1,
+    "auditLogCount": 1
+  },
+  "expected": {
+    "paymentCount": 1,
+    "paymentStatus": "CAPTURE_PENDING",
+    "orderStatus": "PAID",
+    "ledgerDebit": 1,
+    "ledgerCredit": 1,
+    "ledgerTotal": 2,
+    "outboxEventCount": 1,
+    "idempotencyRecordCount": 1,
+    "auditLogCount": 1,
+    "uniquePaymentIds": 1
+  },
+  "governance": {
+    "realPaymentsEnabled": false,
+    "productionRazorpayCredentialsUsed": false,
+    "webhookHandlerImplemented": false,
+    "subWave3bOr3cStarted": false,
+    "productionTouched": false,
+    "note": "Test run against staging Supabase PostgreSQL (project ref zmzqqcyapcezmaqvuzzd). realPayments=false (demo mode). No production systems touched."
+  },
+  "concurrentResponses": [
+    {
+      "requestIndex": 1,
+      "status": 200,
+      "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 2,
+      "status": 200,
+      "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 3,
+      "status": 200,
+      "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 4,
+      "status": 200,
+      "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 5,
+      "status": 200,
+      "paymentId": "cmsva0u7t0009jj04z64xw7ux",
+      "errorCode": "",
+      "errorMessage": ""
+    }
+  ]
+}
