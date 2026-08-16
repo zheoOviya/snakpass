@@ -79,6 +79,7 @@ function newTraceId(): string {
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl
+  const EVIDENCE_TEST_MODE = process.env.EVIDENCE_TEST_MODE === 'true'
 
   if (!pathname.startsWith('/api/')) {
     return NextResponse.next()
@@ -92,6 +93,43 @@ export function middleware(req: NextRequest) {
   // Skip test endpoints
   if (pathname.includes('/verify-test') || pathname.includes('/audit-integrity-test') || pathname.includes('/rollback-injection') || pathname.includes('/consume-event') || pathname.includes('/evidence-setup') || pathname.includes('/evidence-verify')) {
     return NextResponse.next()
+  }
+
+  // P0-05: Razorpay webhooks are external (no CSRF token) — skip CSRF check
+  // HMAC signature verification is the auth mechanism for webhooks.
+  if (pathname.startsWith('/api/webhooks/')) {
+    // Still apply rate limiting (below) — webhooks are rate-limited as 'general'
+    // (Razorpay retries with backoff, so rate limiting is safe)
+    // Skip straight to rate limiting
+    const pathType = classifyPath(pathname)
+    const config = RATE_LIMITS[pathType]
+    const ip = getClientIP(req)
+    const key = `rl:${pathType}:${ip}`
+    const traceId = newTraceId()
+
+    if (EVIDENCE_TEST_MODE) {
+      const response = NextResponse.next()
+      response.headers.set('X-RateLimit-Skipped', 'evidence-test-mode')
+      response.headers.set('X-Trace-Id', traceId)
+      return response
+    }
+
+    const result = checkRateLimit(key, config.limit, config.mode)
+    if (!result.allowed) {
+      const statusCode = config.mode === 'fail-closed' ? 503 : 429
+      const message = config.mode === 'fail-closed' ? 'Service busy. Please retry.' : 'Too many requests. Please slow down.'
+      return NextResponse.json(
+        { error: { code: 'RATE_LIMITED', message, traceId, details: { pathType, retryAfter: Math.ceil((result.resetAt - Date.now()) / 1000) } } },
+        { status: statusCode },
+      )
+    }
+
+    const response = NextResponse.next()
+    response.headers.set('X-RateLimit-Limit', String(config.limit))
+    response.headers.set('X-RateLimit-Remaining', String(result.remaining))
+    response.headers.set('X-RateLimit-Reset', String(result.resetAt))
+    response.headers.set('X-Trace-Id', traceId)
+    return response
   }
 
   // P0-14 — CSRF protection on state-changing requests
@@ -140,7 +178,7 @@ export function middleware(req: NextRequest) {
   // so the concurrent-idempotency tests (which fire 5 parallel POSTs) don't
   // get rate-limited. This is safe because EVIDENCE_TEST_MODE is only set
   // during evidence test runs, never in production.
-  const EVIDENCE_TEST_MODE = process.env.EVIDENCE_TEST_MODE === 'true'
+  // (EVIDENCE_TEST_MODE is declared at the top of the function.)
   const pathType = classifyPath(pathname)
   const config = RATE_LIMITS[pathType]
   const ip = getClientIP(req)

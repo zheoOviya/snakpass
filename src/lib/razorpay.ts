@@ -134,3 +134,65 @@ export function isRazorpayConfigured(): boolean {
     !!process.env.RAZORPAY_KEY_ID &&
     !!process.env.RAZORPAY_KEY_SECRET
 }
+
+// ----------------------------------------------------------------------------
+// Sub-Wave 4a: Webhook signature verification (P0-05)
+// ----------------------------------------------------------------------------
+
+/**
+ * Verify a Razorpay webhook signature (HMAC-SHA256).
+ *
+ * Razorpay sends webhooks with an `X-Razorpay-Signature` header containing
+ * the HMAC-SHA256 of the raw request body, using the webhook secret.
+ *
+ * In demo mode (realPayments=false), accepts any non-empty signature so that
+ * evidence tests can run without real Razorpay credentials.
+ *
+ * In real mode (realPayments=true), computes HMAC-SHA256 of the payload using
+ * RAZORPAY_WEBHOOK_SECRET and compares in constant time.
+ *
+ * @param payload - The raw request body (as a string)
+ * @param signature - The X-Razorpay-Signature header value
+ * @param secret - The RAZORPAY_WEBHOOK_SECRET env var (or a test secret)
+ * @returns true if the signature is valid, false otherwise
+ */
+export function verifyWebhookSignature(
+  payload: string,
+  signature: string,
+  secret: string | undefined = process.env.RAZORPAY_WEBHOOK_SECRET,
+): boolean {
+  if (!isFeatureEnabled('realPayments')) {
+    // Demo mode: accept any non-empty signature
+    // Evidence tests use X-Evidence-Skip-Verify header for HMAC tests
+    return signature.length > 0
+  }
+
+  if (!secret) {
+    // No webhook secret configured — reject all webhooks
+    return false
+  }
+
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(payload, 'utf8')
+    .digest('hex')
+
+  // Constant-time comparison (prevents timing attacks)
+  if (expectedSignature.length !== signature.length) return false
+  let match = true
+  for (let i = 0; i < expectedSignature.length; i++) {
+    if (expectedSignature[i] !== signature[i]) match = false
+  }
+  return match
+}
+
+/**
+ * Check if webhook signature verification is configured (real mode only).
+ * In demo mode, verification is always "configured" (accepts any non-empty signature).
+ */
+export function isWebhookConfigured(): boolean {
+  if (!isFeatureEnabled('realPayments')) {
+    return true // demo mode — always "configured"
+  }
+  return !!process.env.RAZORPAY_WEBHOOK_SECRET
+}

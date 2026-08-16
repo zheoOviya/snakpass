@@ -45,6 +45,12 @@ export const FEATURE_FLAGS = {
   //           throw IdempotencyKeyReuseError (HTTP 422).
   // Production enablement requires separate Orchestrator authorization.
   requestHashEnforcement: { key: 'request-hash-enforcement', enabled: getFlag('request-hash-enforcement', false), description: 'Enforce request body hash match on idempotency key reuse (422 on mismatch)' },
+
+  // Sub-Wave 4a: Webhook handler (default OFF — feature-flagged for safe rollout)
+  // When OFF: POST /api/webhooks/razorpay returns 503 (handler not enabled).
+  // When ON:  Handler processes incoming Razorpay webhooks (HMAC verify + dedup + idempotent processing).
+  // Production enablement requires separate Orchestrator authorization.
+  webhookHandler: { key: 'webhook-handler', enabled: getFlag('webhook-handler', false), description: 'Enable Razorpay webhook handler endpoint (P0-05)' },
 } as const
 
 export function isFeatureEnabled(key: keyof typeof FEATURE_FLAGS): boolean {

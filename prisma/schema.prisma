@@ -411,7 +411,7 @@ model LedgerEntry {
 // ----------------------------------------
 // P0-05 Wave-3 — WebhookEvent (Razorpay webhook dedup + HMAC verification)
 // ----------------------------------------
-// Schema-only in Wave-3 (handler implementation is Wave-4 P0-05 scope)
+// Handler implementation in Wave-4 Sub-Wave 4a (P0-05)
 model WebhookEvent {
   id              String   @id @default(cuid())
   eventId         String   @unique // Razorpay webhook event_id (dedup key, I-04)
@@ -424,6 +424,9 @@ model WebhookEvent {
   verified        Boolean  @default(false) // HMAC verification result
   processed       Boolean  @default(false) // idempotent processing flag
   processedAt     DateTime?
+  // Sub-Wave 4a: Processing metadata (nullable — set when processed)
+  processedBy     String?  // worker/processor ID (for debugging)
+  processingNotes String?  // failure reason or processing notes
   receivedAt     DateTime @default(now())
 
   @@index([eventType, receivedAt])

@@ -5530,3 +5530,83 @@ Stage Summary:
 - 16 conditions for CONDITIONAL-GO (sub-wave structure required; Class-2 additive schema only; realPayments/webhookHandler/requestHashEnforcement MUST stay OFF in production; PostgreSQL-native concurrency required; 3a evidence MUST NOT be invalidated; withTransaction retry semantics MUST NOT be modified; Wave-5+ NOT started; production NOT deployed; reuse 3a/3b/3c evidence infra; HMAC constant-time comparison; webhook atomicity preserved; publisher idempotency check; lint rule + CI gate implemented for 4c).
 - Next steps for Orchestrator decision: resolve D1-D10 decision points; authorize Sub-Wave 4a implementation first (MEDIUM risk, focused scope); do NOT authorize production deploy; do NOT enable realPayments; do NOT enable webhookHandler in production; do NOT enable requestHashEnforcement in production; do NOT start Wave-5.
 - STOP. No implementation started. No Wave-5 started. No production touched. realPayments OFF. requestHashEnforcement OFF in production. webhookHandler does not exist yet. Wave-4 implementation NOT authorized — only the Gate Review document has been produced.
+
+---
+Task ID: 4a-workflow-adapt
+Agent: CI/CD Workflow Adapter (Wave-4 Sub-Wave 4a)
+Task: Create `.github/workflows/subwave-4a-postgresql-concurrent-evidence.yml` — a PostgreSQL workflow that tests webhook concurrent idempotency (5 concurrent POST /api/webhooks/razorpay with same X-Razorpay-Event-Id → exactly 1 WebhookEvent + 1 Payment CAPTURED + 1 Outbox event + >=2 AuditLogs).
+
+Work Log:
+- Read prior work records (worklog.md) to understand the proven 3b/3c PostgreSQL workflow pattern (Vercel env-var-set → trigger preview deployment → wait READY → health check → run concurrent test → verify DB state via Supabase Management API → generate self-validating JSON → cleanup test data → upload artifact).
+- Read the 3c workflow file (`.github/workflows/subwave-3c-postgresql-concurrent-evidence.yml`, 955 lines) end-to-end as the structural template.
+- Read the 4a webhook implementation:
+  - `src/app/api/webhooks/evidence-setup/route.ts` (122 lines): GET /api/webhooks/evidence-setup?scenario=<name> → creates test user (phone +919999900003) + Order + Payment (PAYMENT_PENDING) + OrderItem + Session. Returns { scenario, sessionToken, csrfToken, userId, orderId, paymentId, gatewayPaymentId, gatewayOrderId, amount, restaurantId, menuItemId, evidenceTestMode }. Gated on EVIDENCE_TEST_MODE=true (else 403).
+  - `src/app/api/webhooks/evidence-verify/route.ts` (163 lines): GET /api/webhooks/evidence-verify?eventId=<id>&paymentId=<id> → returns { webhookEvent, payment, auditLogCount, auditLogActions, outboxExists, outboxStatus, webhookEventCount, exactlyOneWebhookProcessed, webhookRejected, evidenceTestMode, verifiedAt }. Gated on EVIDENCE_TEST_MODE=true.
+  - `src/app/api/webhooks/razorpay/route.ts` (250 lines): POST /api/webhooks/razorpay → reads X-Razorpay-Event-Id + X-Razorpay-Event + X-Razorpay-Signature headers + raw body. Feature-flag-gated on webhookHandler (returns 503 if off). Evidence-test-mode honors X-Evidence-Skip-Verify=true to bypass HMAC. Dedup via WebhookEvent.eventId unique constraint (findUnique → return 'duplicate', else create + process → return 'processed'). TransactionConflictError handler returns 'conflict-resolved'. All return HTTP 200.
+  - `src/lib/webhook-processor.ts` (350 lines): processWebhookEvent(tx, webhookEventId, eventType, payload, traceId). handlePaymentCaptured reads payload.paymentId as gatewayPaymentId (tx.payment.findFirst({ where: { gatewayPaymentId } })), updates Payment to CAPTURED via optimistic-lock version, creates AuditLog(WEBHOOK_PAYMENT_CAPTURED), enqueues Outbox(PAYMENT_CAPTURE_CONFIRMED). Updates WebhookEvent with processed=true, processedAt, processedBy='webhook-handler-4a', processingNotes, paymentId.
+  - `src/lib/deployment.ts:53`: webhookHandler feature flag maps `webhook-handler` key → env var `FEATURE_WEBHOOK_HANDLER` (getFlag uppercases + replaces `-` with `_`). Default OFF.
+  - `prisma/schema.prisma`: WebhookEvent model has processedBy String? + processingNotes String? (4a schema delta, both nullable additive Class-2 expand-migrate-contract).
+
+- Created `.github/workflows/subwave-4a-postgresql-concurrent-evidence.yml` by copying the 3c workflow as starting point, then adapting:
+  - **Header comment block** (lines 1-46): Updated to describe the 5-concurrent-webhook test (POST /api/webhooks/razorpay with same X-Razorpay-Event-Id + X-Evidence-Skip-Verify=true + webhookHandler=true). Updated orchestrator-required JSON shape: { database, concurrentRequests, uniqueWebhookEvents, webhookEventCount, paymentCaptured, outboxEventCount, auditLogCount (>=2), no422Errors }.
+  - **Workflow name** (line 48): `Wave-4 4a — PostgreSQL Webhook Concurrent Evidence`.
+  - **Confirm input** (line 58): `Type RUN-4A-PG-EVIDENCE to confirm`. Trigger verify step checks for `RUN-4A-PG-EVIDENCE`.
+  - **Job name** (line 64): `4a-PG-E1 — 5 concurrent webhooks with same event_id on PostgreSQL`.
+  - **Schema verification step** (step #4, 21 lines): Now checks WebhookEvent table + Payment table + Outbox table + AuditLog table exist; AND WebhookEvent.eventId + processed + processedBy + processingNotes columns exist; AND Payment.status + capturedAt columns exist. (Replaces 3c's check for IdempotencyKey.requestHash.)
+  - **Vercel env-var setup step** (step #5, 152 lines): Sets TWO env vars — EVIDENCE_TEST_MODE=true (existing pattern) AND FEATURE_WEBHOOK_HANDLER=true (replaces 3c's FEATURE_REQUEST_HASH_ENFORCEMENT=true). Both use same list → remove → create pattern on preview+production targets. Same create-env-var curl pattern, just different key name.
+  - **Vercel deployment trigger step** (step #6, 161 lines): UNCHANGED from 3c — proven deploy-trigger logic (query project for gitSource.repoId, POST v13/deployments with gitSource ref=main, omit `target` field → preview deployment, poll for READY state up to 60×5s, fall back to latest READY production deployment if needed).
+  - **Staging health check step** (step #8, 44 lines): Health check on /api/health, then verifies /api/webhooks/evidence-setup?scenario=concurrent returns 200 (instead of /api/orders/evidence-setup). This verifies BOTH deployment readiness AND EVIDENCE_TEST_MODE propagation. (Note: each call creates test Order + Payment — the cleanup step removes all test data by user_id at the end.)
+  - **Test step** (step #9, 530 lines): Complete rewrite for webhook flow:
+    1. Setup: call /api/webhooks/evidence-setup?scenario=concurrent → extract userId, orderId, paymentId (internal Payment.id), gatewayPaymentId (pay_evidence_xxx), gatewayOrderId, amount.
+    2. Generate EVENT_ID=`evt_4a_pg_<timestamp>_<random>` (the dedup key).
+    3. Build WEBHOOK_BODY = `{paymentId: <gatewayPaymentId>, amount: <amount>, eventType: "payment.captured"}` (the webhook processor reads payload.paymentId as gatewayPaymentId).
+    4. Fire 5 concurrent POST /api/webhooks/razorpay with headers X-Razorpay-Event-Id=$EVENT_ID (same for all 5) + X-Razorpay-Event=payment.captured + X-Evidence-Skip-Verify=true + Content-Type: application/json.
+    5. Collect responses — extract .eventId + .status (webhookStatus: processed | duplicate | conflict-resolved | unverified) + .paymentId + .error.code.
+    6. Compute UNIQUE_WEBHOOK_EVENTS (count of unique eventIds in responses — expected 1).
+    7. Compute COUNT_PROCESSED, COUNT_DUPLICATE, COUNT_CONFLICT (response status breakdown).
+    8. Verify via /api/webhooks/evidence-verify?eventId=$EVENT_ID&paymentId=$PAYMENT_ID → extract webhookEventCount, payment.status, outboxExists, auditLogCount, exactlyOneWebhookProcessed, webhookEvent.processedBy, webhookEvent.exists.
+    9. Direct DB queries via Supabase Management API:
+       - WebhookEvent by eventId → expect 1 row, verified=true, processed=true, processedBy='webhook-handler-4a' (non-null = 4a schema delta verified).
+       - Payment by id → expect status=CAPTURED, capturedAt non-null, version>=1.
+       - Outbox for aggregateType=Payment + aggregateId=paymentId + eventType=PAYMENT_CAPTURE_CONFIRMED → expect count=1.
+       - AuditLog for action LIKE 'WEBHOOK_%' AND (metadata LIKE '%eventId%' OR metadata LIKE '%paymentId%') → expect count>=2 (WEBHOOK_RECEIVED from route + WEBHOOK_PAYMENT_CAPTURED from processor).
+    10. Invariant check: WEBHOOK_EVENT_COUNT=1 + verified=true + processed=true + PROCESSED_BY_STORED=true + PAYMENT_CAPTURED=true + OUTBOX_COUNT=1 + AUDIT_COUNT>=2 + UNIQUE_WEBHOOK_EVENTS=1 + NO_422_ERRORS=true → EXACTLY_ONE_WEBHOOK=true.
+    11. Generate self-validating evidence JSON with orchestratorRequiredFields = { database, concurrentRequests, uniqueWebhookEvents, webhookEventCount, paymentCaptured, outboxEventCount, auditLogCount, no422Errors } + ok flag.
+    12. Cleanup: 8 DELETE statements covering WebhookEvent (by paymentId IN test payments) + Outbox (Payment + Order aggregates for test user) + OrderItem (children of test orders) + AuditLog (WEBHOOK_* with metadata containing eventId OR paymentId) + IdempotencyKey (defensive — keys LIKE 'ev-pg-concurrent-4a-%', no-op since webhook test doesn't create idempotency keys) + Payment (test user) + Order (test user). The test user (phone +919999900003) is left for reuse.
+  - **Upload artifact step** (step #10): name=`wave4-4a-postgresql-concurrent-evidence`, path=`wave4-4a-postgresql-evidence.json`, retention-days=90.
+  - **Evidence file**: `wave4-4a-postgresql-evidence.json`.
+  - **RUN_ID prefix**: `4a-pg-ev-<timestamp>-<random>`.
+
+- Validation performed:
+  - YAML syntax: `python3 -c "import yaml; yaml.safe_load(...)"` → VALID.
+  - Structure validation: 11 steps, all named correctly, workflow_dispatch trigger, confirm input default empty, job name matches 4a-PG-E1, artifact name + path match wave4-4a, trigger checks RUN-4A-PG-EVIDENCE, webhook endpoints + headers present in test step, env step uses FEATURE_WEBHOOK_HANDLER (NOT FEATURE_REQUEST_HASH_ENFORCEMENT), schema verification checks WebhookEvent + processedBy + Payment + Outbox + AuditLog, orchestratorRequiredFields contains all 8 required fields, cleanup deletes WebhookEvent + Outbox + OrderItem + AuditLog + IdempotencyKey + Payment + Order, NO leftover 3c-specific strings (no 3c-PG-E1, no wave3-3c file, no requestHashEnforcement, no requestHashStored, no EXACTLY_ONE_ORDER), realPaymentsEnabled=false in governance.
+  - Bash syntax: All 9 run scripts validated via `bash -n` → all OK (including the 530-line test step).
+  - jq filter syntax: Extracted the 99-line jq filter, ran with all 38 --arg/--argjson set to dummy values → exit code 0, output is well-formed JSON. Filter compiles + runs.
+  - Cleanup SQL: Tested the printf with dummy values → produces 8 well-formed DELETE statements:
+    1. DELETE FROM "WebhookEvent" WHERE "paymentId" IN (SELECT "id" FROM "Payment" WHERE "userId" = 'test_user_abc')
+    2. DELETE FROM "Outbox" WHERE "aggregateType" = 'Payment' AND "aggregateId" IN (SELECT "id" FROM "Payment" WHERE "userId" = 'test_user_abc')
+    3. DELETE FROM "Outbox" WHERE "aggregateType" = 'Order' AND "aggregateId" IN (SELECT "id" FROM "Order" WHERE "userId" = 'test_user_abc')
+    4. DELETE FROM "OrderItem" WHERE "orderId" IN (SELECT "id" FROM "Order" WHERE "userId" = 'test_user_abc')
+    5. DELETE FROM "AuditLog" WHERE "action" LIKE 'WEBHOOK_%' AND ("metadata" LIKE '%evt_4a_pg_test_123%' OR "metadata" LIKE '%test_payment_xyz%')
+    6. DELETE FROM "IdempotencyKey" WHERE "key" LIKE 'ev-pg-concurrent-4a-%'
+    7. DELETE FROM "Payment" WHERE "userId" = 'test_user_abc'
+    8. DELETE FROM "Order" WHERE "userId" = 'test_user_abc'
+    Verified printf's `%%` correctly escapes to literal `%` (WEBHOOK_% + %value% patterns).
+  - 8 %s placeholders match 8 args provided in correct order.
+
+- Strict constraints honored:
+  - ✅ ONLY created `.github/workflows/subwave-4a-postgresql-concurrent-evidence.yml` (no other files modified).
+  - ✅ Did NOT modify any source code (.ts files unchanged).
+  - ✅ Did NOT modify prisma/schema.prisma.
+  - ✅ Did NOT commit or push.
+  - ✅ Did NOT enable realPayments (governance block: realPaymentsEnabled=false).
+  - ✅ Did NOT enable webhookHandler in production traffic (only set as Vercel env var on preview+production targets for this workflow run — same pattern as 3c's FEATURE_REQUEST_HASH_ENFORCEMENT).
+  - ✅ Kept the Vercel deploy-trigger logic EXACTLY as-is (proven pattern, 161 lines unchanged from 3c).
+  - ✅ Only changed the test-specific parts (header, name, confirm, schema verification, env-var name, test step body, cleanup SQL, evidence JSON shape, artifact name).
+
+Stage Summary:
+- File created: `.github/workflows/subwave-4a-postgresql-concurrent-evidence.yml` (1044 lines).
+- Validation status: YAML valid + bash syntax valid + jq filter valid + cleanup SQL verified.
+- Orchestrator-required JSON shape: `{ ok, database, concurrentRequests, uniqueWebhookEvents, webhookEventCount, paymentCaptured, outboxEventCount, auditLogCount, no422Errors }` (all 8 fields present in `orchestratorRequiredFields` object).
+- Invariants verified by `ok:true`: WebhookEvent count=1 + verified=true + processed=true + processedBy non-null (4a schema delta) + Payment CAPTURED + Outbox count=1 (PAYMENT_CAPTURE_CONFIRMED) + AuditLog count>=2 + unique webhook event IDs in responses=1 + no 422 responses.
+- Next: ready for Orchestrator review. Workflow NOT triggered (will be triggered manually with `confirm=RUN-4A-PG-EVIDENCE` + staging_url input when 4a implementation is deployed).

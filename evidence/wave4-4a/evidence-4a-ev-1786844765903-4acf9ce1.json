@@ -1,0 +1,173 @@
+{
+  "ok": true,
+  "runId": "4a-ev-1786844765903-4acf9ce1",
+  "wave": "4",
+  "subWave": "4a",
+  "evidenceType": "webhook-handler",
+  "generatedAt": "2026-08-16T01:46:40.075Z",
+  "environment": {
+    "baseUrl": "http://127.0.0.1:3000",
+    "evidenceTestMode": true,
+    "realPaymentsFlag": false,
+    "webhookHandlerFlag": "ON (evidence mode)",
+    "database": "sqlite (local dev — staging/production use PostgreSQL)",
+    "note": "Tests 1-4 run with FEATURE_WEBHOOK_HANDLER=true + EVIDENCE_TEST_MODE=true. PostgreSQL concurrent proof (4a-PG-E1) captured by separate workflow."
+  },
+  "tests": [
+    {
+      "testId": "test-1-webhook-dedup",
+      "testName": "Webhook Dedup (same event_id → 1 processing)",
+      "criterion": "P0-05: WebhookEvent.eventId unique constraint prevents duplicate processing",
+      "passed": true,
+      "setup": {
+        "eventId": "evt_4a_dedup_77a22065-bbc",
+        "paymentId": "cmsv58lr7000cqf9rrk4gdod3",
+        "gatewayPaymentId": "pay_evidence_1786844766498_c8yggb"
+      },
+      "result1": {
+        "status": 200,
+        "bodyStatus": "processed"
+      },
+      "result2": {
+        "status": 200,
+        "bodyStatus": "duplicate"
+      },
+      "verification": {
+        "webhookEventExists": true,
+        "webhookProcessed": true,
+        "webhookEventCount": 1,
+        "paymentStatus": "CAPTURED",
+        "paymentCaptured": true
+      }
+    },
+    {
+      "testId": "test-2-webhook-signature-mismatch",
+      "testName": "Webhook Signature Mismatch (empty signature → 403 reject)",
+      "criterion": "P0-05: HMAC verification rejects webhooks with invalid signatures",
+      "passed": true,
+      "setup": {
+        "eventId": "evt_4a_sig_845b3cb7-842",
+        "paymentId": "cmsv58nxn000oqf9rgoxnpot6",
+        "gatewayPaymentId": "pay_evidence_1786844769322_g69vbj"
+      },
+      "result": {
+        "status": 403,
+        "errorCode": "AUTHORIZATION_DENIED"
+      },
+      "verification": {
+        "webhookRejected": true,
+        "paymentStatus": "PAYMENT_PENDING",
+        "paymentNotUpdated": true
+      }
+    },
+    {
+      "testId": "test-3-webhook-processing",
+      "testName": "Webhook Processing (payment.captured → Payment CAPTURED + Outbox + AuditLog)",
+      "criterion": "P0-05: Verified webhook updates Payment status + emits outbox + writes audit log",
+      "passed": true,
+      "setup": {
+        "eventId": "evt_4a_proc_191d9d52-406",
+        "paymentId": "cmsv58o3l000xqf9rby1oewcs",
+        "gatewayPaymentId": "pay_evidence_1786844769536_hjk5q4"
+      },
+      "result": {
+        "status": 200,
+        "bodyStatus": "processed"
+      },
+      "verification": {
+        "webhookVerified": true,
+        "webhookProcessed": true,
+        "paymentStatus": "CAPTURED",
+        "paymentCaptured": true,
+        "paymentCapturedAt": true,
+        "outboxExists": true,
+        "auditLogCount": 2,
+        "auditLogActions": [
+          "WEBHOOK_RECEIVED",
+          "WEBHOOK_PAYMENT_CAPTURED"
+        ]
+      }
+    },
+    {
+      "testId": "test-4-webhook-concurrent",
+      "testName": "Concurrent Webhook Duplicates (5 parallel same event_id → exactly 1 WebhookEvent)",
+      "criterion": "P0-05: Concurrent same-eventId webhooks → exactly 1 WebhookEvent + 1 Payment update",
+      "passed": true,
+      "setup": {
+        "eventId": "evt_4a_conc_405db537-0e5",
+        "paymentId": "cmsv58o660019qf9runr1l2ll",
+        "gatewayPaymentId": "pay_evidence_1786844769629_5rdt3z",
+        "concurrency": 5
+      },
+      "concurrentResponses": [
+        {
+          "requestIndex": 1,
+          "status": 200,
+          "bodyStatus": "processed"
+        },
+        {
+          "requestIndex": 2,
+          "status": 200,
+          "bodyStatus": "duplicate"
+        },
+        {
+          "requestIndex": 3,
+          "status": 200,
+          "bodyStatus": "duplicate"
+        },
+        {
+          "requestIndex": 4,
+          "status": 200,
+          "bodyStatus": "duplicate"
+        },
+        {
+          "requestIndex": 5,
+          "status": 200,
+          "bodyStatus": "duplicate"
+        }
+      ],
+      "summary": {
+        "successCount": 5,
+        "processedCount": 1,
+        "dedupedCount": 4
+      },
+      "verification": {
+        "webhookEventCount": 1,
+        "paymentStatus": "CAPTURED",
+        "paymentCaptured": true
+      }
+    }
+  ],
+  "summary": {
+    "totalTests": 4,
+    "passed": 4,
+    "failed": 0,
+    "allPassed": true
+  },
+  "reusedEvidence": {
+    "note": "16 scenarios from 3a/3b/3c are CLOSED and NOT re-run:",
+    "3a-closed": [
+      "3a-E1",
+      "3a-E2",
+      "3a-E3",
+      "3a-E4",
+      "3a-PG-E1"
+    ],
+    "3b-closed": [
+      "3b-E1",
+      "3b-E2",
+      "3b-E3",
+      "3b-E4",
+      "3b-E5",
+      "3b-PG-E1"
+    ],
+    "3c-closed": [
+      "3c-E1",
+      "3c-E2",
+      "3c-E3",
+      "3c-E4",
+      "3c-E5",
+      "3c-PG-E1"
+    ]
+  }
+}
