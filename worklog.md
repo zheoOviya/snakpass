@@ -6527,3 +6527,95 @@ Execute the Orchestrator-authorized 5A closure documentation ONLY:
 - Governance state: 5B LOCKED. Production NOT AUTHORIZED. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF. Wave-6/7 LOCKED.
 - Next governance checkpoint: `Sub-Wave 5B — P0-03 Reconciliation: READ/PLAN-FIRST Gate Review` (separate Orchestrator directive required).
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5b-gate-review — Wave-5 Sub-Wave 5B (P0-03 Reconciliation) READ/PLAN-FIRST Gate Review
+
+Timestamp: 2026-08-16 (Orchestrator READ/PLAN-FIRST directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized 5B READ/PLAN-FIRST Gate Review ONLY:
+1. Read the repository (schema, lib code, API routes, publisher, evidence, governance docs) — NO code/schema modification.
+2. Produce `WAVE5_5B_GATE_REVIEW.md` addressing D1-D12.
+3. Identify root cause + scope.
+4. Propose architecture (detection-only model).
+5. Propose evidence matrix (E1-E6).
+6. Risk assessment.
+7. GO / CONDITIONAL GO / NO-GO recommendation.
+8. Exact implementation boundary.
+9. Append this `5b-gate-review` worklog entry.
+10. Commit + push the gate review document.
+11. STOP — await Orchestrator decision on 5B implementation authorization.
+
+### Governance boundaries honored
+- ✅ Did NOT implement P0-03 (READ/PLAN-FIRST only).
+- ✅ Did NOT modify any source code.
+- ✅ Did NOT modify schema or create migration.
+- ✅ Did NOT create a reconciliation worker.
+- ✅ Did NOT create auto-repair logic.
+- ✅ Did NOT make any financial mutation.
+- ✅ Did NOT create a PostgreSQL evidence workflow.
+- ✅ Did NOT run any new evidence tests.
+- ✅ Did NOT authorize production deployment / migration / realPayments / webhookHandler / requestHashEnforcement.
+- ✅ Did NOT start Wave-6 / Wave-7.
+- ✅ Did NOT reopen Wave-3/4/5A evidence (5B is read-only w.r.t. CLOSED-wave tables).
+- ✅ Honored the Orchestrator's explicit constraint: automatic financial correction is NOT self-authorized — flagged as a separate authorization boundary (5C or dedicated directive).
+
+### Work Log
+- Read `prisma/schema.prisma` (full 493 lines) — understood Payment, LedgerEntry, Refund, Outbox, WebhookEvent, IdempotencyKey, ExceptionQueue, AuditLog models + their state machines.
+- Read `src/lib/db.ts` (176 lines) — `withTransaction()` retry loop (P2002/P1008/P2024/P2034/P2036), `TransactionConflictError`, `optimisticUpdate` helper.
+- Read `src/lib/idempotency.ts` (223 lines) — `getCachedResponse` + `storeIdempotencyRecord` + `computeRequestHash` (3c requestHash enforcement).
+- Read `src/lib/outbox.ts` (108 lines) — `enqueueOutboxEvent` (must be inside txn) + `EVENT_TYPE_TO_SOCKET_EVENT` map.
+- Read `src/lib/razorpay.ts` (260 lines) — `createRazorpayOrder`, `captureRazorpayPayment`, `refundRazorpayPayment`, `verifyWebhookSignature` (all demo-mode gated by `realPayments` flag).
+- Read `src/lib/deployment.ts` (104 lines) — feature flags (realPayments, webhookHandler, requestHashEnforcement, etc. all default OFF) + deployment class classifier.
+- Read `src/app/api/payments/route.ts` (303 lines) — capture route (4c pattern: CAPTURE_PENDING + outbox PAYMENT_CAPTURE_REQUESTED, publisher calls captureRazorpayPayment outside txn).
+- Read `src/app/api/payments/refund/route.ts` (275 lines) — refund route (5a pattern: REFUND_PENDING + reversal Dr/Cr + outbox PAYMENT_REFUND_REQUESTED, publisher calls refundRazorpayPayment outside txn).
+- Read `src/app/api/webhooks/razorpay/route.ts` (249 lines) — webhook handler (4a: HMAC verify + dedup via eventId unique + idempotent processing).
+- Read `src/lib/webhook-processor.ts` (349 lines) — `processWebhookEvent` switch (payment.captured / payment.failed / refund.processed deferred to Wave-5).
+- Read `mini-services/outbox-publisher/index.ts` (985 lines) — publisher: `processPaymentCaptureRequested` + `processPaymentRefundRequested` (both external calls OUTSIDE txn), `/lag` endpoint, retry/backoff/FAILED lifecycle, COMMAND_EVENT_TYPES set.
+- Read `src/lib/invariant-checker.ts` (301 lines) — P0-28 `reportInvariantViolation` (ExceptionQueue + freeze Level 1/2/3), `resolveException`, `listUnresolvedExceptions`. Determined this is the correct path for high-severity reconciliation findings.
+- Read `src/app/api/payments/evidence-verify/route.ts` (partial) — confirmed the Dr/Cr count + sum per paymentId query pattern exists (foundation for reconciliation detection queries).
+- Read `P0_TRACEABILITY_MAP.md` (relevant sections) — P0-03 is a Direct Protector of I-01 (Payment Integrity) + I-06 (Ledger Balance). Currently at S2 (Specified, nothing implemented).
+- Read `CRITICAL_PATH.md` (relevant sections) — P0-03 is a Tier-3 (MEDIUM) launch-mandatory P0 on a 5-edge branch (P0-15 → P0-25 → P0-24 → P0-01 → P0-02 → P0-03). Depends on P0-01 + P0-02 (both CLOSED).
+- Read `PRODUCTION_READINESS_GATE_REVIEW.md` (relevant sections) — P0-03 is Hard Blocker HB-2 (launch-gate conditions #1 + #2) + Risk R2 (HIGH). Recommended post-Wave-5 for webhookHandler enablement + realPayments enablement.
+- Read `WAVE4_GATE_REVIEW.md` (relevant sections) — confirmed D5 recommendation: webhookHandler enablement deferred until post-Wave-5 (after P0-03 reconciliation closes, needed for mismatch detection).
+- Searched repo for existing reconciliation code — found only mentions in docs (no implementation). The `reconciliation-mismatch` alert rule exists in `src/lib/alerting.ts:36-43` but the metric is never emitted today.
+- Synthesized `WAVE5_5B_GATE_REVIEW.md` — 9 sections:
+  - §0 Executive Summary (CONDITIONAL GO recommendation).
+  - §1 Current-State Findings (what exists, what's missing, what's CLOSED).
+  - §2 D1-D12 Gate Review (the 12 decision points, each answered in detail).
+  - §3 Identified Root Cause / Scope (3 drift modes: gateway-DB, DB-internal, event-state).
+  - §4 Proposed Architecture (mini-service, detection flow, idempotency, 6 safety properties).
+  - §5 Proposed Evidence Matrix (E1-E6, 3 PostgreSQL-mandatory).
+  - §6 Risk Assessment (9 risks with mitigations).
+  - §7 Exact Implementation Boundary (§7.1 authorized-if-directive, §7.2 not-authorized, §7.3 remediation trigger conditions).
+  - §8 Stop Point.
+  - §9 D1-D12 Decision Summary (one-line each).
+
+### Key decisions documented in the Gate Review
+- **D1 (Scope):** Detect gateway ↔ DB ↔ event-state drift via 17 mismatch classes. Surface findings + freeze high-severity. No repair.
+- **D3 (Source of Truth):** Layered — Razorpay (cash事实), Payment/Refund status (DB business state), LedgerEntry (accounting), Outbox (pending side-effects), WebhookEvent (gateway confirmations). Reconciliation computes consistency between them — no single "winner."
+- **D4 (Mismatch Classes):** 17 classes (M1-M17) enumerated with detection queries + severity:
+  - M1 ledger imbalance (I-06), M2 missing capture ledger, M3 missing capture status (the §4.2 hazard), M4 duplicate capture ledger (I-04), M5 duplicate refund per key, M6 refund-total-exceeds-payment (I-03), M7 refund without reversal ledger, M8 reversal ledger without refund, M9 stuck CAPTURE_PENDING, M10 stuck REFUND_PENDING (5A Option A pending reservation surfacing), M11 orphan outbox PENDING/FAILED, M12 orphan outbox aggregate-missing, M13 unprocessed WebhookEvent, M14 webhook references missing Payment, M15 Payment status vs ledger consistency, M16 outbox lag (SLA), M17 audit hash-chain break.
+- **D5 (Idempotency):** Read-only — cannot cause duplicate accounting mutations. Findings deduped via `@@unique([mismatchClass, entityId, resolvedAt])`.
+- **D6 (Remediation):** **DETECTION ONLY in 5B.** Repair is a separate authorization boundary (5C or Orchestrator directive). This directly honors the Orchestrator's constraint. A table maps each action (read, write finding, route to ExceptionQueue, emit metric) to in-scope vs out-of-scope.
+- **D7 (Transaction Safety):** Reads only — no write locks, no txn retry, cannot break I-06 or any CLOSED invariant.
+- **D8 (Evidence):** 6 E-scenarios (E1-E6). E4 (no money-state mutation) + E5 (concurrency) + E6 (scale) mandatory on PostgreSQL.
+- **D9 (Existing Waves):** NO impact on Wave-3/4/5A. 5B is read-only w.r.t. their tables. E4 empirically proves zero money-state diffs.
+- **D10 (Schema):** Existing models sufficient for detection. Recommended: 2 Class-2 additive tables (ReconciliationRun, ReconciliationFinding) — no breaking change, `expand-migrate-contract` class.
+- **D11 (Production Impact):** Detection + M1-M12 + M15 + ExceptionQueue routing + metric emission + PostgreSQL E4/E5/E6 PASS = mandatory for launch. Remediation + Razorpay fetch + admin UI + M13-M17 = deferrable.
+- **D12 (Recommendation):** **CONDITIONAL GO.** Condition: 5B is detection-only; remediation is a separate boundary. Rationale: detection is safe (cannot break invariants, cannot lose money), remediation is dangerous (mutates money state, can introduce NEW drift), the split gives the Orchestrator a clean decision point.
+
+### Stage Summary
+- **5B READ/PLAN-FIRST Gate Review: ✅ COMPLETE.**
+- `WAVE5_5B_GATE_REVIEW.md` produced (9 sections, D1-D12 answered, 17 mismatch classes enumerated, 6-scenario evidence matrix, 9-risk assessment, exact implementation boundary in §7).
+- **Recommendation: CONDITIONAL GO** — detection-only model; remediation is a separate authorization boundary.
+- NO code modified. NO schema changed. NO evidence run. NO production touched.
+- Wave-3/4/5A CLOSED — immutable. 5B is read-only w.r.t. their tables.
+- `realPayments` / `webhookHandler` / `requestHashEnforcement` remain OFF.
+- Wave-6 / Wave-7 remain LOCKED.
+- Next governance checkpoint: Orchestrator decision on 5B implementation authorization (separate directive required). The Orchestrator may authorize 5B implementation per §7.1 boundary, modify scope, defer, or reject the detection-only model.
+- IDE is STOPPING after commit + push.
