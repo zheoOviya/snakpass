@@ -1,0 +1,252 @@
+69-| 4 | Switch publisher from HTTP transport to Socket.io transport | WAVE2_EVIDENCE 2b-0 Transport Contract Fix | ✅ DONE in Sub-Wave 2b-0 (colons `order:created` matching realtime mini-service) | ✅ CLOSED (carry-forward satisfied) |
+70-| 5 | Payment + Ledger atomicity test | WAVE2_FINAL_AUDIT §Phase-3 Prerequisites | ✅ DONE in Wave-3a (3a-5: Transactional Atomicity — 6 writes in same txn) | ✅ CLOSED (carry-forward satisfied) |
+71:| 6 | TRANSACTION_RETRY_INVARIANT enforcement (lint rule / CI gate / outbox publisher for captures) | `docs/TRANSACTION_RETRY_INVARIANT.md` §8.2 | PARTIAL — document exists, enforcement mechanism NOT implemented; `captureRazorpayPayment()` STILL inside txn body in `src/app/api/payments/route.ts:160` (gated by `realPayments=false`) | 🟡 Strong Wave-4 candidate (REQUIRED before `realPayments=true`) |
+72-| 7 | `requestHashEnforcement` production enablement | SUBWAVE_3C_GATE_REVIEW §10 (D2) | IMPLEMENTED, default OFF in production; flag enabled only on staging during 3c-PG-E1 evidence | ❌ OUT of Wave-4 scope (separate Orchestrator authorization) |
+73-| 8 | Switch `prisma/schema.prisma` provider from `sqlite` to `postgresql` | P0-27-PHASE2-REMEDIATION §12 item 1 | ✅ DONE (verified `prisma/schema.prisma:14` — `provider = "postgresql"`) | ✅ CLOSED (carry-forward satisfied) |
+--
+80-1. **Implement P0-05 (Webhook integrity handler)** — Razorpay webhook endpoint with HMAC verification + idempotent processing (dedup via `WebhookEvent.eventId` unique constraint). Closes I-01 (Payment Integrity) + I-04 (Capture Uniqueness) for the webhook side.
+81-2. **Formalize P0-02 (Payment ledger)** — Wave-3a wrote Dr/Cr LedgerEntry pairs inside the capture txn; Wave-4 should formally close P0-02 with reconciliation-gap analysis + balance-integrity evidence. (P0-02 currently NOT at S5 — it is at "Implemented + Empirically exercised via 3a-5 atomicity test" but no dedicated P0-02 evidence.)
+82:3. **Mitigate the TRANSACTION_RETRY_INVARIANT hazard** — Move `captureRazorpayPayment()` OUT of the txn body via the outbox publisher pattern (Option C in `docs/TRANSACTION_RETRY_INVARIANT.md` §6). This is REQUIRED before `realPayments=true` can ever be authorized.
+83-4. **OPTIONALLY close Wave-2 Phase-3 carry-forwards** — `orphan_business_count` timestamp filter (Phase-3 prerequisite #1).
+84-
+--
+148-|---------|-------|------------|
+149-| `src/app/api/webhooks/*` | DOES NOT EXIST (no webhook route directory; no webhook handler implementation anywhere in `src/`) | 🔴 Wave-4 PRIMARY target |
+150:| `src/lib/razorpay.ts` | Implements `createRazorpayOrder`, `verifyRazorpaySignature` (HMAC-SHA256), `captureRazorpayPayment` — all gated by `realPayments=false` (demo mode returns mocks) | ✅ Can be reused; signature verification already implemented |
+151:| `src/app/api/payments/route.ts` | Implements capture route with 6 writes in txn (Payment, Order.update, 2× LedgerEntry, AuditLog, Outbox, IdempotencyKey); 8 evidence checkpoints for failure injection | ⚠️ Transactional Retry Invariant: `captureRazorpayPayment()` at line 160 is INSIDE `withTransaction()` body (latent risk per `docs/TRANSACTION_RETRY_INVARIANT.md` — REQUIRED mitigation before `realPayments=true`) |
+152-| `src/app/api/orders/route.ts` | Order POST with idempotency + C1 hash (3c) + inventory race (P0-25 Case A) | ✅ Stable; no Wave-4 changes required |
+153-| `src/lib/idempotency.ts` | C1 requestHash (3c) with `canonicalizeRequestBody`, `computeRequestHash`, `IdempotencyKeyReuseError` | ✅ Stable; reusable for webhook idempotency via `eventId` unique constraint (different mechanism from `Idempotency-Key` header) |
+--
+163-1. 🟡 **No webhook handler implementation** — `WebhookEvent` model is schema-only (Wave-3a landed the schema, handler deferred to Wave-4).
+164-2. 🟡 **P0-02 ledger is NOT formally S5 closed** — Wave-3a proved the atomic write of LedgerEntry Dr/Cr pairs but did NOT formally close P0-02 (no dedicated P0-02 evidence scenarios; no reconciliation gap analysis).
+165:3. 🟡 **TRANSACTION_RETRY_INVARIANT is documented but UNMITIGATED** — `captureRazorpayPayment()` at `src/app/api/payments/route.ts:160` is still inside the `withTransaction()` body. The hazard is gated by `realPayments=false` but will be violated the moment `realPayments=true` is authorized.
+166-4. 🟡 **`orphan_business_count` query defect** — Does not exclude pre-outbox historical orders (WAVE2_FINAL_AUDIT §Audit 2). Would cause alert storm in production. Fix is a 1-line SQL change.
+167-5. 🟡 **Production env vars NOT configured** — `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET` not in Vercel project env (out of IDE scope; Orchestrator/operator action).
+--
+208-| **P0-05 (Webhook handler)** | SUBWAVE_3_GATE_REVIEW.md §1 + WAVE3_EVIDENCE.md §1 explicitly defer to Wave-4. WebhookEvent schema EXISTS from 3a. | ✅ P0-01 (capture) CLOSED — webhook closes the capture-confirmed event from gateway side | MEDIUM (1 new route + signature verification reuse from razorpay.ts + dedup via existing WebhookEvent.eventId unique constraint) | MEDIUM (HMAC verification must be timing-safe; replay storm protection needed) |
+209-| **P0-02 (Ledger formalization)** | IMPLEMENTATION_ORDER.md Wave 4 lists P0-02 alongside P0-05. Wave-3a wrote Dr/Cr pairs but did not formally close P0-02 (no balance-integrity evidence). | ✅ P0-01 CLOSED (capture writes LedgerEntry); P0-24 CLOSED (atomicity proven) | LOW-MEDIUM (no schema change; evidence scenarios + balance-integrity test + ledger audit report stub) | LOW (additive evidence; no critical-path code change) |
+210:| **TRANSACTION_RETRY_INVARIANT mitigation** (move capture to outbox publisher) | `docs/TRANSACTION_RETRY_INVARIANT.md` §8.2 lists 5 enforcement items; full enforcement deferred to "Wave-3b/3c-adjacent" — that boundary has now passed. | ✅ P0-24 CLOSED (outbox infrastructure exists); P0-01 CLOSED (capture route exists); Wave-2b publisher worker exists (extend it) | HIGH (modify capture route to NOT call captureRazorpayPayment(); instead enqueue `PAYMENT_CAPTURE_REQUESTED` outbox event; extend publisher to call capture; idempotency via Payment.status check) | HIGH (touches money-critical path; required before `realPayments=true`) |
+211-| **`orphan_business_count` timestamp-filter fix** | WAVE2_FINAL_AUDIT §Audit 2-3 — documented defect, production-launch prerequisite. NOT a P0 by itself (belongs to P0-24's orphan-detection surface). | ✅ None | LOW (1-line SQL change in `mini-services/alert-evaluator/index.ts:183-186`) | LOW (detection-only change) |
+212-
+--
+259-| P0-24 (Outbox pattern) | Hard (B-edge, blocking) | ✅ CLOSED | Outbox infrastructure is the canonical solution (Option C in TRANSACTION_RETRY_INVARIANT.md §6). |
+260-| Outbox publisher worker | Hard (technical) | ✅ EXISTS (`mini-services/outbox-publisher/`) | Wave-2b publisher handles Socket.io realtime fanout. Wave-4 may extend to handle `PAYMENT_CAPTURE_REQUESTED` events. |
+261:| `captureRazorpayPayment()` in `src/lib/razorpay.ts:108-130` | Hard (technical, refactor target) | ✅ EXISTS | Currently called from `src/app/api/payments/route.ts:160` INSIDE `withTransaction()`. Mitigation: remove from txn body, call from publisher instead. |
+262-| `Payment.status` check (idempotency for publisher) | Hard (technical) | ✅ EXISTS | Publisher must check `Payment.status !== 'CAPTURED'` before calling capture (at-least-once delivery requires idempotent consumer). |
+263-| Razorpay test API keys | Soft (for real-mode evidence) | 🔴 NOT CONFIGURED | Demo mode exists; real-mode capture requires keys. |
+--
+323-| P0-27 (deployment) | Wave-4 changes are Class-2 expand-migrate-contract (additive schema, additive API route, additive publisher event type). | NONE — Class-2 rollback-safe |
+324-| P0-28 (unknown-exception handling) | Wave-4 webhook handler must catch unknown webhook event types and enqueue ExceptionQueue entry. Reuses P0-28 infrastructure. | NONE — additive use of existing surface |
+325:| P0-01 (capture) | Wave-4 retry-invariant mitigation MODIFIES the capture route (removes `captureRazorpayPayment()` from txn body). 3a evidence (3a-E1..3a-PG-E1) was generated with capture INSIDE txn body in DEMO mode. If retry-invariant mitigation is implemented, 3a evidence MUST be re-verified under the new flow. | 🟡 POTENTIAL REOPEN — see §8 for evidence strategy |
+326-| P0-08 (order idempotency) | Wave-4 does NOT touch order route. | NONE |
+327-| P0-08+ (C1 requestHash) | Wave-4 does NOT touch idempotency library. | NONE |
+--
+331-**Critical finding:** If Wave-4 implements the TRANSACTION_RETRY_INVARIANT mitigation (move capture to outbox publisher), **3a evidence MAY need re-verification** because the capture route's flow changes. However, the Orchestrator could decide that:
+332-- (a) The mitigation is implemented but `realPayments` flag STAYS OFF → 3a evidence remains valid (demo-mode capture path is byte-identical).
+333:- (b) The mitigation is implemented AND `realPayments` is flipped ON for a new evidence scenario → 3a evidence is insufficient; NEW Wave-4 evidence scenario (`4c-PG-E1: real-mode capture via publisher`) is required.
+334-
+335-The Orchestrator should resolve this in D6 (see §12).
+--
+342-| ❌ Webhook signature verification in production | Webhook handler may be implemented but MUST NOT receive real production traffic until `RAZORPAY_WEBHOOK_SECRET` is configured AND the Orchestrator authorizes production webhook enablement. |
+343-| ❌ `requestHashEnforcement` production ON | Flag remains OFF in production. Wave-4 does NOT enable it. |
+344:| ❌ Move `captureRazorpayPayment()` outside txn body | IN SCOPE for Wave-4 (Option C — outbox publisher pattern). Required before `realPayments=true`. |
+345-| ❌ Move `createRazorpayOrder()` outside txn body | IN SCOPE for Wave-4 (Option B — pre-generated idempotency key, Razorpay supports `X-Idempotency-Key` on `orders.create`). Optional but recommended. |
+346-
+--
+368-| **4a — Webhook handler (P0-05)** | Implement `POST /api/webhooks/razorpay` route with HMAC verification + idempotent processing via `WebhookEvent.eventId` unique constraint. Demo mode + real mode (gated by `realPayments`). | Single focused sub-wave; reuse of `verifyRazorpaySignature` from `razorpay.ts`; new `webhookHandler` feature flag default OFF. |
+369-| **4b — P0-02 ledger formalization** | Evidence scenarios for balance integrity (Dr sum == Cr sum), no-orphan-ledger, no-phantom-ledger. Optional: ledger audit report stub. NO schema change. | Evidence-only sub-wave (similar to 3b); reuses 3a-evidence infrastructure pattern. |
+370:| **4c — TRANSACTION_RETRY_INVARIANT mitigation** | Move `captureRazorpayPayment()` out of `withTransaction()` body into outbox publisher (Option C). Extend publisher to handle `PAYMENT_CAPTURE_REQUESTED` events. Optionally: pre-generated idempotency key for `createRazorpayOrder()` (Option B). 5 enforcement items from §8.2 of invariant doc (lint rule, code-review checklist, outbox publisher, CI grep-scan gate). | HIGH-risk sub-wave; touches money-critical path; required before `realPayments=true`. |
+371:| **4d (optional) — orphan_business_count fix** | 1-line SQL change in `mini-services/alert-evaluator/index.ts:183-186`. | LOW-risk; can be merged into any of 4a/4b/4c or done as a separate small sub-wave. |
+372-
+373:**Recommended Wave-4 structure:** 4a + 4b + 4c (with 4d folded into 4b or 4c). Total: 3 sub-waves + 1 folded fix.
+374-
+375-### 6.3 Per-item implementation scope details
+--
+407-**Total 4b: ~350-530 LOC.** Estimated 1 day implementation + 1 day evidence.
+408-
+409:#### 6.3.3 TRANSACTION_RETRY_INVARIANT mitigation (4c) — HIGHEST RISK
+410-
+411-| Component | File | Change | LOC (est.) | Risk |
+412-|-----------|------|--------|------------|------|
+413:| Capture route refactor | `src/app/api/payments/route.ts` | (1) REMOVE `captureRazorpayPayment()` call from inside `withTransaction()` body (line 160). (2) Instead, enqueue `PAYMENT_CAPTURE_REQUESTED` outbox event inside txn (so the event is committed atomically with Payment record). (3) Capture route returns immediately with `Payment.status = 'CAPTURE_PENDING'` (new status value) + the outbox event ID. (4) Client polls `/api/payments/<id>` for status (or receives webhook). | ~80-120 net change | HIGH |
+414:| Payment status enum extension | `prisma/schema.prisma` | Add `CAPTURE_PENDING` to Payment.status comment (already a String column; no schema migration needed for enum value; just documentation update). | ~3 | LOW |
+415:| Outbox publisher extension | `mini-services/outbox-publisher/index.ts` | (1) Add handler for `PAYMENT_CAPTURE_REQUESTED` event type. (2) Before calling `captureRazorpayPayment()`, check `Payment.status !== 'CAPTURED'` (idempotency). (3) Call `captureRazorpayPayment()` (now safely OUTSIDE any txn body). (4) On success: update Payment status to CAPTURED + capturedAt inside a NEW txn (atomic with AuditLog + Outbox event marking PUBLISHED). (5) On failure: increment Payment.retryCount, set failureReason, leave status as CAPTURE_PENDING (will be retried by publisher on next iteration). | ~150-200 | HIGH |
+416-| Razorpay order create idempotency (Option B, optional) | `src/lib/razorpay.ts` + `src/app/api/payments/route.ts` | (1) Pre-generate idempotency key as `randomUUID()` BEFORE the txn. (2) Store it in Payment record (new column `gatewayOrderCreateKey String?`). (3) Pass to `createRazorpayOrder()` as `X-Idempotency-Key` header. This eliminates orphan-order leaks on retry. | ~50-80 | MEDIUM |
+417:| Lint rule | `.eslintrc.local.js` (NEW) or custom rule | Error on any `await captureRazorpayPayment(` or `await createRazorpayOrder(` or `await fetch(` inside a `withTransaction(async (tx) => { ... })` body — unless allow-listed. | ~80-120 | MEDIUM |
+418-| Code-review checklist | `docs/PAYMENT_CODE_REVIEW_CHECKLIST.md` (NEW) | Mandatory checklist for any PR touching `src/app/api/payments/` or `src/lib/razorpay.ts`. Cites `docs/TRANSACTION_RETRY_INVARIANT.md`. | ~80-120 (doc) | LOW |
+419:| CI gate | `scripts/check-external-calls-in-txn.sh` (NEW) | Grep-scan `src/app/api/**/route.ts` for `captureRazorpayPayment(` / `createRazorpayOrder(` calls inside `withTransaction(` blocks. Fails the build if found outside the publisher. | ~50-80 | LOW |
+420-| Evidence endpoints | `src/app/api/payments/evidence-setup/route.ts` (EXTEND) | Add `?scenario=capture-via-publisher` mode: simulate capture-via-publisher flow with `realPayments=false` (mock capture in publisher). | ~60-80 | MEDIUM |
+421:| Evidence runner | `scripts/wave4-4c-evidence.mjs` (NEW) | 5 scenarios: (1) capture-via-publisher (capture call happens AFTER commit, in publisher), (2) publisher-crash-recovery (publisher crashes mid-capture; restart picks up event, idempotency check prevents double-capture), (3) capture-failure-retry (capture fails; Payment.retryCount incremented; status stays CAPTURE_PENDING; next publisher iteration retries), (4) concurrent-capture-attempts (5 concurrent capture requests → 5 Payments, 5 outbox events, 5 publisher-side captures — no double-capture), (5) realPayments-false-mode (demo mode still works; publisher returns mock capture). | ~300-400 | HIGH |
+422:| Staging workflow | `.github/workflows/subwave-4c-postgresql-concurrent-evidence.yml` (NEW) | PostgreSQL concurrency: 5 concurrent captures → 5 Payments (CAPTURE_PENDING) → publisher processes 5 events → 5 Payments (CAPTURED). | ~800 (mirror 3a pattern) | MEDIUM |
+423:| Migration | `prisma/scripts/wave4-subwave-4c-migration.sql` (NEW) | Add `gatewayOrderCreateKey String?` column to Payment (if Option B implemented). Class-2 additive nullable. | ~10 | LOW |
+424:| Documentation update | `docs/TRANSACTION_RETRY_INVARIANT.md` §8 | Update enforcement status from "PARTIAL — documented in 3a" to "ENFORCED — Wave-4 4c mitigation complete". | ~20 (doc) | LOW |
+425-
+426:**Total 4c: ~880-1230 LOC.** Estimated 2-3 days implementation + 1-2 days evidence. HIGHEST RISK sub-wave.
+427-
+428:#### 6.3.4 `orphan_business_count` fix (4d — folded into 4b or 4c)
+429-
+430-| Component | File | Change | LOC (est.) | Risk |
+--
+434-| Test | (manual) | Verify alert does NOT fire on pre-outbox orders; DOES fire on post-outbox orphans. | ~10 (test) | LOW |
+435-
+436:**Total 4d: ~13 LOC.** Can be folded into 4b or 4c as a small bonus fix.
+437-
+438----
+--
+446-| **4a (Webhook handler)** | Extend `WebhookEvent` with `processedBy String?` + `processingNotes String?` (optional — current schema is sufficient for basic handler). | Class-2 expand-migrate-contract (additive nullable columns). | LOW |
+447-| **4b (P0-02 ledger formalization)** | NONE — LedgerEntry schema is complete from Wave-3a. | NONE — no migration. | NONE |
+448:| **4c (Retry-invariant mitigation)** | Add `gatewayOrderCreateKey String?` to Payment (if Option B for createRazorpayOrder is implemented). Status enum extension is documentation-only (status is a String column, not a PG enum). | Class-2 expand-migrate-contract (additive nullable column). | LOW |
+449-| **4d (`orphan_business_count` fix)** | NONE — query change only. | NONE — no migration. | NONE |
+450-
+--
+454-|-------|--------|-----|
+455-| `WebhookEvent` (4a, optional) | +`processedBy String?`, +`processingNotes String?` | +2 |
+456:| `Payment` (4c, optional Option B) | +`gatewayOrderCreateKey String?` | +1 |
+457-| **Total** | | **+3 lines** (all additive nullable) |
+458-
+--
+464-|-----------|------------|----------|
+465-| `prisma/scripts/wave4-subwave-4a-migration.sql` | staging Supabase ONLY | `.github/workflows/wave4-4a-staging-migration.yml` (NEW, mirror 3a pattern) |
+466:| `prisma/scripts/wave4-subwave-4c-migration.sql` | staging Supabase ONLY | `.github/workflows/wave4-4c-staging-migration.yml` (NEW, mirror 3a pattern) |
+467-
+468-**Production migrations:** NOT AUTHORIZED in Wave-4. Migration scripts are created and applied to staging ONLY. Production migration is a separate Orchestrator decision (likely Wave-5 or a dedicated production-cutover wave).
+--
+486-| 4b-E4 | Idempotent ledger (5-concurrent capture → exactly 2 LedgerEntries per Payment, 10 total) | Concurrency + idempotency | 5 concurrent captures with different idempotency keys → 5 Payments, 10 LedgerEntries (Dr + Cr per Payment). No duplicates. | YES (mirror 3a-PG-E1) |
+487-| 4b-PG-E1 | 5 concurrent captures on PostgreSQL → 10 LedgerEntries total | PostgreSQL concurrency | Same as 4b-E4 on staging PostgreSQL. | YES (mirror 3a-PG-E1) |
+488:| 4c-E1 | Capture-via-publisher (capture call happens AFTER commit, in publisher) | Retry-invariant mitigation | `captureRazorpayPayment()` is called from the publisher (OUTSIDE any `withTransaction()` body). Capture route returns immediately with `Payment.status = 'CAPTURE_PENDING'`. | YES (mirror 3a-E2 replay + new dimension: publisher-side capture) |
+489:| 4c-E2 | Publisher crash-recovery (publisher crashes mid-capture; restart picks up event, idempotency check prevents double-capture) | At-least-once + idempotency | If publisher crashes after `captureRazorpayPayment()` succeeds but before `Payment.status = 'CAPTURED'` commit, the restarted publisher's idempotency check (`Payment.status !== 'CAPTURED'`) prevents a second capture call. | YES (mirror 2b-E3 crash recovery + new dimension: gateway-side idempotency) |
+490:| 4c-E3 | Capture failure retry (capture fails; Payment.retryCount incremented; status stays CAPTURE_PENDING; next publisher iteration retries) | Failure recovery | On capture failure (gateway 5xx), publisher increments `Payment.retryCount`, sets `failureReason`, leaves status as `CAPTURE_PENDING`. Next iteration retries with exponential backoff. | YES (mirror 2b-E1 transient retry) |
+491:| 4c-E4 | Concurrent capture attempts (5 concurrent captures → 5 Payments, 5 outbox events, 5 publisher-side captures — no double-capture) | End-to-end concurrency | 5 concurrent POST /api/payments with different idempotency keys → 5 Payments (CAPTURE_PENDING), 5 outbox events, 5 publisher-side captures → 5 Payments (CAPTURED). No double-capture. | YES (mirror 3a-PG-E1) |
+492:| 4c-PG-E1 | 5 concurrent captures on PostgreSQL → 5 Payments (CAPTURED) via publisher | PostgreSQL concurrency | Same as 4c-E4 on staging PostgreSQL. | YES (mirror 3a-PG-E1 + 3b-PG-E1) |
+493:| 4c-E5 (optional) | `realPayments=false` demo mode still works (publisher returns mock capture) | Backward compatibility | With `realPayments=false`, publisher calls `captureRazorpayPayment()` which returns mock success. Payment.status transitions CAPTURE_PENDING → CAPTURED. | YES (mirror 3a demo mode) |
+494-
+495:**Total NEW Wave-4 scenarios: 16 (5 for 4a + 5 for 4b + 6 for 4c).** All reuse the 3a/3b/3c evidence infrastructure pattern (evidence-setup + evidence-verify endpoints + SQLite evidence runner + PostgreSQL GitHub Actions workflow + self-validating JSON with `ok:true`).
+496-
+497-### 8.2 CLOSED evidence that MUST NOT be re-run in Wave-4
+--
+499-| Sub-Wave | CLOSED scenarios | Why they stay CLOSED |
+500-|----------|------------------|----------------------|
+501:| 3a | 3a-E1, 3a-E2, 3a-E3, 3a-E4, 3a-PG-E1 | Wave-4 4a/4b/4c do NOT modify the 3a Payment capture flow (capture route's idempotency cache, Dr/Cr atomicity, demo-mode capture) — EXCEPT if 4c is implemented, which moves `captureRazorpayPayment()` out of the txn body. See §5.2 for re-verification strategy. |
+502-| 3b | 3b-E1, 3b-E2, 3b-E3, 3b-E4, 3b-E5, 3b-PG-E1 | Wave-4 does NOT touch Order POST route. 3b evidence remains valid. |
+503-| 3c | 3c-E1, 3c-E2, 3c-E3, 3c-E4, 3c-E5, 3c-PG-E1 | Wave-4 does NOT touch idempotency library. 3c evidence remains valid. |
+504-
+505:### 8.3 3a re-verification strategy (if 4c is implemented)
+506-
+507:If Wave-4 implements 4c (TRANSACTION_RETRY_INVARIANT mitigation), the 3a evidence flow changes:
+508:- BEFORE 4c: `POST /api/payments` calls `captureRazorpayPayment()` INSIDE txn → Payment.status = CAPTURED immediately on response.
+509:- AFTER 4c: `POST /api/payments` enqueues `PAYMENT_CAPTURE_REQUESTED` outbox event INSIDE txn → Payment.status = CAPTURE_PENDING on response → publisher processes event → `captureRazorpayPayment()` called by publisher → Payment.status = CAPTURED on publisher commit.
+510-
+511-**Re-verification strategy:**
+--
+513-| Strategy | 3a evidence impact | Recommendation |
+514-|----------|---------------------|----------------|
+515:| (A) Implement 4c but keep `realPayments=false` in production. 3a evidence (demo mode) is re-generated under the new flow. | 3a evidence is INVALIDATED (capture route flow changed). NEW 4c-E5 (demo mode) covers this. 3a scenarios (3a-E1..3a-PG-E1) MUST be re-run under the new flow as 4c-E5. | 🟡 ACCEPTABLE — re-runs the 5 3a scenarios as 4c scenarios under the new flow. |
+516:| (B) Implement 4c with `realPayments=false` flag. 3a evidence remains valid because the capture CALL is unchanged in demo mode (returns mock); only the LOCATION of the call changes (from route to publisher). | 3a evidence remains valid for the demo-mode flow. NEW 4c evidence covers the publisher-side flow. | ✅ RECOMMENDED — 3a evidence is byte-identical under demo mode (mock capture). 4c adds NEW evidence for publisher-side flow. |
+517:| (C) Implement 4c AND flip `realPayments=true` for a NEW Wave-4 evidence scenario with real Razorpay test API keys. | 3a evidence is INVALIDATED for real mode (it was generated in demo mode). NEW 4c-PG-E2 (real-mode capture via publisher) is required. | ❌ NOT RECOMMENDED in Wave-4 — `realPayments=true` production enablement is a separate Orchestrator decision. Wave-4 may implement the code path but MUST NOT enable the flag. |
+518-
+519:**Recommendation:** Strategy (B). 3a evidence stays valid for the demo-mode path; 4c adds NEW evidence for the publisher-side flow. If the Orchestrator later authorizes `realPayments=true` (Wave-5 or later), a NEW real-mode evidence scenario will be required at that time.
+520-
+521-### 8.4 Self-validating JSON shape for Wave-4 evidence
+--
+525-  "ok": true,
+526-  "database": "postgresql",
+527:  "subWave": "4a" | "4b" | "4c",
+528-  "runId": "4a-pg-ev-<timestamp>-<rand>",
+529-  "evidenceType": "webhook-concurrent-idempotency" | "ledger-balance-integrity" | "capture-via-publisher-concurrent",
+--
+546-    "productionDeployed": false,
+547-    "productionMigrationApplied": false,
+548:    "wave4SubWaveStarted": "4a" | "4b" | "4c",
+549-    "wave5Started": false
+550-  }
+--
+582-|-----------|------------|---------------|----------------|
+583-| `wave4-subwave-4a-migration.sql` (WebhookEvent extension) | Production Supabase | Wave-4 4a S5 PASS + Orchestrator production authorization | WebhookEvent has `processedBy` + `processingNotes` columns |
+584:| `wave4-subwave-4c-migration.sql` (Payment extension) | Production Supabase | Wave-4 4c S5 PASS + Orchestrator production authorization | Payment has `gatewayOrderCreateKey` column (if Option B implemented) |
+585-
+586-### 9.3 Feature flags required for production enablement (post-Wave-4)
+--
+633-| **4a (Webhook handler)** | (1) Flip `webhookHandler` flag to OFF. (2) Git revert. (3) Drop nullable columns from WebhookEvent (safe — columns are nullable, not used by older code). | <10 min | ✅ YES |
+634-| **4b (P0-02 ledger formalization)** | N/A — evidence-only sub-wave. No production code change. | N/A | ✅ N/A |
+635:| **4c (TRANSACTION_RETRY_INVARIANT mitigation)** | (1) Flip `realPayments` flag to OFF (demo mode — publisher returns mock capture). (2) Git revert capture route + publisher changes. (3) Re-deploy. (4) Existing Payments in CAPTURE_PENDING state will need manual reconciliation (mark as CAPTURED if gateway confirms, or FAILED if gateway confirms failure). (5) Drop `gatewayOrderCreateKey` column (safe — nullable). | <15 min (code rollback); manual reconciliation for in-flight Payments | 🟡 MOSTLY — code rollback is safe; in-flight Payment reconciliation is manual |
+636-| **4d (`orphan_business_count` fix)** | Git revert + redeploy alert-evaluator. | <5 min | ✅ YES |
+637-
+--
+641-Wave-4 rollback procedure:
+642-  1. Flip feature flags OFF (webhookHandler, realPayments).
+643:  2. Git revert Wave-4 commits (4a + 4b + 4c + 4d).
+644-  3. Drop nullable columns (WebhookEvent.processedBy, WebhookEvent.processingNotes, Payment.gatewayOrderCreateKey).
+645-  4. Re-deploy (Vercel preview + production if deployed).
+646:  5. Manual reconciliation: any Payment with status=CAPTURE_PENDING must be checked against Razorpay dashboard.
+647-     - If gateway shows captured → mark Payment.status=CAPTURED.
+648-     - If gateway shows failed → mark Payment.status=FAILED.
+--
+664-| Schema change risk | LOW | All changes are Class-2 additive nullable. No breaking changes. |
+665-| API change risk | LOW | New routes (`/api/webhooks/razorpay`) + new error codes. No breaking changes to existing routes. |
+666:| Code change risk | HIGH | 4c refactors the money-critical capture path. Bug in publisher could cause lost captures or duplicate captures. |
+667-| Evidence risk | LOW | All scenarios reuse proven 3a/3b/3c infrastructure pattern. |
+668-| Production risk | LOW | All changes are feature-flagged OFF by default. Production deployment is NOT authorized. |
+669:| Rollback risk | MEDIUM | 4c rollback requires manual reconciliation of in-flight Payments. |
+670:| Operational risk | MEDIUM | 4c introduces a new async dependency (publisher must process events for captures to complete). Monitoring of publisher lag becomes critical. |
+671-
+672-### 11.2 Per-sub-wave risk + blast radius
+--
+676-| **4a (Webhook handler)** | MEDIUM | New endpoint (`/api/webhooks/razorpay`). If handler is buggy, webhooks are not processed → gateway-side capture events are lost → reconciliation will catch mismatches (Wave-5). Does NOT affect synchronous capture flow (capture route still works). | Feature flag (`webhookHandler`, default OFF). Staging-only evidence. Production enablement is separate decision. |
+677-| **4b (P0-02 ledger formalization)** | LOW | Evidence-only. No production code change. No blast radius. | N/A |
+678:| **4c (TRANSACTION_RETRY_INVARIANT mitigation)** | HIGH | Capture route refactor + publisher extension. If publisher fails to process `PAYMENT_CAPTURE_REQUESTED` events, captures are stuck in CAPTURE_PENDING. If publisher calls `captureRazorpayPayment()` twice (idempotency check fails), customer is double-charged. Blast radius = ALL payment captures. | Feature flag (`realPayments`, default OFF — publisher is in demo mode). Staging-only evidence. Production enablement is separate decision. Publisher idempotency check (`Payment.status !== 'CAPTURED'`). Monitoring: publisher lag + capture-failure-rate alerts. |
+679-| **4d (`orphan_business_count` fix)** | LOW | Alert-evaluator query change. If regression, alert may fire incorrectly OR fail to fire on real orphans. Detection-only — no automatic repair. | Git revert. Staging verification before production deploy. |
+680-
+681-### 11.3 Worst-case scenario
+682-
+683:**Worst case:** Wave-4 4c is implemented, `realPayments` is enabled in production (NOT authorized in Wave-4, but hypothetically), and the publisher has a bug that causes it to call `captureRazorpayPayment()` twice for the same Payment.
+684-
+685-**Impact:**
+--
+705-**Options:**
+706-- (a) **Minimum scope:** 4a (webhook handler) ONLY. ~510-810 LOC. Single sub-wave. Mirrors Wave-3a scope.
+707:- (b) **Recommended scope:** 4a + 4b + 4c. ~1740-2570 LOC. Three sub-waves. Mirrors Wave-3 (3a+3b+3c) structure.
+708:- (c) **Extended scope:** 4a + 4b + 4c + 4d (orphan_business_count fix folded in). ~1753-2583 LOC. Three sub-waves + 1 small fix.
+709:- (d) **Maximum scope:** 4a + 4b + 4c + 4d + early P0-04 (refund) prep. NOT recommended — refund requires Wave-5's reconciliation to be safe.
+710-
+711:**Default recommendation:** (c) Extended scope — 4a + 4b + 4c + 4d. This closes the most P0s (P0-05, P0-02) AND mitigates the TRANSACTION_RETRY_INVARIANT hazard AND fixes the orphan_business_count defect. The 4d fix is essentially free (1-line SQL change).
+712-
+713-### D2 — Sub-wave structure (should Wave-4 be split like Wave-3?)
+714-
+715-**Options:**
+716:- (a) **Single wave:** Implement all 4 items in one go. One S5 closure decision. ~2570 LOC. Risk: HIGH (4c touches money-critical path).
+717:- (b) **Sub-wave structure (recommended):** 4a, 4b, 4c each gets separate READ/PLAN-FIRST Gate Review + implementation authorization + S5 closure. 4d folded into 4b or 4c. Mirrors Wave-3 governance model.
+718-
+719:**Default recommendation:** (b) Sub-wave structure. Each sub-wave has independent authorization, evidence, and closure. 4c (HIGHEST RISK) gets its own Gate Review with extra scrutiny.
+720-
+721-### D3 — PostgreSQL-native concurrency requirement (same bar as Wave-3?)
+--
+743-**Default recommendation:** (b) Implement but do NOT enable. Same pattern as 3c (`requestHashEnforcement` flag implemented but NOT enabled in production).
+744-
+745:### D6 — 3a evidence re-verification strategy (if 4c is implemented)
+746-
+747-**Options:**
+748:- (a) **Re-run 3a evidence under new flow:** 3a-E1..3a-PG-E1 are re-run with the capture-via-publisher flow. 3a evidence files are superseded by 4c evidence files.
+749:- (b) **Keep 3a evidence + add NEW 4c evidence (recommended):** 3a evidence remains valid for the demo-mode path (mock capture in route). 4c adds NEW evidence for the publisher-side flow. Both stay CLOSED.
+750:- (c) **Invalidate 3a evidence + require 4c-PG-E2 (real-mode capture):** 3a evidence is invalidated because the capture route changed. 4c-PG-E2 is required with `realPayments=true` (real Razorpay test API keys). (NOT recommended — `realPayments=true` is a separate Orchestrator decision.)
+751-
+752:**Default recommendation:** (b) Keep 3a evidence + add NEW 4c evidence. 3a demo-mode capture path is byte-identical (mock capture call, just moved from route to publisher). 4c adds NEW evidence for publisher-side flow + crash recovery + failure retry.
+753-
+754-### D7 — Razorpay test API keys for staging evidence
+--
+766-- (b) **Defer to Wave-5 or Phase-3 launch gate:** Keep the defect documented. Fix later.
+767-
+768:**Default recommendation:** (a) Include in Wave-4 (folded into 4b or 4c as a small fix). The fix is trivial and closes a documented production-launch prerequisite.
+769-
+770-### D9 — Webhook handler endpoint URL
+--
+796-
+797-The CONDITIONAL qualifier reflects:
+798:1. **Sub-wave structure is required** — 4c (HIGHEST RISK) must get its own Gate Review with extra scrutiny. Bundling 4c into a single Wave-4 implementation authorization is NOT recommended.
+799-2. **`realPayments` flag MUST stay OFF** — Wave-4 implements the retry-invariant mitigation code path but does NOT enable real-mode captures.
+800-3. **`webhookHandler` flag MUST stay OFF in production** — Wave-4 implements the handler but does NOT enable production webhook reception.
+801-4. **`requestHashEnforcement` production enablement is OUT of Wave-4 scope** — deferred from 3c, requires separate authorization.
+802-5. **PostgreSQL-native concurrency evidence is REQUIRED** — same bar as 3a/3b/3c.
+803:6. **3a evidence re-verification strategy (D6)** must be resolved BEFORE 4c implementation begins. Default recommendation: keep 3a evidence + add NEW 4c evidence (Strategy B).
+804-7. **Wave-4 is NOT the final wave** — P0-04, P0-03, P0-06, P0-07 remain LOCKED. Production launch is post-Wave-7.
+
+[Showing results with pagination = limit: 250]
