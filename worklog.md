@@ -6473,3 +6473,57 @@ Bypasses the app layer and confirms identical durable state in PostgreSQL:
 - Evidence JSON committed + pushed to `main` (evidence/wave5-5a/ + this worklog).
 - Wave-5 5a remains OPEN pending Orchestrator S5 review of E6 PostgreSQL evidence.
 - Awaiting Orchestrator decision on Wave-5 5a closure + transition to next wave.
+
+---
+
+## Task ID: 5a-s5-closure — Wave-5 Sub-Wave 5a (P0-04 Refund) S5 PASS / CLOSED Documentation
+
+Timestamp: 2026-08-16 (Orchestrator S5 Decision rendered; IDE closure documentation executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized 5A closure documentation ONLY:
+1. Add "Sub-Wave 5A S5 PASS / CLOSED" section to `WAVE5_EVIDENCE.md`.
+2. Record E1–E6 final evidence summary.
+3. Document Option A — Pending Ledger Semantics as canonical accounting decision.
+4. Append this `5a-s5-closure` entry to `worklog.md`.
+5. Update `docs/TRANSACTION_RETRY_INVARIANT.md` to final IMPLEMENTED / VERIFIED state (now covers both capture + refund flows).
+6. Commit + push closure documentation.
+7. Report commit SHA + final diff summary.
+8. STOP.
+
+### Governance boundaries honored
+- ✅ Did NOT start 5B / P0-03 Reconciliation (LOCKED — separate authorization required).
+- ✅ Did NOT create any new evidence scenario or workflow.
+- ✅ Did NOT reopen 5A evidence (no code/schema/migration changes — documentation only).
+- ✅ Did NOT add any schema/migration changes.
+- ✅ Did NOT authorize production deployment / production migration / realPayments / webhookHandler / requestHashEnforcement.
+- ✅ Did NOT start Wave-6 / Wave-7.
+
+### Work Log
+- Read existing `WAVE5_EVIDENCE.md` (pre-closure state: 🟡 evidence-complete, awaiting S5 review).
+- Read PostgreSQL E1-E5 evidence JSON (`evidence/wave5-5a/evidence-postgresql-5a-pg-ev.json`, ok=true, run `31941354942`) + E6 evidence JSON (`evidence/wave5-5a/evidence-E6-postgresql-5a-pg-ev.json`, ok=true, run `31942679845`) to source exact field values for the closure summary.
+- Updated `WAVE5_EVIDENCE.md`:
+  - Header status → ✅ Sub-Wave 5a S5 PASS / CLOSED (5b LOCKED).
+  - §1 Sub-Wave Status table → 5a = ✅ S5 PASS / CLOSED (SQLite E1-E5 + PostgreSQL E1-E5 + PostgreSQL E6 all PASS); 5b = 🔒 LOCKED.
+  - §2 PostgreSQL evidence (staging) — E1-E5 table → populated with run id `5a-pg-1786875651-1765`, Actions run `31941354942`, completed/success, 5/5 PASS. Per-scenario PASS values transcribed from evidence JSON.
+  - §2 NEW subsection: PostgreSQL evidence (staging) — E6 (refund failure / pending ledger semantics) — 7-step (A-G) flow table + PostgreSQL direct verification summary (Payment=REFUNDED, Refund=REFUNDED, LedgerEntry=4, Dr=Cr=64000, AuditLog PAYMENT_REFUNDED=1, Outbox=PUBLISHED, IdempotencyKey=1, Refund rows=1).
+  - §3 NEW: Option A — Pending Ledger Semantics (Canonical Accounting Decision) — the decision, rationale (why not "ledger only on success"), deterministic state machine table (captured / refund-requested / publisher-fails / publisher-retry-success), what the reversal entries are NOT, invariant provenance table (8 invariants → 5a-E6 step evidence).
+  - §4 NEW: Sub-Wave 5a — S5 PASS / CLOSED (Final Summary) — evidence summary table (E1-E6 × SQLite/PostgreSQL, 12 rows all PASS), S5 closure justification (4 points), boundaries reaffirmed.
+  - §5 NEW: Sub-Wave 5b — P0-03 Reconciliation (LOCKED — separate authorization required). Next governance checkpoint identified.
+  - §6 NEW: Canonical Governance State snapshot at 5a closure.
+  - §7 Stop Point — closure documentation COMPLETE, IDE STOPPING.
+- Updated `docs/TRANSACTION_RETRY_INVARIANT.md`:
+  - Status line → now covers BOTH capture (4c) + refund (5a) flows. Cites 4c-E5 + 5a-E5 + 5a-E6 as empirical proof.
+  - §8.3 Resolution status → expanded to document the refund route's atomic writes + publisher external-call pattern, the Option A pending ledger semantics, and a new empirical-proof table (3 rows: capture / refund / refund-failure-→-retry).
+- Appended this `5a-s5-closure` worklog entry.
+
+### Stage Summary
+- **5A = S5 PASS / CLOSED** (per Orchestrator decision).
+- Closure documentation is documentation-only — NO code, schema, migration, or evidence-scenario changes. All evidence artifacts (SQLite + PostgreSQL E1-E5 + E6 JSONs) were already committed in prior commits (`4801e62`, `98955a9`, `0a761c3`, `b815f3a`, `433c455`).
+- Canonical accounting decision documented: **Option A — Pending Ledger Semantics**. The refund reversal ledger entries are a pending accounting reservation at REFUND_PENDING time, becoming canonical on publisher success without duplication. I-06 (Dr sum === Cr sum) holds at ALL states (pending / failed / refunded).
+- `TRANSACTION_RETRY_INVARIANT` now explicitly covers both capture + refund external calls (both outside `withTransaction()` body, both deferred to outbox publisher).
+- Governance state: 5B LOCKED. Production NOT AUTHORIZED. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF. Wave-6/7 LOCKED.
+- Next governance checkpoint: `Sub-Wave 5B — P0-03 Reconciliation: READ/PLAN-FIRST Gate Review` (separate Orchestrator directive required).
+- IDE is STOPPING after commit + push.

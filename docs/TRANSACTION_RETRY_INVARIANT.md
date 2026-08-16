@@ -3,8 +3,8 @@
 **Document ID:** `3a-arch-doc`
 **Author:** Architectural Documentation Specialist
 **Wave/Sub-Wave:** Wave-3 / Sub-Wave 3a (PROVISIONAL PASS — evidence completion phase)
-**Status:** IMPLEMENTED / VERIFIED — Wave-4 4c S5 PASS / CLOSED. `captureRazorpayPayment()` is no longer inside any `withTransaction()` body. Publisher retry idempotency empirically proven (4c-E5: second publisher run skips capture call). Full enforcement mechanism (lint rule / code-review checklist / CI gate) remains post-production scope.
-**Related worklog entries:** `3a-evidence`, `Task 89 (Sub-Wave 3a Implementation)`.
+**Status:** IMPLEMENTED / VERIFIED — Wave-4 4c S5 PASS / CLOSED + Wave-5 5a S5 PASS / CLOSED. `captureRazorpayPayment()` and `refundRazorpayPayment()` are both OUTSIDE any `withTransaction()` body (deferred to the outbox publisher — Option C). Publisher retry idempotency empirically proven (4c-E5: second publisher run skips capture call; 5a-E5: second publisher run skips refund call; 5a-E6: publisher failure → retry success → no duplicate refund and no duplicate ledger reversal). Full enforcement mechanism (lint rule / code-review checklist / CI gate) remains post-production scope.
+**Related worklog entries:** `3a-evidence`, `Task 89 (Sub-Wave 3a Implementation)`, `4c-evidence`, `5a-evidence`, `5a-e6-postgresql`.
 
 ---
 
@@ -500,39 +500,50 @@ it should include:
 ### 8.3 Resolution status
 
 ```text
-IMPLEMENTED / VERIFIED — Wave-4 4c S5 PASS / CLOSED (capture call moved to publisher, publisher retry idempotency empirically proven via 4c-E5).
+IMPLEMENTED / VERIFIED — Wave-4 4c S5 PASS / CLOSED + Wave-5 5a S5 PASS / CLOSED.
 ```
 
-As of Wave-4 Sub-Wave 4c (Phase 1), `captureRazorpayPayment()` has been
-removed from the `withTransaction()` body in `src/app/api/payments/route.ts`.
-The capture route now:
+As of Wave-4 Sub-Wave 4c, `captureRazorpayPayment()` has been removed from the
+`withTransaction()` body in `src/app/api/payments/route.ts` and deferred to the
+outbox publisher. As of Wave-5 Sub-Wave 5a, `refundRazorpayPayment()` follows
+the same pattern from `src/app/api/payments/refund/route.ts` — it is called by
+the outbox publisher (`mini-services/outbox-publisher/index.ts` →
+`processPaymentRefundRequested()`) OUTSIDE any transaction body.
 
-1. Creates the `Payment` row with `status='CAPTURE_PENDING'` and
-   `capturedAt=null` (capture has NOT yet happened).
-2. Writes the `Order` (PAID), `LedgerEntry` Dr/Cr, `AuditLog`
-   (`PAYMENT_CAPTURE_PENDING`), and `IdempotencyKey` rows atomically in the
-   same transaction.
-3. Enqueues a `PAYMENT_CAPTURE_REQUESTED` outbox event (atomic with the
-   Payment row).
-4. Returns immediately with `status: 'CAPTURE_PENDING'`.
+**Capture route (4c):** Creates `Payment` (CAPTURE_PENDING) + `Order` (PAID) +
+`LedgerEntry` Dr/Cr + `AuditLog` (`PAYMENT_CAPTURE_PENDING`) + `IdempotencyKey`
++ `Outbox` (`PAYMENT_CAPTURE_REQUESTED`) atomically in one txn. Publisher calls
+`captureRazorpayPayment()` outside the txn, then flips `Payment` to `CAPTURED`.
 
-A separate outbox publisher (Wave-4 4c Phase 2) will consume
-`PAYMENT_CAPTURE_REQUESTED` events, call `captureRazorpayPayment()` from
-OUTSIDE any transaction body, and on success flip `Payment.status` to
-`CAPTURED` + emit `PAYMENT_CAPTURED` for realtime fanout. Until the
-publisher is wired up, payments stay in `CAPTURE_PENDING` indefinitely
-(acceptable for `realPayments=false` demo mode; **`realPayments=true`
-MUST NOT be enabled until the publisher exists**).
+**Refund route (5a):** Creates `Refund` (REFUND_PENDING) + reversal
+`LedgerEntry` Dr/Cr (`Dr CONSUMER_REVENUE` + `Cr GATEWAY_RECEIVABLE`) +
+`AuditLog` (`PAYMENT_REFUND_PENDING`) + `IdempotencyKey` + `Outbox`
+(`PAYMENT_REFUND_REQUESTED`) atomically in one txn. Publisher calls
+`refundRazorpayPayment()` outside the txn, then flips `Refund` to `REFUNDED`
+and `Payment` to `REFUNDED` (full refund). The reversal ledger entries are a
+**pending accounting reservation** (Option A — Pending Ledger Semantics; see
+`WAVE5_EVIDENCE.md` §3) that becomes canonical on publisher success WITHOUT
+creating duplicate ledger entries. This is empirically proven by 5a-E6: after
+publisher failure (`simulateFail=true`) the ledger is still exactly 4 entries
+(no duplication), and after retry success the ledger is STILL exactly 4 entries
+(the reversal pair becomes canonical, no new rows inserted).
 
-The remaining enforcement mechanisms (lint rule, code-review checklist,
-CI gate, pre-generated idempotency key for `createRazorpayOrder()`) are
-still deferred — see §8.2.
+**Empirical proof of invariant (both flows):**
 
-The invariant itself is **non-negotiable**: the moment any code path
-places a non-idempotent external call inside a retryable
-`withTransaction()` body without an Option A / B / C mitigation, the
-code is broken by construction and MUST NOT ship to a `realPayments=true`
-environment.
+| Flow | External call | Publisher retry evidence | Result |
+|------|---------------|--------------------------|--------|
+| Capture (4c) | `captureRazorpayPayment()` | 4c-E5 | 2nd publisher run skips capture (Payment already CAPTURED). No duplicate charge. |
+| Refund (5a) | `refundRazorpayPayment()` | 5a-E5 | 2nd publisher run skips refund (Refund already REFUNDED). No duplicate refund. |
+| Refund failure → retry (5a) | `refundRazorpayPayment()` | 5a-E6 (PostgreSQL) | Publisher fail → state unchanged + ledger unduplicated; publisher retry success → Refund REFUNDED + ledger still 4 entries (reversal pair canonical, no dup). |
+
+The remaining enforcement mechanisms (lint rule, code-review checklist, CI gate,
+pre-generated idempotency key for `createRazorpayOrder()`) are still deferred —
+see §8.2.
+
+The invariant itself is **non-negotiable**: the moment any code path places a
+non-idempotent external call inside a retryable `withTransaction()` body
+without an Option A / B / C mitigation, the code is broken by construction and
+MUST NOT ship to a `realPayments=true` environment.
 
 ---
 
