@@ -1,9 +1,10 @@
 # Wave-4 Evidence Document
 
-**Status:** 🟢 Sub-Wave 4a — S5 PASS / CLOSED | 🟡 Sub-Wave 4b — Implementation Authorized (awaiting evidence)
+**Status:** 🟢 4a S5 PASS / CLOSED | 🟢 4b S5 PASS / CLOSED | 🟡 4c Implementation Authorized
 **Created:** 2026-08-16
 **Sub-Wave 4a Closure:** 2026-08-16 (Orchestrator S5 PASS decision)
-**Authorization:** Orchestrator Decision (4a S5 PASS + 4b implementation authorized)
+**Sub-Wave 4b Closure:** 2026-08-16 (Orchestrator S5 PASS decision)
+**Authorization:** Orchestrator Decision (4a + 4b S5 PASS / CLOSED + 4c implementation authorized)
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence.
 
