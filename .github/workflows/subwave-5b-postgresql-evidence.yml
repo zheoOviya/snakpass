@@ -18,7 +18,7 @@ on:
         default: ''
 
 jobs:
-  5b-pg-evidence:
+  pg-evidence-5b:
     name: 5b-PG — P0-03 Reconciliation E1-E6 verification on PostgreSQL
     runs-on: ubuntu-latest
     timeout-minutes: 15
