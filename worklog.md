@@ -5817,3 +5817,52 @@ Stage Summary:
 - Sub-Wave 4c: 🟢 IMPLEMENTATION AUTHORIZED — beginning implementation
 - Production NOT touched. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF.
 
+
+
+---
+Task ID: 4c-implementation-phase1
+Agent: IDE (main)
+Task: Sub-Wave 4c Phase 1 — Move captureRazorpayPayment() out of withTransaction() body
+
+Work Log:
+- Read WAVE4_GATE_REVIEW.md §6.3.3 (4c scope: TRANSACTION_RETRY_INVARIANT mitigation).
+- Read docs/TRANSACTION_RETRY_INVARIANT.md (architectural invariant contract).
+- Read existing src/app/api/payments/route.ts (capture route with captureRazorpayPayment at line 160 INSIDE withTransaction body — the catastrophic-case retry hazard).
+
+Changes to src/app/api/payments/route.ts:
+- Removed `captureRazorpayPayment` from the razorpay import (no longer used in this file).
+- Removed the `captureRazorpayPayment()` call (was at line 160, INSIDE the withTransaction body) and the immediate `if (!captureResult.captured)` 502 path — capture is now deferred to the outbox publisher.
+- Payment.create now writes `status: 'CAPTURE_PENDING'` (was `'CAPTURED'`) and `capturedAt: null` (was `new Date()`); capturedAt will be set by the publisher after capture confirms.
+- AuditLog action changed from `'PAYMENT_CAPTURED'` to `'PAYMENT_CAPTURE_PENDING'`.
+- Outbox event changed from `PAYMENT_CAPTURED` (realtime notification) to `PAYMENT_CAPTURE_REQUESTED` (publisher command). Payload: `{ paymentId, orderId, gatewayPaymentId, amount }`. The publisher will emit `PAYMENT_CAPTURED` itself after capture confirms (Phase 2).
+- Response body `payment.status` changed from `'CAPTURED'` to `'CAPTURE_PENDING'` (capturedAt in response is now null on the capture-route response).
+- logInfo event name changed from `'payment-captured'` to `'payment-capture-pending'`.
+- Kept ALL other writes inside the txn (Payment create, Order update PAID, LedgerEntry Dr, LedgerEntry Cr, AuditLog, IdempotencyKey, Outbox).
+- Kept ALL evidence failure-injection checkpoints as-is (`capture`, `payment`, `order`, `ledger-dr`, `ledger-cr`, `audit`, `outbox`, `idempotency`). The `capture` checkpoint now sits before the first DB write (Payment.create) — still tests txn rollback before any DB write, which is the original intent. Updated the top-of-file comment for the `capture` checkpoint to reflect that captureRazorpayPayment has moved to the publisher.
+- Did NOT modify db.ts, idempotency.ts, schema.prisma, evidence-setup, or evidence-verify (per task scope).
+
+Changes to docs/TRANSACTION_RETRY_INVARIANT.md:
+- Top-level `**Status:**` field changed from `PARTIAL — documented in 3a. ...` to `IMPLEMENTED — Wave-4 4c mitigation complete (capture call moved to publisher). ...` (with note that lint rule / CI gate / code-review checklist still deferred).
+- §8.3 Resolution status code block changed from `PARTIAL — documented in 3a.\nFull enforcement mechanism ... is Wave-3b / 3c scope.` to `IMPLEMENTED — Wave-4 4c mitigation complete (capture call moved to publisher).`
+- §8.3 expanded with a concrete description of the new capture-route flow (Payment CAPTURE_PENDING + capturedAt null + PAYMENT_CAPTURE_REQUESTED outbox event + AuditLog PAYMENT_CAPTURE_PENDING + immediate return) and an explicit note that `realPayments=true` MUST NOT be enabled until the Phase-2 publisher exists.
+
+Verification:
+- `bun run lint` → PASS (no errors, no warnings).
+- Dev server (auto-running on port 3000) hot-reloaded the route with no compile errors; existing `/api/payments/evidence-verify` GETs still return 200.
+
+Constraints honored:
+- ✅ Did NOT enable realPayments (still OFF — demo mode).
+- ✅ Did NOT modify db.ts or idempotency.ts.
+- ✅ Did NOT start Wave-5.
+- ✅ Did NOT modify schema.prisma (CAPTURE_PENDING is a String column value, not an enum — no migration needed).
+- ✅ Did NOT implement the publisher extension (that is 4c Phase 2 — separate task).
+- ✅ Did NOT add a lint rule / CI gate / code-review checklist (those are §8.2 deferred items, not Phase 1 scope).
+- ✅ Kept the evidence failure-injection checkpoints fully intact (still callable, still throw AppError(INTERNAL_ERROR), still test txn rollback).
+
+Stage Summary:
+- Phase 1 complete: capture call no longer inside any withTransaction body.
+- Payment lifecycle now: PAYMENT_PENDING → (route) CAPTURE_PENDING → (publisher, Phase 2) CAPTURED.
+- Outbox now carries PAYMENT_CAPTURE_REQUESTED (publisher will consume) instead of PAYMENT_CAPTURED (realtime notification — moved to publisher emit).
+- Known gap: until the Phase-2 publisher exists, Payments stay in CAPTURE_PENDING indefinitely in demo mode. This is acceptable because realPayments=false (no real capture to perform) and because the 3a/4b evidence suites verify ledger atomicity, not capture confirmation. The 4c evidence runner (separate task) will need a publisher stub or a CAPTURE_PENDING-aware verification.
+- Next: Phase 2 (publisher extension to consume PAYMENT_CAPTURE_REQUESTED) — NOT started. Awaiting Orchestrator direction.
+- Production NOT touched. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF. Wave-5 NOT started.

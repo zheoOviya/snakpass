@@ -6,7 +6,7 @@ import { withErrorHandler, apiError, AppError, IdempotencyKeyReuseError } from '
 import { info as logInfo, newTraceId } from '@/lib/logger'
 import { getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, parseCachedResponse, computeRequestHash } from '@/lib/idempotency'
 import { enqueueOutboxEvent } from '@/lib/outbox'
-import { createRazorpayOrder, verifyRazorpaySignature, captureRazorpayPayment } from '@/lib/razorpay'
+import { createRazorpayOrder, verifyRazorpaySignature } from '@/lib/razorpay'
 import { z } from 'zod'
 
 const captureBodySchema = z.object({
@@ -28,7 +28,7 @@ const captureBodySchema = z.object({
 // is off, so this code is dead in any non-test environment.
 //
 // Valid X-Evidence-Fail-After values (in execution order):
-//   "capture"     — fail after captureRazorpayPayment() (before any DB write)
+//   "capture"     — fail before any DB write (Wave-4 4c: captureRazorpayPayment moved to publisher)
 //   "payment"     — fail after tx.payment.create
 //   "order"       — fail after tx.order.update (status=PAID)
 //   "ledger-dr"   — fail after 1st LedgerEntry (DEBIT)
@@ -156,21 +156,13 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         }
       }
 
-      // Capture payment (gateway call — outside txn if real, mock if demo)
-      const captureResult = await captureRazorpayPayment(body.razorpayPaymentId, order.totalAmount, 'INR')
-
-      if (!captureResult.captured) {
-        return {
-          type: 'error' as const,
-          status: 502,
-          body: { error: { code: 'CAPTURE_FAILED', message: 'Razorpay capture failed', traceId } },
-        }
-      }
-
       // === EVIDENCE CHECKPOINT: capture ===
+      // Wave-4 4c (Phase 1): captureRazorpayPayment() moved OUT of withTransaction body.
+      // Capture is now deferred to the outbox publisher via PAYMENT_CAPTURE_REQUESTED event.
+      // This checkpoint still tests txn rollback before any DB write — invariant preserved.
       evidenceFailAfter('capture', evidenceFailAfterStep)
 
-      // Create Payment record (CAPTURED status)
+      // Create Payment record (CAPTURE_PENDING — capture deferred to outbox publisher per Wave-4 4c)
       const payment = await tx.payment.create({
         data: {
           orderId: order.id,
@@ -180,8 +172,8 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
           gatewaySignature: body.razorpaySignature,
           amount: order.totalAmount,
           currency: 'INR',
-          status: 'CAPTURED',
-          capturedAt: new Date(),
+          status: 'CAPTURE_PENDING',
+          capturedAt: null, // Set by publisher after capture confirms
           idempotencyKey: idempotencyKey,
         },
       })
@@ -226,12 +218,12 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
       // === EVIDENCE CHECKPOINT: ledger-cr (KEY TEST POINT — all 4 writes done) ===
       evidenceFailAfter('ledger-cr', evidenceFailAfterStep)
 
-      // Audit log
+      // Audit log — Wave-4 4c: PAYMENT_CAPTURE_PENDING (capture deferred to publisher)
       await tx.auditLog.create({
         data: {
           actorId: session.userId,
           actorRole: session.role,
-          action: 'PAYMENT_CAPTURED',
+          action: 'PAYMENT_CAPTURE_PENDING',
           metadata: JSON.stringify({ orderId: order.id, paymentId: payment.id, amount: order.totalAmount }),
         },
       })
@@ -239,28 +231,29 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
       // === EVIDENCE CHECKPOINT: audit ===
       evidenceFailAfter('audit', evidenceFailAfterStep)
 
-      // Outbox event (atomic with payment)
+      // Outbox event — Wave-4 4c: PAYMENT_CAPTURE_REQUESTED (publisher calls captureRazorpayPayment).
+      // The publisher emits PAYMENT_CAPTURED after capture confirms (no longer emitted here).
       await enqueueOutboxEvent(tx, {
-        eventType: 'PAYMENT_CAPTURED',
+        eventType: 'PAYMENT_CAPTURE_REQUESTED',
         aggregateType: 'Payment',
         aggregateId: payment.id,
         payload: {
           paymentId: payment.id,
           orderId: order.id,
+          gatewayPaymentId: body.razorpayPaymentId,
           amount: order.totalAmount,
-          status: 'CAPTURED',
         },
       })
 
       // === EVIDENCE CHECKPOINT: outbox ===
       evidenceFailAfter('outbox', evidenceFailAfterStep)
 
-      // Build response body
+      // Build response body — Wave-4 4c: status=CAPTURE_PENDING (capture deferred to publisher)
       const responseBody = {
         payment: {
           id: payment.id,
           orderId: order.id,
-          status: 'CAPTURED',
+          status: 'CAPTURE_PENDING',
           amount: payment.amount,
           currency: payment.currency,
           gatewayPaymentId: payment.gatewayPaymentId,
@@ -290,7 +283,7 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
       return NextResponse.json(result.body, { status: result.status })
     }
 
-    logInfo('payment-captured', { orderId: body.orderId, paymentId: result.payment.id }, traceId)
+    logInfo('payment-capture-pending', { orderId: body.orderId, paymentId: result.payment.id }, traceId)
     return NextResponse.json(result.body)
   } catch (error) {
     // Sub-Wave 3c: IdempotencyKeyReuseError — same key + materially different request body

@@ -3,7 +3,7 @@
 **Document ID:** `3a-arch-doc`
 **Author:** Architectural Documentation Specialist
 **Wave/Sub-Wave:** Wave-3 / Sub-Wave 3a (PROVISIONAL PASS — evidence completion phase)
-**Status:** PARTIAL — documented in 3a. Full enforcement mechanism (lint rule / code-review checklist / CI gate) is Wave-3b/3c scope.
+**Status:** IMPLEMENTED — Wave-4 4c mitigation complete (capture call moved to publisher). Full enforcement mechanism (lint rule / code-review checklist / CI gate) remains Wave-3b/3c scope, but the catastrophic-case capture call is no longer inside any `withTransaction()` body.
 **Related worklog entries:** `3a-evidence`, `Task 89 (Sub-Wave 3a Implementation)`.
 
 ---
@@ -500,10 +500,33 @@ it should include:
 ### 8.3 Resolution status
 
 ```text
-PARTIAL — documented in 3a.
-Full enforcement mechanism (lint rule / CI gate / outbox publisher
-for captures) is Wave-3b / 3c scope.
+IMPLEMENTED — Wave-4 4c mitigation complete (capture call moved to publisher).
 ```
+
+As of Wave-4 Sub-Wave 4c (Phase 1), `captureRazorpayPayment()` has been
+removed from the `withTransaction()` body in `src/app/api/payments/route.ts`.
+The capture route now:
+
+1. Creates the `Payment` row with `status='CAPTURE_PENDING'` and
+   `capturedAt=null` (capture has NOT yet happened).
+2. Writes the `Order` (PAID), `LedgerEntry` Dr/Cr, `AuditLog`
+   (`PAYMENT_CAPTURE_PENDING`), and `IdempotencyKey` rows atomically in the
+   same transaction.
+3. Enqueues a `PAYMENT_CAPTURE_REQUESTED` outbox event (atomic with the
+   Payment row).
+4. Returns immediately with `status: 'CAPTURE_PENDING'`.
+
+A separate outbox publisher (Wave-4 4c Phase 2) will consume
+`PAYMENT_CAPTURE_REQUESTED` events, call `captureRazorpayPayment()` from
+OUTSIDE any transaction body, and on success flip `Payment.status` to
+`CAPTURED` + emit `PAYMENT_CAPTURED` for realtime fanout. Until the
+publisher is wired up, payments stay in `CAPTURE_PENDING` indefinitely
+(acceptable for `realPayments=false` demo mode; **`realPayments=true`
+MUST NOT be enabled until the publisher exists**).
+
+The remaining enforcement mechanisms (lint rule, code-review checklist,
+CI gate, pre-generated idempotency key for `createRazorpayOrder()`) are
+still deferred — see §8.2.
 
 The invariant itself is **non-negotiable**: the moment any code path
 places a non-idempotent external call inside a retryable
