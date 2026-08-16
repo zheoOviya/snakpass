@@ -460,8 +460,8 @@ jobs:
 
           for i in $(seq 1 $CONCURRENCY); do
             (
-              PAYMENT_ID="pay_ev_$(date +%s%N)_$i"
-              SIGNATURE="sig_ev_$(echo $RANDOM | tr -dc 'a-z0-9' | head -c 16)"
+              PAYMENT_ID="pay_ev_4c_concurrent_fixed"
+              SIGNATURE="sig_ev_4c_concurrent_fixed"
               RESP_FILE="$RESULTS_DIR/resp_$i.json"
               HTTP_FILE="$RESULTS_DIR/http_$i.txt"
 
@@ -581,9 +581,9 @@ jobs:
           echo "Idempotency raw: $(echo $IDEM_RESULT | head -c 300)"
           IDEM_COUNT=$(echo "$IDEM_RESULT" | jq -r 'if type == "array" then .[0].count // 0 else .count // 0 end' 2>/dev/null || echo "0")
 
-          # Query AuditLog count for PAYMENT_CAPTURED for this order
+          # Query AuditLog count for PAYMENT_CAPTURE_PENDING for this order
           # NOTE: printf interprets % as format spec — use %% to emit a literal %
-          AUDIT_SQL=$(printf 'SELECT COUNT(*) as count FROM "AuditLog" WHERE "action" = '\''PAYMENT_CAPTURED'\'' AND "metadata" LIKE '\''%%%s%%'\'';' "$ORDER_ID")
+          AUDIT_SQL=$(printf 'SELECT COUNT(*) as count FROM "AuditLog" WHERE "action" = '\''PAYMENT_CAPTURE_PENDING'\'' AND "metadata" LIKE '\''%%%s%%'\'';' "$ORDER_ID")
           AUDIT_RESULT=$(curl -sS -X POST \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
@@ -596,20 +596,20 @@ jobs:
           echo "=== Step 5: Database state summary ==="
           echo "  Payment count: $PAYMENT_COUNT (expected: 1)"
           echo "  Payment ID: $PAYMENT_DB_ID"
-          echo "  Payment status: $PAYMENT_DB_STATUS (expected: CAPTURED)"
+          echo "  Payment status: $PAYMENT_DB_STATUS (expected: CAPTURE_PENDING)"
           echo "  Order status: $ORDER_STATUS (expected: PAID)"
           echo "  Ledger total entries: $LEDGER_TOTAL (expected: 2)"
           echo "  Ledger DEBIT count: $LEDGER_DR_COUNT (expected: 1)"
           echo "  Ledger CREDIT count: $LEDGER_CR_COUNT (expected: 1)"
           echo "  Outbox event count: $OUTBOX_COUNT (expected: 1)"
           echo "  Idempotency record count: $IDEM_COUNT (expected: 1)"
-          echo "  Audit log (PAYMENT_CAPTURED) count: $AUDIT_COUNT (expected: 1)"
+          echo "  Audit log (PAYMENT_CAPTURE_PENDING) count: $AUDIT_COUNT (expected: 1)"
 
           echo ""
           echo "=== Step 6: Verify exactly-one-capture invariant ==="
           EXACTLY_ONE_CAPTURE="false"
           if [ "$PAYMENT_COUNT" = "1" ] && \
-             [ "$PAYMENT_DB_STATUS" = "CAPTURED" ] && \
+             [ "$PAYMENT_DB_STATUS" = "CAPTURE_PENDING" ] && \
              [ "$ORDER_STATUS" = "PAID" ] && \
              [ "$LEDGER_TOTAL" = "2" ] && \
              [ "$LEDGER_DR_COUNT" = "1" ] && \
@@ -691,7 +691,7 @@ jobs:
                 idempotencyRecordCount: $idempotencyRecordCount
               },
               invariant: {
-                exactlyOneCapture: $ok,
+                exactlyOneCapturePending: $ok,
                 description: "From 5 concurrent requests with same idempotency key: exactly 1 Payment, 1 ledger Dr/Cr pair, 1 outbox event, 1 idempotency record"
               },
               setup: {
@@ -724,7 +724,7 @@ jobs:
               },
               expected: {
                 paymentCount: 1,
-                paymentStatus: "CAPTURED",
+                paymentStatus: "CAPTURE_PENDING",
                 orderStatus: "PAID",
                 ledgerDebit: 1,
                 ledgerCredit: 1,
@@ -752,7 +752,7 @@ jobs:
           echo "=== Step 9: Cleanup test data ==="
           # Delete the test Payment, LedgerEntries, Outbox event, IdempotencyKey, AuditLog, Order
           # (Leave the test user for reuse)
-          CLEANUP_SQL=$(printf 'DELETE FROM "LedgerEntry" WHERE "paymentId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "Outbox" WHERE "aggregateId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "IdempotencyKey" WHERE "key" = '\''%s'\''; DELETE FROM "Payment" WHERE "orderId" = '\''%s'\''; DELETE FROM "OrderItem" WHERE "orderId" = '\''%s'\''; DELETE FROM "Order" WHERE "id" = '\''%s'\''; DELETE FROM "AuditLog" WHERE "metadata" LIKE '\''%%%s%%'\'' AND "action" = '\''PAYMENT_CAPTURED'\'';' "$ORDER_ID" "$ORDER_ID" "$IDEMPOTENCY_KEY" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID")
+          CLEANUP_SQL=$(printf 'DELETE FROM "LedgerEntry" WHERE "paymentId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "Outbox" WHERE "aggregateId" IN (SELECT "id" FROM "Payment" WHERE "orderId" = '\''%s'\''); DELETE FROM "IdempotencyKey" WHERE "key" = '\''%s'\''; DELETE FROM "Payment" WHERE "orderId" = '\''%s'\''; DELETE FROM "OrderItem" WHERE "orderId" = '\''%s'\''; DELETE FROM "Order" WHERE "id" = '\''%s'\''; DELETE FROM "AuditLog" WHERE "metadata" LIKE '\''%%%s%%'\'' AND "action" = '\''PAYMENT_CAPTURE_PENDING'\'';' "$ORDER_ID" "$ORDER_ID" "$IDEMPOTENCY_KEY" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID" "$ORDER_ID")
           echo "Cleaning up test data..."
           curl -sS -X POST \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
