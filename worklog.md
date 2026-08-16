@@ -5420,3 +5420,43 @@ Stage Summary:
 - STOP: IDE is not self-closing 3c. Awaiting Orchestrator S5 decision.
 - Production NOT touched. realPayments OFF. requestHashEnforcement OFF (production). 3a/3b NOT reopened.
 
+
+---
+Task ID: 3c-evidence-remediation
+Agent: IDE (main)
+Task: Sub-Wave 3c evidence remediation — execute E3 + E4 (null-hash backward-compat)
+
+Work Log:
+- Received Orchestrator directive: 3c NOT CLOSED. Evidence incomplete — E3 + E4 not executed.
+- Orchestrator authorized ONLY E3 + E4 evidence remediation (no implementation changes, no 3a/3b reopening, no production, no Wave-4).
+- Created new evidence-setup scenario 'null-hash-backward-compat' that creates a pre-existing IdempotencyKey record with requestHash=null (simulating pre-3c record) + a real Order.
+- Wrote E3/E4 evidence runner script (scripts/wave3-3c-evidence-e3-e4.mjs) that:
+  - E3: Pre-existing null-hash record + same key + DIFFERENT body (qty=3) + flag ON → expects cached response, no 422
+  - E4: Pre-existing null-hash record + same key + SAME body (qty=1) + flag ON → expects cached response, no 422
+  - Merges E1/E2/E5 from previous run into a complete 5-scenario evidence package
+- Ran E3 + E4 tests with flag ON (FEATURE_REQUEST_HASH_ENFORCEMENT=true):
+  - E3: PASS ✅ — HTTP 200 with same orderId, no 422, stored requestHash confirmed null, no new Order created
+  - E4: PASS ✅ — HTTP 200 with same orderId, no 422, stored requestHash confirmed null, no new Order created
+- Complete 5-scenario evidence package assembled:
+  - E1 (hash-match): PASS ✅
+  - E2 (hash-mismatch→422): PASS ✅
+  - E3 (null-hash + diff body): PASS ✅ (remediation)
+  - E4 (null-hash + same body): PASS ✅ (remediation)
+  - E5 (5-concurrent flag-ON): PASS ✅
+  - Overall ok: true
+- Evidence: evidence/wave3-3c/evidence-3c-complete-3c-remed-1786839940410-78fc4f22.json (ok:true, 5/5 PASS)
+- Updated WAVE3_EVIDENCE.md:
+  - Added 3c-E3 + 3c-E4 sections (remediation results)
+  - Updated 3c evidence summary table (16 criteria, ALL PASS)
+  - Status: IMPLEMENTATION COMPLETE / EVIDENCE-COMPLETE (5/5) / S5 PENDING
+  - 3c NOT marked as CLOSED (per Orchestrator directive)
+- Verified production state: schema=postgresql, .env=clean, lint=PASS.
+
+Stage Summary:
+- Sub-Wave 3c: 5/5 evidence scenarios PASS (E1-E5). PostgreSQL-native concurrency PROVEN (3c-PG-E1).
+- E3 + E4 remediation: PASS — null-hash backward-compat empirically proven (not just code-analysis).
+- Evidence: evidence/wave3-3c/evidence-3c-complete-3c-remed-1786839940410-78fc4f22.json (ok:true)
+- Status: IMPLEMENTATION COMPLETE / EVIDENCE-COMPLETE (5/5) / S5 PENDING
+- 3c NOT self-closed. NOT marked as CLOSED. Awaiting Orchestrator S5 review.
+- Production NOT touched. realPayments OFF. requestHashEnforcement OFF (production). 3a/3b NOT reopened. Wave-4 NOT started.
+

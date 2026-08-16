@@ -1,11 +1,11 @@
 # Wave-3 Evidence Document
 
-**Status:** 🟢 3a S5 PASS / CLOSED | 🟢 3b S5 PASS / CLOSED | 🟡 3c Evidence-Complete (awaiting Orchestrator S5 review)
+**Status:** 🟢 3a S5 PASS / CLOSED | 🟢 3b S5 PASS / CLOSED | 🟡 3c Evidence-Complete (5/5 PASS, awaiting Orchestrator S5 review)
 **Created:** 2026-08-15
 **Sub-Wave 3a Closure:** 2026-08-15 (Orchestrator S5 PASS decision)
 **Sub-Wave 3b Closure:** 2026-08-15 (Orchestrator S5 PASS decision)
-**Sub-Wave 3c Evidence Complete:** 2026-08-15 (SQLite 3/3 PASS + PostgreSQL PASS)
-**Authorization:** Orchestrator Decision (3a S5 PASS + 3b S5 PASS + 3c implementation authorized)
+**Sub-Wave 3c Evidence Complete:** 2026-08-15 (5/5 SQLite PASS + PostgreSQL PASS — awaiting S5 review)
+**Authorization:** Orchestrator Decision (3a S5 PASS + 3b S5 PASS + 3c implementation + evidence remediation authorized)
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence.
 > It contains gate criteria, acceptance criteria, evidence requirements, owner/task
@@ -983,6 +983,20 @@ realPayments  🚫 OFF
 - **Test:** Same key + different body (qty=1 vs qty=3) → 422 IDEMPOTENCY_KEY_REUSE.
 - **Result:** Request A 200, Request B 422. `errorCode: IDEMPOTENCY_KEY_REUSE`. `retryStrategy: new-key`. Exactly 1 Order (no 2nd created). Hash stored.
 
+#### 3c-E3: Null-hash + different body + flag ON — ✅ PASS (Remediation)
+- **Test:** Pre-existing IdempotencyKey record with `requestHash=null` (simulating pre-3c record) + same key + different body (qty=3) + flag ON.
+- **Expected:** Cached response (no 422) — hash check skipped because stored requestHash is null (backward-compatible).
+- **Result:** HTTP 200 with same orderId (cached response returned). No 422. No new Order created. Stored requestHash confirmed null.
+- **Evidence:** `evidence/wave3-3c/evidence-3c-complete-3c-remed-1786839940410-78fc4f22.json`
+- **Proves:** Pre-3c records (null hash) are backward-compatible — hash check is skipped regardless of flag state.
+
+#### 3c-E4: Null-hash + same body + flag ON — ✅ PASS (Remediation)
+- **Test:** Pre-existing IdempotencyKey record with `requestHash=null` + same key + same body (qty=1) + flag ON.
+- **Expected:** Cached response (no 422) — hash check skipped because stored requestHash is null.
+- **Result:** HTTP 200 with same orderId (cached response returned). No 422. No new Order created. Stored requestHash confirmed null.
+- **Evidence:** `evidence/wave3-3c/evidence-3c-complete-3c-remed-1786839940410-78fc4f22.json`
+- **Proves:** Same-body replay works with pre-3c records regardless of flag state.
+
 #### 3c-E5: 5-concurrent same key + same body flag-ON — ✅ PASS
 - **Test:** 5 concurrent POST /api/orders with same key + same body (flag ON).
 - **Result:** All 5 returned 200 with same orderId. No 422. Exactly 1 Order. Hash stored.
@@ -1058,17 +1072,21 @@ ok = true
 | 4 | 5-concurrent flag-ON (exactly 1 Order, no 422) | ✅ PASS | SQLite 3c-E5 + PostgreSQL 3c-PG-E1 |
 | 5 | PostgreSQL-native concurrency (flag ON) | ✅ PASS | `evidence/wave3-3c/evidence-postgresql-3c-pg-ev.json` (run 31916110251) |
 | 6 | requestHashEnforcement flag default OFF | ✅ PASS | `deployment.ts` (default false) |
-| 7 | Backward-compat (null hash → skip check) | ✅ PASS | Code-level guarantee in `getCachedResponse` |
-| 8 | IdempotencyKeyReuseError non-retryable | ✅ PASS | Not in `isRetryableConflict` set |
-| 9 | realPayments not enabled | ✅ PASS | `realPayments=false` throughout |
-| 10 | No production deployment | ✅ PASS | Staging only |
-| 11 | No production migration | ✅ PASS | Staging migration only (workflow run 31915789113) |
-| 12 | requestHashEnforcement NOT enabled in production | ✅ PASS | Flag OFF in production env |
-| 13 | 3a/3b evidence NOT re-run (11 scenarios CLOSED) | ✅ PASS | Reused, not re-proven |
-| 14 | Lint PASS | ✅ PASS | `bun run lint` clean |
-| 15 | Schema/env restored to production state | ✅ PASS | postgresql provider + clean .env |
+| 7 | Backward-compat null-hash + different body (flag ON) | ✅ PASS | SQLite 3c-E3 (remediation) |
+| 8 | Backward-compat null-hash + same body (flag ON) | ✅ PASS | SQLite 3c-E4 (remediation) |
+| 9 | IdempotencyKeyReuseError non-retryable | ✅ PASS | Not in `isRetryableConflict` set |
+| 10 | realPayments not enabled | ✅ PASS | `realPayments=false` throughout |
+| 11 | No production deployment | ✅ PASS | Staging only |
+| 12 | No production migration | ✅ PASS | Staging migration only (workflow run 31915789113) |
+| 13 | requestHashEnforcement NOT enabled in production | ✅ PASS | Flag OFF in production env |
+| 14 | 3a/3b evidence NOT re-run (11 scenarios CLOSED) | ✅ PASS | Reused, not re-proven |
+| 15 | Lint PASS | ✅ PASS | `bun run lint` clean |
+| 16 | Schema/env restored to production state | ✅ PASS | postgresql provider + clean .env |
 
-**Sub-Wave 3c: ALL EVIDENCE CRITERIA PASS. C1 requestHash + PostgreSQL-native concurrency PROVEN.**
+**Sub-Wave 3c: ALL 5 EVIDENCE SCENARIOS PASS (E1-E5). C1 requestHash + PostgreSQL-native concurrency PROVEN.**
+
+**Status: IMPLEMENTATION COMPLETE / EVIDENCE-COMPLETE (5/5) / S5 PENDING — awaiting Orchestrator review.**
+**3c is NOT self-closed. NOT marked as CLOSED.**
 
 ### Governance Compliance
 

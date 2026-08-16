@@ -83,6 +83,82 @@ export async function GET(req: Request) {
     }
   }
 
+  // Sub-Wave 3c E3/E4: For null-hash backward-compat tests, create a PRE-EXISTING
+  // IdempotencyKey record with requestHash=null (simulating a pre-3c record).
+  // The test then sends a request with the SAME key + flag ON, and verifies
+  // that the hash check is skipped (backward-compatible behavior).
+  let preExistingIdempotencyKey = null
+  let preExistingResourceId = null
+  let preExistingResponseBody = null
+  if (scenario === 'null-hash-backward-compat') {
+    // Create a real Order (so the cached response is valid)
+    const total = menuItem.price
+    const otp = String(Math.floor(100000 + Math.random() * 900000))
+    const now = new Date().toISOString()
+    const preExistingOrder = await db.order.create({
+      data: {
+        userId: user.id,
+        restaurantId: restaurant.id,
+        status: 'CONFIRMED',
+        totalAmount: total,
+        pickupOtp: otp,
+        isCatering: false,
+        itemsCount: 1,
+        statusHistory: JSON.stringify([{ status: 'CONFIRMED', at: now }]),
+        orderItems: {
+          create: [{
+            menuItemId: menuItem.id,
+            name: menuItem.name,
+            price: menuItem.price,
+            quantity: 1,
+            subtotal: menuItem.price,
+          }],
+        },
+      },
+    })
+    preExistingResourceId = preExistingOrder.id
+
+    // Build the cached response body (matching what orders/route.ts would return)
+    preExistingResponseBody = JSON.stringify({
+      order: {
+        id: preExistingOrder.id,
+        status: 'CONFIRMED',
+        totalAmount: total,
+        pickupOtp: otp,
+        isCatering: false,
+        headcount: null,
+        itemsCount: 1,
+        note: null,
+        createdAt: preExistingOrder.createdAt,
+        updatedAt: preExistingOrder.updatedAt,
+        statusHistory: JSON.stringify([{ status: 'CONFIRMED', at: now }]),
+        restaurant: { id: restaurant.id, name: restaurant.name },
+        items: [{
+          id: 'pre-existing-item-id',
+          menuItemId: menuItem.id,
+          name: menuItem.name,
+          price: menuItem.price,
+          quantity: 1,
+          subtotal: menuItem.price,
+        }],
+      },
+    })
+
+    // Create the IdempotencyKey record with requestHash=NULL (simulating pre-3c)
+    preExistingIdempotencyKey = `ev-3c-nullhash-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    await db.idempotencyKey.create({
+      data: {
+        key: preExistingIdempotencyKey,
+        resourceType: 'Order',
+        resourceId: preExistingOrder.id,
+        responseStatus: 200,
+        responseBody: preExistingResponseBody,
+        requestHash: null, // ← KEY: null hash (pre-3c record)
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+      },
+    })
+  }
+
   // Create a session for the test user
   const sessionToken = await createSession(user.id, 'CONSUMER')
   const csrfToken = await setSessionCookie(sessionToken)
@@ -103,6 +179,10 @@ export async function GET(req: Request) {
     altMenuItemId: altMenuItem?.id ?? null,
     altMenuItemName: altMenuItem?.name ?? null,
     altMenuItemPrice: altMenuItem?.price ?? null,
+    // Sub-Wave 3c E3/E4: pre-existing null-hash record info
+    preExistingIdempotencyKey,
+    preExistingOrderId: preExistingResourceId,
+    preExistingResponseBody,
     evidenceTestMode: true,
   })
 }
