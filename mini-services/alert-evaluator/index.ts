@@ -136,8 +136,20 @@ async function evaluateAlertRules(): Promise<EvaluationCycle> {
   const paymentSuccessRate = totalOrders > 0 ? Math.round(((totalOrders - cancelledOrders) / totalOrders) * 100) : 100
   evaluateAndFire(results, 'payment-success-rate', 'payment_success_rate', paymentSuccessRate, 95, 'lt')
 
-  // 5. Reconciliation mismatch (0 — P0-03 not yet implemented)
-  evaluateAndFire(results, 'reconciliation-mismatch', 'reconciliation_mismatch_count', 0, 0, 'gt')
+  // 5. Reconciliation mismatch (P0-03 Wave-5 Sub-Wave 5b — now implemented)
+  //    Count of unresolved ReconciliationFinding rows. When > 0, the
+  //    'reconciliation-mismatch' alert fires (severity: critical).
+  let reconciliationMismatchCount = 0
+  try {
+    // The ReconciliationFinding table may not exist on fresh DBs (pre-5b migration).
+    // Guard with try/catch so the alert-evaluator doesn't crash.
+    reconciliationMismatchCount = await db.reconciliationFinding.count({
+      where: { resolvedAt: null },
+    })
+  } catch {
+    reconciliationMismatchCount = 0 // table not yet migrated (pre-5b)
+  }
+  evaluateAndFire(results, 'reconciliation-mismatch', 'reconciliation_mismatch_count', reconciliationMismatchCount, 0, 'gt')
 
   // 6. Auth failure rate
   const recentAuthFailures = await db.auditLog.count({

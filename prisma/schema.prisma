@@ -490,3 +490,98 @@ model Refund {
   @@index([paymentId, status])
   @@index([status, createdAt])
 }
+
+// ----------------------------------------
+// P0-03 Wave-5 Sub-Wave 5b — Reconciliation (detection-only)
+// ----------------------------------------
+// Two Class-2 ADDITIVE models that store the audit trail of reconciliation
+// runs + their findings. The reconciliation job is READ-ONLY with respect to
+// all money-state tables (Payment, Refund, LedgerEntry, Outbox, WebhookEvent,
+// IdempotencyKey, AuditLog). Its only writes are to these two tables + to
+// ExceptionQueue (via the existing reportInvariantViolation() P0-28 path).
+//
+// ReconciliationRun: one row per reconciliation cycle (cron / manual / evidence).
+// Tracks when it started, completed, what it checked, and what it found.
+//
+// ReconciliationFinding: one row per detected mismatch (deduped by
+// (mismatchClass, entityId) while unresolved — a second run for the same
+// mismatch updates lastSeenAt, NOT a new row). High-severity findings are
+// routed to ExceptionQueue via reportInvariantViolation() (exceptionId FK).
+//
+// SAFETY CONTRACT (Orchestrator hard boundary):
+//   - Reconciliation NEVER writes to Payment, Refund, LedgerEntry, Outbox,
+//     WebhookEvent, IdempotencyKey, or AuditLog.
+//   - Reconciliation NEVER makes external Razorpay API calls.
+//   - Reconciliation NEVER triggers capture / refund / outbox enqueue.
+//   - Reconciliation NEVER performs automatic financial correction.
+//   - Its job is: detect → classify → record → report. Repair is a separate
+//     authorization boundary (5C or dedicated Orchestrator directive).
+model ReconciliationRun {
+  id              String   @id @default(cuid())
+  // What triggered this run: 'cron' | 'manual' | 'evidence'
+  // (renamed from `trigger` — that's a reserved keyword in SQLite/Prisma)
+  triggerType     String   @default("cron")
+  // Status of the run itself: RUNNING | COMPLETED | FAILED
+  status          String   @default("RUNNING")
+  startedAt       DateTime @default(now())
+  completedAt     DateTime?
+  // Summary counts (populated on completion)
+  paymentsChecked Int      @default(0)
+  refundsChecked  Int      @default(0)
+  outboxChecked    Int      @default(0)
+  webhooksChecked  Int      @default(0)
+  findingsCount    Int      @default(0)
+  // The mismatch_count metric value emitted for this run (activates the
+  // existing 'reconciliation-mismatch' alert rule in alerting.ts).
+  mismatchCount    Int      @default(0)
+  // Error tracking (if the run itself failed)
+  lastError        String?
+  findings         ReconciliationFinding[]
+
+  @@index([status, startedAt])
+}
+
+model ReconciliationFinding {
+  id              String   @id @default(cuid())
+  runId           String
+  run             ReconciliationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  // Mismatch class (M1-M17 from WAVE5_5B_GATE_REVIEW.md §2 D4)
+  // e.g. "M1_LEDGER_IMBALANCE", "M9_STUCK_CAPTURE_PENDING", "M10_STUCK_REFUND_PENDING"
+  mismatchClass   String
+  // Severity: CRITICAL | HIGH | MEDIUM
+  // CRITICAL/HIGH → routed to ExceptionQueue via reportInvariantViolation()
+  severity        String
+  // The affected entity type: "Payment" | "Refund" | "Outbox" | "WebhookEvent"
+  entityType      String
+  // The affected entity id (paymentId / refundId / outbox id / webhookEvent id)
+  entityId        String
+  // Full state snapshot at detection time (JSON — the evidence for the finding)
+  stateSnapshot   String
+  // Human-readable description of the mismatch
+  description     String
+  // Recommended remediation (informational only — NOT auto-applied)
+  recommendedRemediation String?
+  // ExceptionQueue entry id (set only for CRITICAL/HIGH findings routed via
+  // reportInvariantViolation()). NULL for MEDIUM findings (logged + recorded
+  // but not frozen).
+  exceptionId     String?
+  // Detection timestamps (idempotency: a second run for the same mismatch
+  // updates lastSeenAt, NOT a new row)
+  firstSeenAt     DateTime @default(now())
+  lastSeenAt      DateTime @default(now())
+  // Resolution tracking (admin action — manual, NOT automatic)
+  resolvedAt      DateTime?
+  resolvedBy      String?
+  resolutionNote  String?
+
+  // Idempotency: one unresolved finding per (mismatchClass, entityId).
+  // A partial unique index on (mismatchClass, entityId) WHERE resolvedAt IS NULL
+  // is created in the migration SQL. Prisma's @unique creates a full unique
+  // index (including resolvedAt) which allows multiple resolved findings for
+  // the same (mismatchClass, entityId) over time (audit trail) while preventing
+  // duplicate unresolved findings.
+  @@unique([mismatchClass, entityId, resolvedAt])
+  @@index([severity, resolvedAt])
+  @@index([entityType, entityId])
+  @@index([runId])
+}

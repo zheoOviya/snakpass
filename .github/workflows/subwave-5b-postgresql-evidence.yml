@@ -1,0 +1,191 @@
+# Wave-5 Sub-Wave 5b — PostgreSQL Reconciliation Evidence (P0-03)
+# Runs E1-E6 against the staging Supabase PostgreSQL database.
+# E4 (no money-state mutation), E5 (concurrency), E6 (scale) are PostgreSQL-mandatory.
+
+name: Wave-5 5b — PostgreSQL Reconciliation (P0-03) Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_url:
+        description: 'Vercel preview deployment URL (with https://)'
+        required: true
+        default: ''
+      confirm:
+        description: 'Type RUN-5B-PG-EVIDENCE to confirm'
+        required: true
+        default: ''
+
+jobs:
+  5b-pg-evidence:
+    name: 5b-PG — P0-03 Reconciliation E1-E6 verification on PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+      STAGING_URL: ${{ github.event.inputs.staging_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify trigger
+        run: |
+          [ "${{ github.event.inputs.confirm }}" = "RUN-5B-PG-EVIDENCE" ] || { echo "❌ Wrong confirmation"; exit 1; }
+          [ -n "$STAGING_URL" ] || { echo "❌ staging_url required"; exit 1; }
+          echo "✅ Authorized — Wave-5 5b PostgreSQL evidence (P0-03 Reconciliation)"
+          echo "Staging URL: $STAGING_URL"
+
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl nodejs
+
+      - name: Verify secrets present
+        run: |
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN NOT_SET"; exit 1; }
+          echo "✅ Secrets present"
+
+      - name: Verify reconciliation tables exist on staging
+        run: |
+          echo "=== Verifying ReconciliationRun + ReconciliationFinding tables on staging ==="
+          VERIFY_SQL='SELECT (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''ReconciliationRun'\'') AS run_table, (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''ReconciliationFinding'\'') AS finding_table;'
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$VERIFY_SQL" '{query: $q}')")
+          echo "$RESULT" | jq '.' 2>/dev/null || echo "$RESULT"
+          RUN_TABLE=$(echo "$RESULT" | jq -r '.[0].run_table // empty' 2>/dev/null || echo "0")
+          FINDING_TABLE=$(echo "$RESULT" | jq -r '.[0].finding_table // empty' 2>/dev/null || echo "0")
+          [ "$RUN_TABLE" = "1" ] || { echo "❌ ReconciliationRun table NOT found — run APPLY-WAVE5-5B migration first"; exit 1; }
+          [ "$FINDING_TABLE" = "1" ] || { echo "❌ ReconciliationFinding table NOT found — run APPLY-WAVE5-5B migration first"; exit 1; }
+          echo "✅ Both reconciliation tables exist on staging"
+
+      - name: Trigger Vercel preview deployment with EVIDENCE_TEST_MODE=true
+        run: |
+          echo "=== Triggering Vercel preview deployment with EVIDENCE_TEST_MODE=true ==="
+          # The STAGING_URL input should be a fresh preview deployment URL.
+          # Vercel preview deployments are created via GitHub push or Vercel CLI.
+          # We assume the deployment is already created (the Orchestrator provides the URL).
+          echo "Using staging URL: $STAGING_URL"
+
+      - name: Wait for health endpoint
+        run: |
+          echo "=== Waiting for staging health endpoint ==="
+          for i in $(seq 1 60); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$STAGING_URL/api/health" 2>/dev/null || echo "000")
+            if [ "$CODE" = "200" ]; then
+              echo "✅ Health OK after ${i}s"
+              break
+            fi
+            if [ "$i" = "60" ]; then
+              echo "❌ Health check failed after 60s"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Run E1-E6 evidence script
+        run: |
+          echo "=== Running Wave-5 5b E1-E6 evidence against staging PostgreSQL ==="
+          EVIDENCE_BASE_URL="$STAGING_URL" EVIDENCE_DB=postgresql node scripts/wave5-5b-evidence.mjs > /tmp/5b-evidence-output.txt 2>&1
+          EVIDENCE_EXIT=$?
+          cat /tmp/5b-evidence-output.txt
+          echo "=== Evidence script exit: $EVIDENCE_EXIT ==="
+          exit $EVIDENCE_EXIT
+
+      - name: Extract + verify evidence JSON
+        run: |
+          echo "=== Extracting evidence JSON ==="
+          # The evidence script writes to evidence/wave5-5b/evidence-E1-E6-5b-<runId>.json
+          EVIDENCE_FILE=$(ls -t evidence/wave5-5b/evidence-E1-E6-5b-*.json 2>/dev/null | head -1)
+          if [ -z "$EVIDENCE_FILE" ]; then
+            echo "❌ No evidence file found"
+            exit 1
+          fi
+          echo "Evidence file: $EVIDENCE_FILE"
+          echo "=== Evidence JSON ==="
+          cat "$EVIDENCE_FILE" | jq '.'
+
+          # Verify the evidence JSON
+          OK=$(jq -r '.ok' "$EVIDENCE_FILE")
+          SUMMARY_PASSED=$(jq -r '.summary.passed' "$EVIDENCE_FILE")
+          SUMMARY_TOTAL=$(jq -r '.summary.total' "$EVIDENCE_FILE")
+
+          echo ""
+          echo "=== Evidence Summary ==="
+          echo "ok: $OK"
+          echo "passed: $SUMMARY_PASSED / $SUMMARY_TOTAL"
+
+          if [ "$OK" != "true" ] || [ "$SUMMARY_PASSED" != "$SUMMARY_TOTAL" ]; then
+            echo "❌ Evidence FAILED — not all scenarios passed"
+            exit 1
+          fi
+
+          # Verify the critical E4 safety property (no money-state mutation)
+          E4_PASSED=$(jq -r '.tests.E4.passed' "$EVIDENCE_FILE")
+          E4_MUTATED=$(jq -r '.tests.E4.moneyStateMutated' "$EVIDENCE_FILE")
+          E4_FINANCIAL_MUTATION=$(jq -r '.tests.E4.financialMutation' "$EVIDENCE_FILE")
+          echo ""
+          echo "=== E4 CRITICAL SAFETY ==="
+          echo "E4.passed: $E4_PASSED"
+          echo "E4.moneyStateMutated: $E4_MUTATED"
+          echo "E4.financialMutation: $E4_FINANCIAL_MUTATION"
+          if [ "$E4_PASSED" != "true" ] || [ "$E4_MUTATED" != "false" ] || [ "$E4_FINANCIAL_MUTATION" != "false" ]; then
+            echo "❌ E4 CRITICAL SAFETY property FAILED — reconciliation mutated money state"
+            exit 1
+          fi
+          echo "✅ E4 PASSED — reconciliation did NOT mutate money state"
+
+          # Verify E5 (concurrency)
+          E5_PASSED=$(jq -r '.tests.E5.passed' "$EVIDENCE_FILE")
+          echo "E5.passed: $E5_PASSED"
+          if [ "$E5_PASSED" != "true" ]; then
+            echo "❌ E5 (concurrent runs) FAILED"
+            exit 1
+          fi
+          echo "✅ E5 PASSED — concurrent reconciliation runs produce no duplicate findings"
+
+          # Verify E6 (scale)
+          E6_PASSED=$(jq -r '.tests.E6.passed' "$EVIDENCE_FILE")
+          echo "E6.passed: $E6_PASSED"
+          if [ "$E6_PASSED" != "true" ]; then
+            echo "❌ E6 (scale) FAILED"
+            exit 1
+          fi
+          echo "✅ E6 PASSED — scale test correct within SLA"
+
+      - name: PostgreSQL direct verification (bypass app layer)
+        run: |
+          echo "=== PostgreSQL direct verification via Supabase Management API ==="
+          # Verify reconciliation tables have the expected rows (run + findings)
+          VERIFY_SQL='SELECT (SELECT COUNT(*) FROM "ReconciliationRun" WHERE status = '\''COMPLETED'\'') AS completed_runs, (SELECT COUNT(*) FROM "ReconciliationFinding") AS total_findings, (SELECT COUNT(*) FROM "ReconciliationFinding" WHERE "resolvedAt" IS NULL) AS unresolved_findings, (SELECT COUNT(*) FROM "ExceptionQueue" WHERE invariant LIKE '\''M%'\'') AS reconciliation_exceptions;'
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$VERIFY_SQL" '{query: $q}')")
+          echo "$RESULT" | jq '.' 2>/dev/null || echo "$RESULT"
+
+      - name: Cleanup test data
+        if: always()
+        run: |
+          echo "=== Cleaning up test data from staging Supabase ==="
+          # Delete evidence-test data to keep staging clean.
+          # SAFE: reconciliation is detection-only — these are audit tables, not money-state.
+          # ExceptionQueue entries created by reportInvariantViolation are also cleaned.
+          CLEANUP_SQL='DELETE FROM "ReconciliationFinding"; DELETE FROM "ReconciliationRun"; DELETE FROM "ExceptionQueue" WHERE invariant LIKE '\''M%'\''; DELETE FROM "LedgerEntry" WHERE "traceId" LIKE '\''evidence-5b-%'\'' OR "traceId" LIKE '\''%evidence-setup%'\''; DELETE FROM "Refund" WHERE "idempotencyKey" LIKE '\''ev-5b-%'\''; DELETE FROM "Outbox" WHERE "eventId" LIKE '\''ev-5b-%'\''; DELETE FROM "Payment" WHERE "gatewayPaymentId" LIKE '\''pay_ev_5b_%'\''; DELETE FROM "OrderItem" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "userId" IN (SELECT id FROM "User" WHERE phone = '\''+919999900002'\'')); DELETE FROM "Order" WHERE "userId" IN (SELECT id FROM "User" WHERE phone = '\''+919999900002'\'');'
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$CLEANUP_SQL" '{query: $q}')")
+          echo "Cleanup result: $RESULT"
+          echo "=== Cleanup complete ==="
+
+      - name: Upload evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wave5-5b-postgresql-evidence
+          path: evidence/wave5-5b/evidence-E1-E6-5b-*.json

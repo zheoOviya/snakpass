@@ -217,22 +217,112 @@ The S5 governance bar requires that the refund flow be deterministic across the 
 
 ---
 
-## 5. Sub-Wave 5b — P0-03 Reconciliation
+## 5. Sub-Wave 5b — P0-03 Reconciliation (Detection-Only)
 
-🔒 **LOCKED** — Separate Orchestrator authorization REQUIRED. NOT started.
+**Status:** 🟡 IMPLEMENTED + SQLite evidence E1-E6 PASS. PostgreSQL evidence pending Orchestrator workflow trigger.
 
-Sub-Wave 5b (P0-03 Reconciliation) is the next sub-wave in the Wave-5 authorization, but it remains LOCKED pending a separate Orchestrator directive. The IDE MUST NOT begin any 5b implementation, schema change, evidence scenario, or workflow until the Orchestrator issues a `5B — READ/PLAN-FIRST Gate Review` authorization.
+**Authorization:** Orchestrator Decision — 5B IMPLEMENTATION AUTHORIZED (detection-only model). Remediation 🔒 NOT AUTHORIZED (separate boundary).
 
-**Expected 5b scope (for planning reference only — NOT authorized):**
-- Reconciliation job to detect orphan ledger entries, stuck `REFUND_PENDING` refunds (publisher exhausted retries), and ledger balance drift.
-- Surfaces pending reservations (per the Option A semantics documented in §3) for operator review.
-- No production activation; no `realPayments=true`; no schema changes outside the 5b evidence package.
+> **Orchestrator hard boundary:** The reconciliation worker NEVER writes to Payment, Refund, LedgerEntry, Outbox, WebhookEvent, IdempotencyKey, or AuditLog. It NEVER makes external Razorpay API calls. It NEVER triggers capture / refund / outbox enqueue. It NEVER performs automatic financial correction. Its job is: detect → classify → record → report.
 
-**Next governance checkpoint:** `Sub-Wave 5b — P0-03 Reconciliation: READ/PLAN-FIRST Gate Review` (separate Orchestrator directive required).
+### Architecture (detection-only — mirrors Gate Review §4)
+
+The reconciliation flow is a **read-only observer** of all CLOSED-wave money-state tables. Its only writes are to:
+1. `ReconciliationRun` (new Class-2 additive table — run lifecycle + summary counts).
+2. `ReconciliationFinding` (new Class-2 additive table — mismatch audit trail, idempotent dedup via `@@unique([mismatchClass, entityId, resolvedAt])`).
+3. `ExceptionQueue` (existing P0-28 path — via `reportInvariantViolation()` for CRITICAL/HIGH findings only).
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Prisma models | `prisma/schema.prisma` (ReconciliationRun + ReconciliationFinding models) | Class-2 additive: run lifecycle + finding audit trail with idempotent dedup |
+| Migration SQL | `prisma/scripts/wave5-subwave-5b-migration.sql` | Class-2 ADDITIVE: new ReconciliationRun + ReconciliationFinding tables + indexes + grants |
+| Detection library | `src/lib/reconciliation.ts` | 17 mismatch-class detectors (M1-M17) — ALL read-only. Batch-optimized queries. `runReconciliation()` entry point. `persistFinding()` with idempotent dedup + `reportInvariantViolation()` routing (OUTSIDE the txn body — mirrors TRANSACTION_RETRY_INVARIANT). |
+| Mini-service | `mini-services/reconciliation/index.ts` (port 3010) | Bun service: `/health`, `/trigger`, `/findings`, `/runs`, `/mismatch-count`. Polls on configurable interval. |
+| Evidence setup | `src/app/api/reconciliation/evidence-setup/route.ts` | EVIDENCE_TEST_MODE-gated. Scenarios: `ledger-imbalance`, `stuck-capture-pending`, `stuck-refund-pending`, `orphan-outbox`, `clean`, `scale`. Returns `moneyStateSnapshotBefore` for E4 diff. |
+| Evidence run | `src/app/api/reconciliation/evidence-run/route.ts` | EVIDENCE_TEST_MODE-gated. GET endpoint (avoids CSRF). Triggers `runReconciliation('evidence')`. Supports `?concurrent=N` for E5. |
+| Evidence verify | `src/app/api/reconciliation/evidence-verify/route.ts` | EVIDENCE_TEST_MODE-gated. Returns findings + `moneyStateSnapshotAfter` (for E4 diff) + ExceptionQueue entries + recent runs. |
+| Evidence runner (SQLite) | `scripts/wave5-5b-evidence.mjs` | E1-E6 evidence runner (6 scenarios). |
+| Evidence runner wrapper | `scripts/run-5b-evidence.sh` | Bash wrapper: flips schema to SQLite, pushes, seeds, starts dev server with `EVIDENCE_TEST_MODE=true`, runs evidence, restores PostgreSQL schema. |
+| Staging migration workflow | `.github/workflows/wave5-5b-staging-migration.yml` | Manual workflow: applies `wave5-subwave-5b-migration.sql` to staging Supabase. |
+| PostgreSQL evidence workflow | `.github/workflows/subwave-5b-postgresql-evidence.yml` | Manual workflow: runs E1-E6 against staging Supabase PostgreSQL. E4/E5/E6 mandatory. |
+| Alert-evaluator integration | `mini-services/alert-evaluator/index.ts` (line ~139) | Updated: `reconciliation_mismatch_count` now read from `ReconciliationFinding` table (was hardcoded 0). |
+
+### The 17 mismatch classes (M1-M17)
+
+| # | Class | Severity | What it detects |
+|---|-------|----------|-----------------|
+| M1 | LEDGER_IMBALANCE | CRITICAL | Dr sum !== Cr sum per payment (I-06 violation) |
+| M2 | MISSING_CAPTURE_LEDGER | CRITICAL | Payment CAPTURED but no Dr GATEWAY_RECEIVABLE + Cr CONSUMER_REVENUE pair |
+| M3 | MISSING_CAPTURE_STATUS | HIGH | Payment CAPTURE_PENDING past threshold + has capture ledger pair + outbox not PENDING (publisher may have failed) |
+| M4 | DUPLICATE_CAPTURE_LEDGER | CRITICAL | More than 1 Dr GATEWAY_RECEIVABLE per payment (I-04 violation) |
+| M5 | DUPLICATE_REFUND_PER_KEY | CRITICAL | More than 1 Refund per payment+idempotencyKey (schema should prevent) |
+| M6 | REFUND_EXCEEDS_PAYMENT | HIGH | Refund total > Payment.amount (I-03 violation) |
+| M7 | REFUND_WITHOUT_REVERSAL_LEDGER | HIGH | Refund REFUNDED but no matching reversal Dr/Cr pair |
+| M8 | REVERSAL_WITHOUT_REFUND | HIGH | Reversal Dr CONSUMER_REVENUE entries but no Refund row (orphan) |
+| M9 | STUCK_CAPTURE_PENDING | HIGH | Payment CAPTURE_PENDING > 30 min + outbox not PENDING/CLAIMED (publisher exhausted or FAILED) |
+| M10 | STUCK_REFUND_PENDING | HIGH | Refund REFUND_PENDING > 30 min + outbox not PENDING/CLAIMED (5A Option A pending reservation surfaces here) |
+| M11 | ORPHAN_OUTBOX | HIGH | Outbox PENDING/CLAIMED past TTL or FAILED |
+| M12 | ORPHAN_OUTBOX_AGGREGATE_MISSING | CRITICAL | Outbox references Payment/Refund that doesn't exist (impossible by atomicity) |
+| M13 | UNPROCESSED_WEBHOOK | MEDIUM | WebhookEvent verified but unprocessed > 10 min |
+| M14 | WEBHOOK_MISSING_PAYMENT | MEDIUM | WebhookEvent references Payment that doesn't exist |
+| M15 | STATUS_LEDGER_INCONSISTENCY | HIGH | Payment REFUNDED but refunds don't sum to amount |
+| M16 | OUTBOX_LAG_EXCEEDED | MEDIUM | Oldest PENDING outbox event > 5 min SLA |
+| M17 | AUDIT_CHAIN_BREAK | MEDIUM | AuditLog hash-chain break (P0-22 tamper-evidence check) |
+
+### Invariants verified
+
+| # | Invariant | Source | 5b-Evidence |
+|---|-----------|--------|-------------|
+| I-01 | Payment Integrity | P0-01, P0-03, P0-05 | 5b-E1 (M1 ledger imbalance), 5b-E2 (M9/M10/M12), 5b-E4 (no money-state mutation) |
+| I-03 | Refund Integrity | P0-04 | 5b-E2 (M10 stuck refund), 5b-E4 (no money-state mutation) |
+| I-04 | Capture Uniqueness | P0-01, P0-05, P0-17 | 5b-E1 (M4 duplicate capture ledger), 5b-E4 (no money-state mutation) |
+| I-06 | Ledger Balance | P0-02, P0-03, P0-04 | 5b-E1 (M1 ledger imbalance), 5b-E4 (no money-state mutation — CRITICAL) |
+| Detection-only safety | Reconciliation never mutates money state | Gate Review D7 | 5b-E4 (CRITICAL — moneyStateMutated=false, financialMutation=false) |
+| Idempotent findings | Same (mismatchClass, entityId) → same finding | Gate Review D5 | 5b-E3 (no duplicate findings on re-run) |
+| Concurrent-safe | Concurrent runs → no duplicate findings | Gate Review D7 | 5b-E5 (concurrent=2, 1 finding, no dup) |
+| Scale + SLA | 100+ payments + anomalies → correct findings within SLA | Gate Review D8 | 5b-E6 (100 healthy + 3 anomalies, runtime < SLA, 0 false positives on healthy) |
+
+### SQLite evidence (local)
+
+| Run ID | Artifact | Result | Tests |
+|--------|----------|--------|-------|
+| `5b-1786883048869-4c4c6000` | `evidence/wave5-5b/evidence-E1-E6-sqlite-5b.json` | ✅ ok=true | 6/6 PASS |
+
+Per-scenario results (SQLite):
+- ✅ **5b-E1** Ledger imbalance detection (M1) — seeded Dr-without-Cr → detector found it → ReconciliationFinding persisted → ExceptionQueue entry created (Level 1 freeze) → alert fired.
+- ✅ **5b-E2** Stuck CAPTURE_PENDING + REFUND_PENDING + orphan outbox (M9/M10/M12) — seeded each → detector found all 3 → findings persisted.
+- ✅ **5b-E3** Reconciliation idempotency — ran reconciliation twice → second run created NO new findings (same finding id, lastSeenAt updated).
+- ✅ **5b-E4** CRITICAL SAFETY — reconciliation does NOT mutate money state. Snapshot Payment/Refund/LedgerEntry/Outbox/WebhookEvent/IdempotencyKey/AuditLog before + after → ZERO diffs (`moneyStateMutated=false`, `financialMutation=false`). Finding WAS created + ExceptionQueue entry WAS created.
+- ✅ **5b-E5** Concurrent reconciliation runs → no duplicate findings. 2 concurrent runs → exactly 1 finding for the seeded anomaly (dedup via unique constraint).
+- ✅ **5b-E6** Scale — 100 healthy payments + 3 anomalies → all 3 found, runtime 103ms (< 30s SLA), 0 false positives on healthy payments.
+
+### PostgreSQL evidence (staging) — PENDING
+
+| Run ID | Artifact | Result | Tests |
+|--------|----------|--------|-------|
+| _(pending Orchestrator trigger)_ | `evidence/wave5-5b/evidence-E1-E6-postgresql-5b-pg-ev.json` | ⏳ Pending | ⏳ Pending |
+
+**Required pre-step (manual):** Run the `Wave-5 5b — Apply Staging Migration` workflow (`.github/workflows/wave5-5b-staging-migration.yml`) with confirmation string `APPLY-WAVE5-5B` to apply the ReconciliationRun + ReconciliationFinding tables to staging Supabase.
+
+**Then:** Run the `Wave-5 5b — PostgreSQL Reconciliation (P0-03) Evidence` workflow (`.github/workflows/subwave-5b-postgresql-evidence.yml`) with confirmation string `RUN-5B-PG-EVIDENCE` + the staging URL. The workflow runs E1-E6 against the staging Supabase PostgreSQL database + verifies the evidence JSON + does direct PostgreSQL verification + cleans up test data.
+
+**PostgreSQL-mandatory scenarios (per Gate Review D8):**
+- E4 — no money-state mutation (CRITICAL SAFETY — must be proven on PostgreSQL with real row-level locking).
+- E5 — concurrent runs (dedup under real row-level locking, not SQLite's database-level lock).
+- E6 — scale (1000+ payments on PostgreSQL, not SQLite's smaller count).
+
+### Governance safeguards
+
+- `realPayments` remains OFF (demo mode). No external Razorpay API calls.
+- `webhookHandler` remains OFF. `requestHashEnforcement` remains OFF.
+- No production flag activation. No production traffic touched.
+- No existing CLOSED Wave-3/4/5A evidence reopened. 5b is read-only w.r.t. their tables.
+- Remediation (automatic repair) is LOCKED — separate authorization boundary.
+- Wave-6/7 NOT started.
 
 ---
 
-## 6. Canonical Governance State (Snapshot at 5a Closure)
+## 6. Canonical Governance State (Snapshot at 5b Implementation)
 
 ```text
 Wave-0        ✅ CLOSED
@@ -250,8 +340,19 @@ Wave-5
               ├─ E5 ✅ Publisher retry / no duplicate refund (SQLite + PostgreSQL)
               └─ E6 ✅ Failure → retry + pending-ledger semantics (SQLite + PostgreSQL)
 
-  5B          🔒 LOCKED — P0-03 Reconciliation
-              Separate Orchestrator authorization REQUIRED
+  5B          🟡 IMPLEMENTED + SQLite E1-E6 PASS
+              ├─ P0-03 Reconciliation (detection-only)
+              ├─ 17 mismatch classes (M1-M17)
+              ├─ Class-2 additive schema (ReconciliationRun + ReconciliationFinding)
+              ├─ E1 ✅ Ledger imbalance detection (SQLite)
+              ├─ E2 ✅ Stuck payment/refund + orphan outbox detection (SQLite)
+              ├─ E3 ✅ Reconciliation idempotency (SQLite)
+              ├─ E4 ✅ CRITICAL: no money-state mutation (SQLite)
+              ├─ E5 ✅ Concurrent runs — no duplicate findings (SQLite)
+              ├─ E6 ✅ Scale — 100 payments + 3 anomalies within SLA (SQLite)
+              └─ ⏳ PostgreSQL evidence PENDING Orchestrator trigger (E4/E5/E6 mandatory)
+
+  Remediation  🔒 LOCKED — separate authorization boundary
 
 Production               🚫 NOT AUTHORIZED
 realPayments             🚫 OFF
@@ -266,14 +367,17 @@ Wave-7                   🔒 LOCKED (P0-07 Pickup Attribution)
 
 ## 7. Stop Point
 
-Sub-Wave 5a closure documentation is COMPLETE. The IDE is STOPPING.
+Sub-Wave 5b implementation is COMPLETE + SQLite evidence E1-E6 PASS. The IDE is STOPPING.
 
-- 5a evidence is CLOSED — no reopen without Orchestrator authorization.
-- 5b (P0-03 Reconciliation) is LOCKED — NOT started. Awaits separate Orchestrator authorization (`5B — READ/PLAN-FIRST Gate Review`).
+- 5b implementation is COMPLETE (detection-only model, 17 mismatch classes, Class-2 additive schema, mini-service, evidence endpoints, SQLite evidence runner).
+- SQLite evidence E1-E6 all PASS (6/6), including the CRITICAL E4 safety property (no money-state mutation).
+- PostgreSQL evidence is PENDING Orchestrator trigger (run the staging migration workflow + the PostgreSQL evidence workflow).
+- 5b remains OPEN for Orchestrator S5 review (pending PostgreSQL evidence).
+- Remediation (automatic repair) is LOCKED — separate authorization boundary.
 - Wave-6 / Wave-7 remain LOCKED.
 - Production remains NOT AUTHORIZED. All production flags remain OFF.
 
-**Next governance checkpoint:** Orchestrator directive on Sub-Wave 5b (P0-03 Reconciliation).
+**Next governance checkpoint:** Orchestrator triggers the PostgreSQL staging migration (`APPLY-WAVE5-5B`) + PostgreSQL evidence workflow (`RUN-5B-PG-EVIDENCE`), then reviews the full 5b evidence package for S5 PASS / CLOSED decision.
 
 ---
 

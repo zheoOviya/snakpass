@@ -1,12 +1,12 @@
 # Wave-5 Sub-Wave 5B — P0-03 Reconciliation: READ/PLAN-FIRST Gate Review
 
-**Document type:** Gate Review (READ/PLAN-FIRST — NO implementation authorization).
+**Document type:** Gate Review (READ/PLAN-FIRST — implementation NOW AUTHORIZED + executed).
 **Author:** IDE (read-only synthesis from repository evidence).
-**Orchestrator directive:** Sub-Wave 5B READ/PLAN-FIRST AUTHORIZED; 5B implementation 🔒 NOT YET AUTHORIZED.
+**Orchestrator directive:** Sub-Wave 5B IMPLEMENTATION AUTHORIZED (detection-only). Implementation COMPLETE + SQLite evidence E1-E6 PASS. PostgreSQL evidence pending Orchestrator trigger.
 **Created:** 2026-08-16
 **Scope:** P0-03 — Payment reconciliation (gateway ↔ ledger).
 
-> **Governance rule:** This document is a READ-ONLY planning artifact. It does NOT authorize implementation, schema change, migration, evidence workflow, or any code modification. Every conclusion below is derived from the existing repository (schema, lib code, API routes, publisher, evidence, governance docs). The IDE has NOT written any 5B code. 5B implementation requires a separate Orchestrator directive after this Gate Review is reviewed.
+> **Governance update:** This Gate Review was originally READ/PLAN-FIRST (no implementation). The Orchestrator subsequently authorized implementation (detection-only model per §7.1). Implementation is now COMPLETE. SQLite evidence E1-E6 all PASS (6/6). PostgreSQL evidence workflow committed; pending Orchestrator trigger. See `WAVE5_EVIDENCE.md` §5 for the full implementation + evidence record.
 
 > **Orchestrator constraint honored:** P0-03's automatic financial correction is NOT self-authorized. The review explicitly separates detection (read-only) from remediation (mutation), and flags any remediation path as a separate authorization boundary (see D6, D7, §7).
 
