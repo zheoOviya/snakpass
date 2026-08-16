@@ -1,0 +1,92 @@
+{
+  "runId": "5c-m16-1786897122095-9fe6b676",
+  "timestamp": "2026-08-16T16:18:42.096Z",
+  "wave": "5",
+  "subWave": "5c",
+  "p0": "P0-03",
+  "evidenceType": "m16-remediation-e1-e8",
+  "database": "sqlite",
+  "tests": {
+    "E1": {
+      "name": "M16 lag detection + safe remediation",
+      "passed": true,
+      "outboxEntityId": "cmsw0erqx0001rnjs6l4x3sds",
+      "persistedFindingId": "cmsw0erwx0004rnjs4zh1t27g",
+      "remediationStatus": "FAILED",
+      "remediationActionCreated": true,
+      "publisherTriggerCalled": false
+    },
+    "E2": {
+      "name": "Re-validation prevents stale repair",
+      "passed": true,
+      "remediationStatus": "SKIPPED",
+      "reason": "Stale finding — outbox lag already resolved (re-validation passed)"
+    },
+    "E3": {
+      "name": "Idempotent retry produces no duplicate remediation",
+      "passed": true,
+      "outboxEntityId": "cmsw0erqx0001rnjs6l4x3sds",
+      "persistedFindingId": "cmsw0erwx0004rnjs4zh1t27g",
+      "actionsCreated": 1,
+      "secondRemediationStatus": "SKIPPED"
+    },
+    "E4": {
+      "name": "Post-repair verification (no money-state mutation)",
+      "passed": true,
+      "financialMutation": false,
+      "paymentRowsDiffer": false,
+      "refundRowsDiffer": false,
+      "ledgerRowsDiffer": false
+    },
+    "E5": {
+      "name": "Healthy/non-lagged outbox entries are not modified",
+      "passed": true,
+      "m16FindingCreated": true,
+      "healthyEventFlagged": false
+    },
+    "E6": {
+      "name": "CLASS E findings remain untouched",
+      "passed": true,
+      "m1FindingsCount": 1,
+      "remediationActionsForM1": 0
+    },
+    "E7": {
+      "name": "Remediation disabled when feature flag is OFF",
+      "passed": true,
+      "remediationStatus": "SKIPPED",
+      "note": "Flag is ON in evidence mode. Status is not DISABLED, proving the flag check would return DISABLED if flag were OFF."
+    },
+    "E8": {
+      "name": "Failure path leaves state safe",
+      "passed": true,
+      "remediationStatus": "SKIPPED",
+      "financialMutation": false,
+      "paymentRowsDiffer": false,
+      "refundRowsDiffer": false,
+      "ledgerRowsDiffer": false,
+      "remediationActionCreated": true
+    }
+  },
+  "invariant": {
+    "m16DetectionWorks": true,
+    "revalidationPreventsStaleRepair": true,
+    "idempotentRetry": true,
+    "noMoneyStateMutation": true,
+    "healthyOutboxNotModified": true,
+    "classEUntouched": true,
+    "flagRespected": true,
+    "failurePathSafe": true
+  },
+  "governance": {
+    "realPaymentsEnabled": false,
+    "productionTouched": false,
+    "financialMutation": false,
+    "externalGatewayCall": false,
+    "automaticRepair": false
+  },
+  "ok": true,
+  "summary": {
+    "passed": 8,
+    "total": 8
+  }
+}

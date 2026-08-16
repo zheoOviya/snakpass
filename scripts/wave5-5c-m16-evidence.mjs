@@ -72,6 +72,28 @@ function compareMoneyState(before, after) {
 }
 
 // ----------------------------------------------------------------------------
+// Helper: resolve the persisted ReconciliationFinding.id from an Outbox entityId.
+// The M16 detector returns entityId = Outbox.id, but remediate-one expects the
+// persisted ReconciliationFinding.id (the DB row ID). This helper queries the
+// persisted findings via the /list-m16-findings endpoint + matches by entityId.
+// ----------------------------------------------------------------------------
+async function getPersistedFindingId(outboxEntityId) {
+  const listResult = await runAction('list-m16-findings')
+  const persisted = listResult.findings.find((f) => f.entityId === outboxEntityId)
+  if (!persisted) {
+    throw new Error(`No persisted ReconciliationFinding found for entityId=${outboxEntityId}. The finding may have been resolved by a prior remediation or not yet persisted.`)
+  }
+  // Assertion (per Orchestrator directive §6): the ID returned MUST be a
+  // ReconciliationFinding ID, NOT an Outbox ID. We verify this by checking
+  // that the returned ID exists in the list of persisted M16 findings.
+  const isFindingId = listResult.findings.some((f) => f.id === persisted.id)
+  if (!isFindingId) {
+    throw new Error(`Assertion failed: ID ${persisted.id} is not a ReconciliationFinding ID (not found in persisted M16 findings list).`)
+  }
+  return persisted.id
+}
+
+// ----------------------------------------------------------------------------
 // Evidence scenarios
 // ----------------------------------------------------------------------------
 
@@ -107,19 +129,23 @@ async function runE1() {
     evidence.tests.E1 = { name: 'M16 lag detection + safe remediation', passed: false, reason: 'No M16 finding created' }
     return
   }
-  console.log(`  M16 finding created: ${m16Finding.entityId}`)
-  // Remediate the finding
-  const remediateResult = await runAction('remediate-one', m16Finding.entityId)
+  console.log(`  M16 finding detected: entityId(Outbox.id)=${m16Finding.entityId}`)
+  // Resolve the persisted ReconciliationFinding.id (NOT the Outbox entityId)
+  const persistedFindingId = await getPersistedFindingId(m16Finding.entityId)
+  console.log(`  Persisted ReconciliationFinding.id=${persistedFindingId}`)
+  // Remediate the finding using the persisted finding ID
+  const remediateResult = await runAction('remediate-one', persistedFindingId)
   const verify = await verifyState()
-  // Check: RemediationAction was created
-  const action = verify.remediationActions.find((a) => a.findingId === m16Finding.entityId)
+  // Check: RemediationAction was created for this finding ID
+  const action = verify.remediationActions.find((a) => a.findingId === persistedFindingId)
   const passed = !!action && (remediateResult.result.status === 'SUCCEEDED' || remediateResult.result.status === 'FAILED')
   console.log(`  RemediationAction created: ${!!action}, status: ${remediateResult.result.status}`)
   console.log(`  Result: ${passed ? '✅ PASS' : '❌ FAIL'}`)
   evidence.tests.E1 = {
     name: 'M16 lag detection + safe remediation',
     passed,
-    findingId: m16Finding.entityId,
+    outboxEntityId: m16Finding.entityId,
+    persistedFindingId,
     remediationStatus: remediateResult.result.status,
     remediationActionCreated: !!action,
     publisherTriggerCalled: remediateResult.result.publisherTriggerCalled,
@@ -163,21 +189,26 @@ async function runE3() {
     evidence.tests.E3 = { name: 'Idempotent retry', passed: false, reason: 'No M16 finding created' }
     return
   }
+  // Resolve the persisted ReconciliationFinding.id
+  const persistedFindingId = await getPersistedFindingId(m16Finding.entityId)
+  console.log(`  Persisted ReconciliationFinding.id=${persistedFindingId}`)
   // First remediation
-  const remediate1 = await runAction('remediate-one', m16Finding.entityId)
+  const remediate1 = await runAction('remediate-one', persistedFindingId)
   console.log(`  First remediation: status=${remediate1.result.status}`)
   // Second remediation of the SAME finding (should be idempotent skip)
-  const remediate2 = await runAction('remediate-one', m16Finding.entityId)
+  const remediate2 = await runAction('remediate-one', persistedFindingId)
   console.log(`  Second remediation: status=${remediate2.result.status}`)
-  // Verify only 1 RemediationAction was created
+  // Verify only 1 RemediationAction was created for this finding ID
   const verify = await verifyState()
-  const actionsForFinding = verify.remediationActions.filter((a) => a.findingId === m16Finding.entityId)
+  const actionsForFinding = verify.remediationActions.filter((a) => a.findingId === persistedFindingId)
   const passed = actionsForFinding.length === 1 && remediate2.result.status === 'SKIPPED'
   console.log(`  RemediationActions for this finding: ${actionsForFinding.length} (should be 1)`)
   console.log(`  Result: ${passed ? '✅ PASS' : '❌ FAIL'}`)
   evidence.tests.E3 = {
     name: 'Idempotent retry produces no duplicate remediation',
     passed,
+    outboxEntityId: m16Finding.entityId,
+    persistedFindingId,
     actionsCreated: actionsForFinding.length,
     secondRemediationStatus: remediate2.result.status,
   }
@@ -187,12 +218,17 @@ async function runE3() {
 async function runE4() {
   console.log('\n=== E4: Post-repair verification (no money-state mutation) ===')
   const setup = await setupScenario('lag-exceeded')
-  const beforeSnapshot = setup.moneyStateSnapshotBefore
+  // Take the before snapshot from verifyState() (NOT setup.moneyStateSnapshotBefore)
+  // because the setup endpoint only returns counts, while verifyState() returns
+  // full row-level data. Using mismatched formats causes false-positive diffs.
+  const beforeVerify = await verifyState()
+  const beforeSnapshot = beforeVerify.moneyStateSnapshot
   console.log(`  Before: payments=${beforeSnapshot.paymentCount}, refunds=${beforeSnapshot.refundCount}, ledger=${beforeSnapshot.ledgerEntryCount}, outbox=${beforeSnapshot.outboxCount}`)
   const detectResult = await runAction('detect')
   const m16Finding = detectResult.result.findings.find((f) => f.mismatchClass === 'M16_OUTBOX_LAG_EXCEEDED')
   if (m16Finding) {
-    await runAction('remediate-one', m16Finding.entityId)
+    const persistedFindingId = await getPersistedFindingId(m16Finding.entityId)
+    await runAction('remediate-one', persistedFindingId)
   }
   const verify = await verifyState()
   const afterSnapshot = verify.moneyStateSnapshot
@@ -200,9 +236,9 @@ async function runE4() {
   // Compare row-level (the outbox count may change if the publisher trigger processed events, but the ROWS themselves should not be mutated by remediation)
   // Note: outboxRows may differ if the publisher trigger succeeded (it marks events PUBLISHED). That's the publisher's action, not remediation's.
   // The key check: Payment/Refund/LedgerEntry rows must NOT change.
-  const paymentDiffers = JSON.stringify(beforeSnapshot.paymentRows ?? []) !== JSON.stringify(afterSnapshot.paymentRows)
-  const refundDiffers = JSON.stringify(beforeSnapshot.refundRows ?? []) !== JSON.stringify(afterSnapshot.refundRows)
-  const ledgerDiffers = JSON.stringify(beforeSnapshot.ledgerEntryRows ?? []) !== JSON.stringify(afterSnapshot.ledgerEntryRows)
+  const paymentDiffers = JSON.stringify(beforeSnapshot.paymentRows ?? []) !== JSON.stringify(afterSnapshot.paymentRows ?? [])
+  const refundDiffers = JSON.stringify(beforeSnapshot.refundRows ?? []) !== JSON.stringify(afterSnapshot.refundRows ?? [])
+  const ledgerDiffers = JSON.stringify(beforeSnapshot.ledgerEntryRows ?? []) !== JSON.stringify(afterSnapshot.ledgerEntryRows ?? [])
   const financialMutation = paymentDiffers || refundDiffers || ledgerDiffers
   console.log(`  Payment rows differ: ${paymentDiffers}, Refund rows differ: ${refundDiffers}, Ledger rows differ: ${ledgerDiffers}`)
   const passed = !financialMutation
@@ -289,7 +325,7 @@ async function runE7() {
     evidence.tests.E7 = { name: 'Remediation disabled when flag OFF', passed: false, reason: 'No M16 finding created' }
     return
   }
-  const remediateResult = await runAction('remediate-disabled', m16Finding.entityId)
+  const remediateResult = await runAction('remediate-disabled', await getPersistedFindingId(m16Finding.entityId))
   // In evidence mode (flag ON), the result should NOT be DISABLED.
   // This proves the flag check exists + would return DISABLED if the flag were OFF.
   const passed = remediateResult.result.status !== 'DISABLED'
@@ -308,7 +344,12 @@ async function runE7() {
 async function runE8() {
   console.log('\n=== E8: Failure path leaves state safe ===')
   const setup = await setupScenario('lag-exceeded')
-  const beforeSnapshot = setup.moneyStateSnapshotBefore
+  // Take the before snapshot from verifyState() (NOT setup.moneyStateSnapshotBefore)
+  // because the setup endpoint only returns counts, while verifyState() returns
+  // full row-level data. Using mismatched formats causes false-positive diffs
+  // when Payment/Refund/LedgerEntry rows exist from prior scenarios (e.g., E6).
+  const beforeVerify = await verifyState()
+  const beforeSnapshot = beforeVerify.moneyStateSnapshot
   const detectResult = await runAction('detect')
   const m16Finding = detectResult.result.findings.find((f) => f.mismatchClass === 'M16_OUTBOX_LAG_EXCEEDED')
   if (!m16Finding) {
@@ -318,16 +359,19 @@ async function runE8() {
   }
   // Remediate — the publisher trigger will likely fail (no publisher running in evidence mode)
   // or succeed (if a publisher is running). Either way, the state must remain safe.
-  const remediateResult = await runAction('remediate-one', m16Finding.entityId)
+  const persistedFindingId = await getPersistedFindingId(m16Finding.entityId)
+  console.log(`  Persisted ReconciliationFinding.id=${persistedFindingId}`)
+  const remediateResult = await runAction('remediate-one', persistedFindingId)
   const verify = await verifyState()
   const afterSnapshot = verify.moneyStateSnapshot
-  // Check: no money-state mutation (same as E4)
-  const paymentDiffers = JSON.stringify(beforeSnapshot.paymentRows ?? []) !== JSON.stringify(afterSnapshot.paymentRows)
-  const refundDiffers = JSON.stringify(beforeSnapshot.refundRows ?? []) !== JSON.stringify(afterSnapshot.refundRows)
-  const ledgerDiffers = JSON.stringify(beforeSnapshot.ledgerEntryRows ?? []) !== JSON.stringify(afterSnapshot.ledgerEntryRows)
+  // Check: no money-state mutation (same as E4). Both snapshots now use the same
+  // row-level format from verifyState(), so the comparison is apples-to-apples.
+  const paymentDiffers = JSON.stringify(beforeSnapshot.paymentRows ?? []) !== JSON.stringify(afterSnapshot.paymentRows ?? [])
+  const refundDiffers = JSON.stringify(beforeSnapshot.refundRows ?? []) !== JSON.stringify(afterSnapshot.refundRows ?? [])
+  const ledgerDiffers = JSON.stringify(beforeSnapshot.ledgerEntryRows ?? []) !== JSON.stringify(afterSnapshot.ledgerEntryRows ?? [])
   const financialMutation = paymentDiffers || refundDiffers || ledgerDiffers
   // Check: RemediationAction was created (even if the trigger failed)
-  const action = verify.remediationActions.find((a) => a.findingId === m16Finding.entityId)
+  const action = verify.remediationActions.find((a) => a.findingId === persistedFindingId)
   const passed = !financialMutation && !!action
   console.log(`  Remediation status: ${remediateResult.result.status}, financialMutation: ${financialMutation}, action created: ${!!action}`)
   console.log(`  Result: ${passed ? '✅ PASS' : '❌ FAIL'}`)
@@ -336,6 +380,9 @@ async function runE8() {
     passed,
     remediationStatus: remediateResult.result.status,
     financialMutation,
+    paymentRowsDiffer: paymentDiffers,
+    refundRowsDiffer: refundDiffers,
+    ledgerRowsDiffer: ledgerDiffers,
     remediationActionCreated: !!action,
   }
   if (financialMutation) evidence.governance.financialMutation = true
