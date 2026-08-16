@@ -5460,3 +5460,33 @@ Stage Summary:
 - 3c NOT self-closed. NOT marked as CLOSED. Awaiting Orchestrator S5 review.
 - Production NOT touched. realPayments OFF. requestHashEnforcement OFF (production). 3a/3b NOT reopened. Wave-4 NOT started.
 
+
+---
+Task ID: 3c-s5-closure
+Agent: IDE (main)
+Task: Sub-Wave 3c S5 PASS / CLOSED — Orchestrator decision formalization
+
+Work Log:
+- Received Orchestrator S5 PASS decision for Sub-Wave 3c.
+- E3 + E4 remediation complete (previous task). All 5/5 scenarios PASS.
+- Updated WAVE3_EVIDENCE.md:
+  - Status: 3a + 3b + 3c S5 PASS / CLOSED (ALL Wave-3 sub-waves closed)
+  - P0-08+ status: ✅ S5 PASS / CLOSED
+  - Sub-Wave 3c status: ✅ S5 PASS / CLOSED
+  - Added §12 "Sub-Wave 3c — S5 PASS / CLOSED (Orchestrator Decision)" section
+- Formalized governance state:
+  - Wave-3 = ALL SUB-WAVES CLOSED
+  - 3a, 3b, 3c will NOT reopen
+  - Production NOT AUTHORIZED
+  - realPayments OFF
+  - requestHashEnforcement OFF in production (enablement NOT authorized)
+  - Wave-4 LOCKED (not auto-unlocked)
+
+Stage Summary:
+- Wave-3: ✅ ALL SUB-WAVES S5 PASS / CLOSED
+  - 3a: Payment idempotency + PostgreSQL concurrency ✅
+  - 3b: Order POST idempotency + PostgreSQL concurrency ✅
+  - 3c: C1 requestHash + backward-compat + PostgreSQL concurrency ✅
+- IDE is STOPPING. Wave-3 complete. No further implementation authorized.
+- Production NOT touched. realPayments OFF. requestHashEnforcement OFF (production). Wave-4 LOCKED.
+

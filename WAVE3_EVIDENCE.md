@@ -1,11 +1,11 @@
 # Wave-3 Evidence Document
 
-**Status:** 🟢 3a S5 PASS / CLOSED | 🟢 3b S5 PASS / CLOSED | 🟡 3c Evidence-Complete (5/5 PASS, awaiting Orchestrator S5 review)
+**Status:** 🟢 3a S5 PASS / CLOSED | 🟢 3b S5 PASS / CLOSED | 🟢 3c S5 PASS / CLOSED
 **Created:** 2026-08-15
 **Sub-Wave 3a Closure:** 2026-08-15 (Orchestrator S5 PASS decision)
 **Sub-Wave 3b Closure:** 2026-08-15 (Orchestrator S5 PASS decision)
-**Sub-Wave 3c Evidence Complete:** 2026-08-15 (5/5 SQLite PASS + PostgreSQL PASS — awaiting S5 review)
-**Authorization:** Orchestrator Decision (3a S5 PASS + 3b S5 PASS + 3c implementation + evidence remediation authorized)
+**Sub-Wave 3c Closure:** 2026-08-15 (Orchestrator S5 PASS decision)
+**Authorization:** Orchestrator Decision (3a + 3b + 3c S5 PASS / CLOSED)
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence.
 > It contains gate criteria, acceptance criteria, evidence requirements, owner/task
@@ -32,14 +32,14 @@
 |----|-------|-----------|-------------|----------|--------|----------|
 | P0-01 | Razorpay capture | Tier 1 (HIGHEST) | P0-09/17/24/23 | 3a | ✅ S5 PASS / CLOSED | §7, 3a-E1..3a-PG-E1 |
 | P0-08 | Order idempotency | Tier 4 | P0-24/25 | 3b | ✅ S5 PASS / CLOSED | §9, 3b-E1..3b-PG-E1 |
-| P0-08+ | Order idempotency + C1 requestHash | Tier 4 | P0-17 | 3c | 🟡 Evidence-Complete (awaiting S5) | §11, 3c-E1..3c-PG-E1 |
+| P0-08+ | Order idempotency + C1 requestHash | Tier 4 | P0-17 | 3c | ✅ S5 PASS / CLOSED | §11, 3c-E1..3c-PG-E1 |
 
 ### Sub-Wave Status
 | Sub-Wave | Scope | Status |
 |----------|-------|--------|
 | 3a | Payment model + capture route + LedgerEntry + WebhookEvent | ✅ S5 PASS / CLOSED |
 | 3b | P0-08 formalization (Order POST idempotency) | ✅ S5 PASS / CLOSED |
-| 3c | C1 requestHash + cross-P0 closure | 🟡 Evidence-Complete (awaiting Orchestrator S5 review) |
+| 3c | C1 requestHash + cross-P0 closure | ✅ S5 PASS / CLOSED |
 
 ---
 
@@ -1127,3 +1127,74 @@ requestHashEnforcement (production) 🚫 OFF
 ```
 
 **STOP — IDE is not self-closing 3c. Awaiting Orchestrator S5 decision.**
+
+---
+
+## 12. Sub-Wave 3c — S5 PASS / CLOSED (Orchestrator Decision)
+
+> **ORCHESTRATOR DECISION — Sub-Wave 3c = S5 PASS / EVIDENCE-COMPLETE / CLOSED.**
+
+**Date:** 2026-08-15
+**Decision:** Sub-Wave 3c authorized scope (C1 requestHash + feature flag + 5 evidence scenarios + PostgreSQL concurrency) fulfilled + E3/E4 remediation complete. Sub-Wave 3c is declared **S5 PASS** and **CLOSED**.
+
+### Decisive Evidence
+
+- **SQLite Evidence (5/5 PASS):** `evidence/wave3-3c/evidence-3c-complete-3c-remed-1786839940410-78fc4f22.json` (`ok: true`)
+- **PostgreSQL Evidence:** `evidence/wave3-3c/evidence-postgresql-3c-pg-ev.json` (`ok: true`, `database: postgresql`)
+- **Workflow:** GitHub Actions run `31916110251` (PostgreSQL concurrent test)
+- **Staging Migration:** GitHub Actions run `31915789113` (requestHash column applied)
+
+### Proven (5/5 Scenarios + PostgreSQL)
+
+```text
+3c-E1 — hash-match, flag ON              ✅ PASS
+3c-E2 — hash-mismatch → HTTP 422         ✅ PASS
+3c-E3 — null-hash + different body       ✅ PASS (remediation)
+3c-E4 — null-hash + same body            ✅ PASS (remediation)
+3c-E5 — PostgreSQL 5-concurrent, flag ON ✅ PASS
+
+Overall: 5/5 PASS, ok: true
+```
+
+### Final Governance State (Post-S5)
+
+```text
+Wave-0        ✅ CLOSED
+Wave-1        ✅ CLOSED
+Wave-2        ✅ CLOSED
+
+Wave-3        🔓 UNLOCKED
+
+Sub-Wave 3a   ✅ S5 PASS / EVIDENCE-COMPLETE / CLOSED — WILL NOT REOPEN
+Sub-Wave 3b   ✅ S5 PASS / EVIDENCE-COMPLETE / CLOSED — WILL NOT REOPEN
+Sub-Wave 3c   ✅ S5 PASS / EVIDENCE-COMPLETE / CLOSED — WILL NOT REOPEN
+
+Production    🚫 NOT AUTHORIZED
+realPayments  🚫 OFF
+requestHashEnforcement (production) 🚫 OFF (enablement NOT authorized)
+Wave-4        🔒 LOCKED
+```
+
+### Important Production Boundary
+
+**S5 PASS का अर्थ production authorization नहीं है।**
+
+- `requestHashEnforcement` = OFF in production
+- Production migration = NOT AUTHORIZED
+- Production deployment = NOT AUTHORIZED
+- `realPayments` = OFF
+- Wave-4 = NOT auto-unlocked
+
+3c की implementation और staging evidence अब closed हैं, लेकिन production enablement एक **अलग governance decision** होगा।
+
+### Orchestrator Verdict
+
+> **Sub-Wave 3a = PASS / S5 Evidence-Complete / CLOSED.**
+> **Sub-Wave 3b = PASS / S5 Evidence-Complete / CLOSED.**
+> **Sub-Wave 3c = PASS / S5 Evidence-Complete / CLOSED.**
+> **Wave-3 = ALL SUB-WAVES CLOSED.**
+> **Production = NOT AUTHORIZED.**
+> **realPayments = OFF.**
+
+**IDE: STOP. Wave-3 is complete. No further implementation authorized.**
+
