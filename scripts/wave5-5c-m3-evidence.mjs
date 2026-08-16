@@ -111,19 +111,21 @@ async function runE2() {
   console.log('\n=== E2: Re-validation prevents stale repair ===')
   const setup = await setupScenario('m3-stale')
   await runAction('detect')
-  // The payment is already CAPTURED — the detector should still create a finding
-  // (it checks createdAt + ledger pair, not just status). But the remediation
-  // should re-validate + skip.
+  // The m3-stale payment is CAPTURED (not CAPTURE_PENDING) — the detector
+  // should NOT create an M3 finding for it (detector only fires for CAPTURE_PENDING).
+  // However, there may be unresolved findings from PRIOR scenarios (E1's payment).
+  // We verify the E2 payment specifically does NOT have an M3 finding.
   const listResult = await runAction('list-m3-findings')
-  if (!listResult.findings.length) {
-    // If no finding was created (because the payment is CAPTURED, not CAPTURE_PENDING),
-    // that's also correct — the detector only fires for CAPTURE_PENDING.
-    evidence.tests.E2 = { name: 'Re-validation prevents stale repair', passed: true, reason: 'No M3 finding created (payment is CAPTURED, not CAPTURE_PENDING — detector correctly skipped)' }
-    console.log('  ✅ PASS: No M3 finding created (payment already CAPTURED — detector correctly skipped)')
+  const e2PaymentId = setup.scenarioData.paymentId
+  const findingForE2Payment = listResult.findings.find((f) => f.entityId === e2PaymentId)
+  if (!findingForE2Payment) {
+    // No M3 finding for the E2 (CAPTURED) payment — correct behavior
+    evidence.tests.E2 = { name: 'Re-validation prevents stale repair', passed: true, reason: 'No M3 finding created for CAPTURED payment (detector correctly skipped — only fires for CAPTURE_PENDING)' }
+    console.log('  ✅ PASS: No M3 finding for CAPTURED payment (detector correctly skipped)')
     return
   }
-  const persistedFindingId = listResult.findings[0].id
-  const remediateResult = await runAction('remediate-one', persistedFindingId, 'captured')
+  // If a finding WAS created (shouldn't happen), remediate it — re-validation should skip
+  const remediateResult = await runAction('remediate-one', findingForE2Payment.id, 'captured')
   const passed = remediateResult.result.status === 'SKIPPED'
   console.log(`  Status: ${remediateResult.result.status}`)
   console.log(`  Result: ${passed ? '✅ PASS' : '❌ FAIL'}`)
