@@ -6168,3 +6168,30 @@ Stage Summary:
 - 4d-E3 (Mixed population correctness): PASS — orphanCountAfterMixed=8, expectedCount=8 (valid order WITH outbox NOT counted)
 - governance: realPaymentsEnabled=false, productionTouched=false, schemaChanged=false, migrationCreated=false
 - 4d NOT self-closed. Awaiting Orchestrator S5 review.
+
+---
+Task ID: 4d-s5-closure + wave4-complete
+Agent: IDE (main)
+Task: Sub-Wave 4d S5 PASS / CLOSED + Wave-4 COMPLETE formalization
+
+Work Log:
+- Received Orchestrator S5 PASS decision for Sub-Wave 4d (orphan_business_count fix).
+- 3/3 PostgreSQL evidence scenarios PASS (E1 historical exclusion, E2 genuine orphan detection, E3 mixed population).
+- Updated WAVE4_EVIDENCE.md:
+  - Status: ALL SUB-WAVES S5 PASS / CLOSED — Wave-4 COMPLETE
+  - Sub-Wave 4d: ✅ S5 PASS / CLOSED
+  - Added §8 "Wave-4 — COMPLETE / ALL SUB-WAVES S5 PASS / CLOSED" section
+  - Final governance state with production boundary
+- 4d will NOT reopen for evidence.
+- Wave-4 is COMPLETE. All sub-waves (4a/4b/4c/4d) are S5 PASS / CLOSED.
+
+Stage Summary:
+- Wave-4: ✅ ALL SUB-WAVES S5 PASS / CLOSED
+  - 4a: Webhook handler (P0-05) ✅
+  - 4b: Ledger formalization (P0-02) ✅
+  - 4c: Transaction retry invariant mitigation ✅
+  - 4d: orphan_business_count correction ✅
+- Production NOT AUTHORIZED. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF.
+- Wave-5 LOCKED.
+- IDE is STOPPING. Wave-4 is complete. No further implementation authorized.
+

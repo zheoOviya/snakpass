@@ -1,11 +1,12 @@
 # Wave-4 Evidence Document
 
-**Status:** 🟢 4a S5 PASS / CLOSED | 🟢 4b S5 PASS / CLOSED | 🟢 4c S5 PASS / CLOSED
+**Status:** 🟢 ALL SUB-WAVES S5 PASS / CLOSED — Wave-4 COMPLETE
 **Created:** 2026-08-16
 **Sub-Wave 4a Closure:** 2026-08-16 (Orchestrator S5 PASS decision)
 **Sub-Wave 4b Closure:** 2026-08-16 (Orchestrator S5 PASS decision)
 **Sub-Wave 4c Closure:** 2026-08-16 (Orchestrator S5 PASS decision)
-**Authorization:** Orchestrator Decision (4a + 4b + 4c S5 PASS / CLOSED)
+**Sub-Wave 4d Closure:** 2026-08-16 (Orchestrator S5 PASS decision)
+**Authorization:** Orchestrator Decision (4a + 4b + 4c + 4d S5 PASS / CLOSED — Wave-4 COMPLETE)
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence.
 
@@ -18,7 +19,7 @@
 | 4a | P0-05 Webhook handler (HMAC verify + dedup + idempotent processing) | ✅ S5 PASS / CLOSED |
 | 4b | P0-02 Ledger formalization | ✅ S5 PASS / CLOSED |
 | 4c | TRANSACTION_RETRY_INVARIANT mitigation | ✅ S5 PASS / CLOSED |
-| 4d | orphan_business_count fix | 🟡 Evidence-Complete (awaiting Orchestrator S5 review) |
+| 4d | orphan_business_count fix | ✅ S5 PASS / CLOSED |
 
 ---
 
@@ -258,7 +259,9 @@ Publisher retry:
 > PostgreSQL-native evidence REQUIRED for S5.
 > After evidence capture, STOP and report to Orchestrator. Do NOT self-close.
 
-### Status: 🟡 Evidence-Complete (awaiting Orchestrator S5 review)
+### Status: ✅ S5 PASS / CLOSED (Orchestrator Decision — 2026-08-16)
+
+4d will NOT reopen for evidence.
 
 - **Workflow:** GitHub Actions run `31935166775`
 - **Job ID:** `95135808149` — "4d-PG — Orphan business count fix verification on PostgreSQL"
@@ -361,3 +364,45 @@ realPayments  🚫 OFF
 ```
 
 **STOP — IDE is not self-closing 4d. Awaiting Orchestrator S5 decision.**
+
+---
+
+## 8. Wave-4 — COMPLETE / ALL SUB-WAVES S5 PASS / CLOSED
+
+> **ORCHESTRATOR DECISION — Wave-4 = ALL SUB-WAVES S5 PASS / CLOSED.**
+
+**Date:** 2026-08-16
+
+### Final Governance State
+
+```text
+Wave-0        ✅ CLOSED
+Wave-1        ✅ CLOSED
+Wave-2        ✅ CLOSED
+Wave-3        ✅ COMPLETE / CLOSED
+
+Wave-4        ✅ COMPLETE / ALL SUB-WAVES CLOSED
+              ├─ 4a  ✅ Webhook handler (P0-05)
+              ├─ 4b  ✅ Ledger formalization (P0-02)
+              ├─ 4c  ✅ Transaction retry invariant mitigation
+              └─ 4d  ✅ orphan_business_count correction
+
+Production               🚫 NOT AUTHORIZED
+realPayments             🚫 OFF
+webhookHandler           🚫 OFF in production
+requestHashEnforcement   🚫 OFF in production
+Wave-5                   🔒 LOCKED
+```
+
+### Wave-4 Closure ≠ Production Authorization
+
+Wave-4 completion does NOT authorize production enablement. Specifically:
+- `realPayments=true` ❌ NOT AUTHORIZED
+- production `webhookHandler=true` ❌ NOT AUTHORIZED
+- production `requestHashEnforcement=true` ❌ NOT AUTHORIZED
+- production migration/deployment ❌ NOT AUTHORIZED
+- Wave-5 ❌ NOT STARTED
+
+Production readiness is a separate governance decision.
+
+**IDE: STOP. Wave-4 is COMPLETE. No further implementation authorized.**
