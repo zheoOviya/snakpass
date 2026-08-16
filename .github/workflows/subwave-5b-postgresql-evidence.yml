@@ -1,6 +1,7 @@
 # Wave-5 Sub-Wave 5b — PostgreSQL Reconciliation Evidence (P0-03)
 # Runs E1-E6 against the staging Supabase PostgreSQL database.
 # E4 (no money-state mutation), E5 (concurrency), E6 (scale) are PostgreSQL-mandatory.
+# Mirrors the 5a PostgreSQL evidence workflow pattern (sets EVIDENCE_TEST_MODE + triggers fresh Vercel deployment).
 
 name: Wave-5 5b — PostgreSQL Reconciliation (P0-03) Evidence
 
@@ -8,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       staging_url:
-        description: 'Vercel preview deployment URL (with https://)'
+        description: 'Initial Vercel preview deployment URL (with https://) — will be replaced by a fresh deployment'
         required: true
-        default: ''
+        default: 'https://snakpass-eqkarf10s-snakzap.vercel.app'
       confirm:
         description: 'Type RUN-5B-PG-EVIDENCE to confirm'
         required: true
@@ -23,6 +24,8 @@ jobs:
     timeout-minutes: 15
     env:
       SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
       PROJECT_REF: zmzqqcyapcezmaqvuzzd
       STAGING_URL: ${{ github.event.inputs.staging_url }}
 
@@ -35,7 +38,7 @@ jobs:
           [ "${{ github.event.inputs.confirm }}" = "RUN-5B-PG-EVIDENCE" ] || { echo "❌ Wrong confirmation"; exit 1; }
           [ -n "$STAGING_URL" ] || { echo "❌ staging_url required"; exit 1; }
           echo "✅ Authorized — Wave-5 5b PostgreSQL evidence (P0-03 Reconciliation)"
-          echo "Staging URL: $STAGING_URL"
+          echo "Initial staging URL: $STAGING_URL"
 
       - name: Install dependencies
         run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl nodejs
@@ -43,6 +46,8 @@ jobs:
       - name: Verify secrets present
         run: |
           [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN NOT_SET"; exit 1; }
+          [ -n "$VERCEL_TOKEN" ] || { echo "❌ VERCEL_TOKEN NOT_SET"; exit 1; }
+          [ -n "$VERCEL_PROJECT_ID" ] || { echo "❌ VERCEL_PROJECT_ID NOT_SET"; exit 1; }
           echo "✅ Secrets present"
 
       - name: Verify reconciliation tables exist on staging
@@ -61,25 +66,94 @@ jobs:
           [ "$FINDING_TABLE" = "1" ] || { echo "❌ ReconciliationFinding table NOT found — run APPLY-WAVE5-5B migration first"; exit 1; }
           echo "✅ Both reconciliation tables exist on staging"
 
-      - name: Trigger Vercel preview deployment with EVIDENCE_TEST_MODE=true
+      - name: Set EVIDENCE_TEST_MODE=true on Vercel preview environment
         run: |
-          echo "=== Triggering Vercel preview deployment with EVIDENCE_TEST_MODE=true ==="
-          # The STAGING_URL input should be a fresh preview deployment URL.
-          # Vercel preview deployments are created via GitHub push or Vercel CLI.
-          # We assume the deployment is already created (the Orchestrator provides the URL).
-          echo "Using staging URL: $STAGING_URL"
+          set +e
+          PROJECT_ID="$VERCEL_PROJECT_ID"
+          API_URL="https://api.vercel.com/v10/projects/$PROJECT_ID/env"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+
+          # Remove existing EVIDENCE_TEST_MODE entries
+          LIST_BODY=$(curl -sS -H "$AUTH" "$API_URL")
+          EXISTING_IDS=$(echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE") | .id' 2>/dev/null)
+          if [ -n "$EXISTING_IDS" ]; then
+            for EID in $EXISTING_IDS; do
+              curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID" > /dev/null 2>&1
+            done
+          fi
+
+          # Create EVIDENCE_TEST_MODE=true for preview+production
+          RESULT=$(curl -sS -w "\n%{http_code}" -X POST -H "$AUTH" -H "Content-Type: application/json" "$API_URL" -d '{"key":"EVIDENCE_TEST_MODE","value":"true","target":["preview","production"],"type":"plain"}')
+          RESULT_HTTP=$(echo "$RESULT" | tail -1)
+          if echo "$RESULT_HTTP" | grep -qE "^(200|201)$"; then
+            echo "  ✅ EVIDENCE_TEST_MODE=true configured"
+          else
+            echo "  ❌ Failed to set EVIDENCE_TEST_MODE"
+            exit 1
+          fi
+
+      - name: Trigger new Vercel deployment
+        run: |
+          set +e
+          PROJECT_ID="$VERCEL_PROJECT_ID"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+
+          PROJECT_RESP=$(curl -sS -H "$AUTH" "https://api.vercel.com/v9/projects/$PROJECT_ID")
+          REPO_ID=$(echo "$PROJECT_RESP" | jq -r '.link.repoId // empty')
+          LINK_TYPE=$(echo "$PROJECT_RESP" | jq -r '.link.type // empty')
+          ORG=$(echo "$PROJECT_RESP" | jq -r '.link.org // empty')
+          REPO=$(echo "$PROJECT_RESP" | jq -r '.link.repo // empty')
+
+          if [ -z "$REPO_ID" ] || [ "$REPO_ID" = "null" ]; then
+            echo "❌ Cannot trigger deployment — no linked repoId"
+            exit 1
+          fi
+
+          PAYLOAD=$(jq -n --arg name "snakpass" --arg type "$LINK_TYPE" --arg org "$ORG" --arg repo "$REPO" --argjson repoId "$REPO_ID" --arg ref "main" '{name:$name, gitSource:{type:$type, org:$org, repo:$repo, repoId:$repoId, ref:$ref}}')
+          DEPLOY_RESP=$(curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" "https://api.vercel.com/v13/deployments" -d "$PAYLOAD")
+          DEPLOY_ID=$(echo "$DEPLOY_RESP" | jq -r '.id // empty')
+
+          if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
+            for i in $(seq 1 60); do
+              STATUS_RESP=$(curl -sS -H "$AUTH" "https://api.vercel.com/v13/deployments/$DEPLOY_ID")
+              READY_STATE=$(echo "$STATUS_RESP" | jq -r '.readyState // empty')
+              if [ "$READY_STATE" = "READY" ]; then
+                FINAL_URL=$(echo "$STATUS_RESP" | jq -r '.url // empty')
+                if [ -n "$FINAL_URL" ]; then
+                  echo "NEW_STAGING_URL=https://$FINAL_URL" >> $GITHUB_ENV
+                  echo "✅ Fresh deployment ready: https://$FINAL_URL"
+                fi
+                break
+              fi
+              if [ "$READY_STATE" = "ERROR" ] || [ "$READY_STATE" = "CANCELED" ]; then
+                echo "❌ Deployment failed: $READY_STATE"
+                exit 1
+              fi
+              sleep 5
+            done
+          fi
+
+      - name: Use new deployment URL if available
+        run: |
+          if [ -n "$NEW_STAGING_URL" ]; then
+            echo "STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+            echo "Using fresh deployment: $NEW_STAGING_URL"
+          else
+            echo "Using provided staging URL: $STAGING_URL"
+          fi
 
       - name: Wait for health endpoint
         run: |
           echo "=== Waiting for staging health endpoint ==="
+          STAGING_URL="${STAGING_URL%/}"
           for i in $(seq 1 60); do
             CODE=$(curl -s -o /dev/null -w "%{http_code}" "$STAGING_URL/api/health" 2>/dev/null || echo "000")
             if [ "$CODE" = "200" ]; then
-              echo "✅ Health OK after ${i}s"
+              echo "✅ Health OK after ${i}x5s"
               break
             fi
             if [ "$i" = "60" ]; then
-              echo "❌ Health check failed after 60s"
+              echo "❌ Health check failed after 60 attempts"
               exit 1
             fi
             sleep 5
@@ -88,9 +162,9 @@ jobs:
       - name: Run E1-E6 evidence script
         run: |
           echo "=== Running Wave-5 5b E1-E6 evidence against staging PostgreSQL ==="
-          EVIDENCE_BASE_URL="$STAGING_URL" EVIDENCE_DB=postgresql node scripts/wave5-5b-evidence.mjs > /tmp/5b-evidence-output.txt 2>&1
+          STAGING_URL="${STAGING_URL%/}"
+          EVIDENCE_BASE_URL="$STAGING_URL" EVIDENCE_DB=postgresql node scripts/wave5-5b-evidence.mjs
           EVIDENCE_EXIT=$?
-          cat /tmp/5b-evidence-output.txt
           echo "=== Evidence script exit: $EVIDENCE_EXIT ==="
           exit $EVIDENCE_EXIT
 
@@ -103,6 +177,9 @@ jobs:
             echo "❌ No evidence file found"
             exit 1
           fi
+          # Copy to a canonical name
+          cp "$EVIDENCE_FILE" evidence/wave5-5b/evidence-E1-E6-postgresql-5b-pg-ev.json
+          EVIDENCE_FILE=evidence/wave5-5b/evidence-E1-E6-postgresql-5b-pg-ev.json
           echo "Evidence file: $EVIDENCE_FILE"
           echo "=== Evidence JSON ==="
           cat "$EVIDENCE_FILE" | jq '.'
@@ -127,7 +204,7 @@ jobs:
           E4_MUTATED=$(jq -r '.tests.E4.moneyStateMutated' "$EVIDENCE_FILE")
           E4_FINANCIAL_MUTATION=$(jq -r '.tests.E4.financialMutation' "$EVIDENCE_FILE")
           echo ""
-          echo "=== E4 CRITICAL SAFETY ==="
+          echo "=== E4 CRITICAL SAFETY (PostgreSQL-mandatory) ==="
           echo "E4.passed: $E4_PASSED"
           echo "E4.moneyStateMutated: $E4_MUTATED"
           echo "E4.financialMutation: $E4_FINANCIAL_MUTATION"
@@ -135,25 +212,34 @@ jobs:
             echo "❌ E4 CRITICAL SAFETY property FAILED — reconciliation mutated money state"
             exit 1
           fi
-          echo "✅ E4 PASSED — reconciliation did NOT mutate money state"
+          echo "✅ E4 PASSED — reconciliation did NOT mutate money state on PostgreSQL"
 
-          # Verify E5 (concurrency)
+          # Verify E5 (concurrency — PostgreSQL-mandatory)
           E5_PASSED=$(jq -r '.tests.E5.passed' "$EVIDENCE_FILE")
+          echo ""
+          echo "=== E5 CONCURRENCY (PostgreSQL-mandatory) ==="
           echo "E5.passed: $E5_PASSED"
           if [ "$E5_PASSED" != "true" ]; then
-            echo "❌ E5 (concurrent runs) FAILED"
+            echo "❌ E5 (concurrent runs) FAILED on PostgreSQL"
             exit 1
           fi
           echo "✅ E5 PASSED — concurrent reconciliation runs produce no duplicate findings"
 
-          # Verify E6 (scale)
+          # Verify E6 (scale — PostgreSQL-mandatory)
           E6_PASSED=$(jq -r '.tests.E6.passed' "$EVIDENCE_FILE")
+          E6_FALSE_POSITIVES=$(jq -r '.tests.E6.falsePositives' "$EVIDENCE_FILE")
+          E6_RUNTIME=$(jq -r '.tests.E6.runtimeMs' "$EVIDENCE_FILE")
+          E6_SLA=$(jq -r '.tests.E6.slaMs' "$EVIDENCE_FILE")
+          echo ""
+          echo "=== E6 SCALE (PostgreSQL-mandatory) ==="
           echo "E6.passed: $E6_PASSED"
+          echo "E6.falsePositives: $E6_FALSE_POSITIVES"
+          echo "E6.runtimeMs: $E6_RUNTIME (SLA: $E6_SLA)"
           if [ "$E6_PASSED" != "true" ]; then
-            echo "❌ E6 (scale) FAILED"
+            echo "❌ E6 (scale) FAILED on PostgreSQL"
             exit 1
           fi
-          echo "✅ E6 PASSED — scale test correct within SLA"
+          echo "✅ E6 PASSED — scale test correct within SLA, 0 false positives"
 
       - name: PostgreSQL direct verification (bypass app layer)
         run: |
@@ -167,6 +253,13 @@ jobs:
             -d "$(jq -n --arg q "$VERIFY_SQL" '{query: $q}')")
           echo "$RESULT" | jq '.' 2>/dev/null || echo "$RESULT"
 
+      - name: Upload evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wave5-5b-postgresql-evidence
+          path: evidence/wave5-5b/evidence-E1-E6-*.json
+
       - name: Cleanup test data
         if: always()
         run: |
@@ -174,7 +267,7 @@ jobs:
           # Delete evidence-test data to keep staging clean.
           # SAFE: reconciliation is detection-only — these are audit tables, not money-state.
           # ExceptionQueue entries created by reportInvariantViolation are also cleaned.
-          CLEANUP_SQL='DELETE FROM "ReconciliationFinding"; DELETE FROM "ReconciliationRun"; DELETE FROM "ExceptionQueue" WHERE invariant LIKE '\''M%'\''; DELETE FROM "LedgerEntry" WHERE "traceId" LIKE '\''evidence-5b-%'\'' OR "traceId" LIKE '\''%evidence-setup%'\''; DELETE FROM "Refund" WHERE "idempotencyKey" LIKE '\''ev-5b-%'\''; DELETE FROM "Outbox" WHERE "eventId" LIKE '\''ev-5b-%'\''; DELETE FROM "Payment" WHERE "gatewayPaymentId" LIKE '\''pay_ev_5b_%'\''; DELETE FROM "OrderItem" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "userId" IN (SELECT id FROM "User" WHERE phone = '\''+919999900002'\'')); DELETE FROM "Order" WHERE "userId" IN (SELECT id FROM "User" WHERE phone = '\''+919999900002'\'');'
+          CLEANUP_SQL='DELETE FROM "ReconciliationFinding"; DELETE FROM "ReconciliationRun"; DELETE FROM "ExceptionQueue" WHERE invariant LIKE '\''M%'\''; DELETE FROM "LedgerEntry" WHERE "traceId" LIKE '\''%evidence-setup%'\''; DELETE FROM "Refund" WHERE "idempotencyKey" LIKE '\''ev-5b-%'\''; DELETE FROM "Outbox" WHERE "eventId" LIKE '\''ev-5b-%'\''; DELETE FROM "Payment" WHERE "gatewayPaymentId" LIKE '\''pay_ev_5b_%'\''; DELETE FROM "OrderItem" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "userId" IN (SELECT id FROM "User" WHERE phone = '\''+919999900002'\'')); DELETE FROM "Order" WHERE "userId" IN (SELECT id FROM "User" WHERE phone = '\''+919999900002'\'');'
           RESULT=$(curl -sS -X POST \
             -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
             -H "Content-Type: application/json" \
@@ -183,9 +276,20 @@ jobs:
           echo "Cleanup result: $RESULT"
           echo "=== Cleanup complete ==="
 
-      - name: Upload evidence artifact
+      - name: Remove EVIDENCE_TEST_MODE from Vercel (restore safe state)
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: wave5-5b-postgresql-evidence
-          path: evidence/wave5-5b/evidence-E1-E6-5b-*.json
+        run: |
+          set +e
+          PROJECT_ID="$VERCEL_PROJECT_ID"
+          API_URL="https://api.vercel.com/v10/projects/$PROJECT_ID/env"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+          LIST_BODY=$(curl -sS -H "$AUTH" "$API_URL")
+          EXISTING_IDS=$(echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE") | .id' 2>/dev/null)
+          if [ -n "$EXISTING_IDS" ]; then
+            for EID in $EXISTING_IDS; do
+              curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID" > /dev/null 2>&1
+            done
+            echo "✅ EVIDENCE_TEST_MODE removed from Vercel (safe state restored)"
+          else
+            echo "✅ EVIDENCE_TEST_MODE was not set (nothing to remove)"
+          fi
