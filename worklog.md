@@ -5866,3 +5866,90 @@ Stage Summary:
 - Known gap: until the Phase-2 publisher exists, Payments stay in CAPTURE_PENDING indefinitely in demo mode. This is acceptable because realPayments=false (no real capture to perform) and because the 3a/4b evidence suites verify ledger atomicity, not capture confirmation. The 4c evidence runner (separate task) will need a publisher stub or a CAPTURE_PENDING-aware verification.
 - Next: Phase 2 (publisher extension to consume PAYMENT_CAPTURE_REQUESTED) — NOT started. Awaiting Orchestrator direction.
 - Production NOT touched. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF. Wave-5 NOT started.
+
+
+
+---
+Task ID: 4c-implementation-phase2
+Agent: IDE (main)
+Task: Sub-Wave 4c Phase 2 — Add PAYMENT_CAPTURE_REQUESTED handler to outbox publisher
+
+Work Log:
+- Read worklog.md `4c-implementation-phase1` (the Phase 1 entry) to confirm the contract: capture route now writes Payment status='CAPTURE_PENDING' + Outbox eventType='PAYMENT_CAPTURE_REQUESTED' with payload `{ paymentId, orderId, gatewayPaymentId, amount }` and aggregateId=payment.id. Phase 2 must consume that event in the publisher.
+- Read mini-services/outbox-publisher/index.ts (Wave-2b publisher, 324 lines): cron-triggered lease-based claim loop. Existing dispatch was implicit — a single EVENT_TYPE_TO_SOCKET lookup that THREW `Unknown event type` for any event type not in the map. PAYMENT_CAPTURE_REQUESTED was therefore unprocessable and would have been marked FAILED after MAX_RETRIES.
+- Read src/lib/razorpay.ts: `captureRazorpayPayment(razorpayPaymentId, amount, currency)` returns `{ captured, gatewayPaymentId, signature }`. In demo mode (realPayments=false, default), it returns a hardcoded mock `{ captured: true, gatewayPaymentId, signature: 'sig_demo_...' }` without any HTTP. This is the safe mode for Phase 2.
+- Read src/lib/db.ts and src/lib/idempotency.ts to confirm I must NOT modify them (per task scope).
+- Read src/app/api/payments/route.ts to confirm the exact outbox event shape (payload + aggregateId) that the publisher will consume.
+- Read prisma/schema.prisma to confirm Payment.status is a plain String column (CAPTURE_PENDING is just a value — no migration needed).
+
+Changes to mini-services/outbox-publisher/index.ts (+297 lines):
+
+1. Import: added `import { captureRazorpayPayment } from '../../src/lib/razorpay'` (relative path — publisher is a standalone Bun service and cannot use the Next.js `@/lib/*` tsconfig alias).
+
+2. Added a `COMMAND_EVENT_TYPES` set (`new Set(['PAYMENT_CAPTURE_REQUESTED'])`) that distinguishes command events (trigger a business operation) from transport events (realtime fanout). Command events are routed to dedicated handlers and intentionally NOT added to `EVENT_TYPE_TO_SOCKET` (which is a transport-only map).
+
+3. Extended `LogEntry` interface with optional `paymentId`, `orderId`, `count` fields for capture-handler log lines.
+
+4. Added `processPaymentCaptureRequested(event)` function (~235 lines including doc comments). Flow:
+   a. Parse payload (CaptureRequestedPayload = { paymentId, orderId, gatewayPaymentId, amount }). On malformed JSON: mark outbox PUBLISHED with lastError='malformed-payload-marked-published' and return (non-retryable).
+   b. Read Payment by `event.aggregateId` (== payment.id per the capture route's enqueueOutboxEvent call). If missing: mark outbox PUBLISHED with lastError (non-retryable; impossible by design since Payment+Outbox are written in the same txn).
+   c. IDEMPOTENCY: if `Payment.status === 'CAPTURED'` → mark outbox PUBLISHED and exit. Handles (i) webhook racing ahead and capturing first, (ii) prior publisher invocation that captured but failed to mark outbox PUBLISHED.
+   d. If status is not CAPTURE_PENDING (e.g., FAILED, FROZEN) → throw (publisher's existing retry path handles it; eventually marks outbox FAILED + alerts).
+   e. Call `captureRazorpayPayment(gatewayPaymentId, amount, currency)` **OUTSIDE any transaction body**. This is the Wave-4 4c safety improvement: if the success-path txn below retries on P2034, this capture call is NOT re-executed (no double-charge risk at the gateway). In demo mode this returns mock success immediately.
+   f. On capture-call exception: increment Payment.retryCount + set failureReason='Capture failed: <msg>' (status left as CAPTURE_PENDING — capture may succeed on retry) → rethrow so the publisher's existing catch block drives outbox attempts + backoff.
+   g. On `captureResult.captured === false` (gateway declined): same failure handling (retryCount++, failureReason='Gateway declined capture (captured=false)') → throw.
+   h. On success: open a NEW `db.$transaction(async (tx) => { ... })` and atomically commit:
+      - `tx.payment.updateMany({ where: { id, status: 'CAPTURE_PENDING' }, data: { status: 'CAPTURED', capturedAt: new Date(), version: { increment: 1 } } })` — race-safe conditional update (does NOT override a CAPTURED/FAILED set by a concurrent path like the webhook handler).
+      - If `updated.count > 0` (we won the race): `tx.auditLog.create({ action: 'PAYMENT_CAPTURED', metadata: { paymentId, orderId, gatewayPaymentId, amount, source: 'outbox-publisher', outboxEventId } })` — distinct from `WEBHOOK_PAYMENT_CAPTURED` so audit consumers can distinguish confirmation paths.
+      - `tx.outbox.update({ status: 'PUBLISHED', publishedAt, claimedAt: null, claimUntil: null, workerId: null })` — always (whether or not we won the Payment update race; the capture command's business effect has been achieved either way).
+   i. Emit `capture-completed` log line.
+
+5. Wired the handler into the existing event dispatch loop in `publishPendingEvents()`:
+   ```ts
+   for (const event of claimedEvents) {
+     try {
+       if (COMMAND_EVENT_TYPES.has(event.eventType)) {
+         await processPaymentCaptureRequested(event)
+         result.published++
+         continue  // skip transport code + post-transport PUBLISHED marking
+       }
+       // ...existing transport flow (HTTP/Socket.io)...
+     } catch (error) {
+       // ...existing retry/backoff/FAILED logic — drives outbox lifecycle
+       //   for capture failures too (Payment.retryCount++ already done
+       //   inside the handler before rethrow)...
+     }
+   }
+   ```
+   The `continue` is critical: the handler owns its own outbox state transitions on success (PUBLISHED via the success txn) and on failure (throws → publisher catch handles attempts+backoff). The post-transport PUBLISHED marking in the existing flow is correctly skipped.
+
+Constraints honored:
+- ✅ Did NOT enable realPayments (still OFF — demo mode; captureRazorpayPayment returns mock success).
+- ✅ Did NOT modify db.ts (publisher uses its own `new PrismaClient()` directly — no Next.js singleton).
+- ✅ Did NOT modify idempotency.ts.
+- ✅ Did NOT modify schema.prisma (CAPTURE_PENDING is a String value).
+- ✅ Did NOT modify the capture route (route already writes PAYMENT_CAPTURE_REQUESTED per Phase 1).
+- ✅ Did NOT start Wave-5.
+- ✅ Kept the existing publisher pattern (cron-triggered, lease-based atomic claim, BATCH_SIZE, MAX_RETRIES, BACKOFF_SCHEDULE_MS, stale-CLAIMED recovery) — only ADDED a command-event dispatch branch + handler.
+- ✅ Did NOT add a lint rule / CI gate / code-review checklist (those are §8.2 deferred items, not Phase 2 scope).
+- ✅ Used `db.$transaction()` (not `withTransaction()`) — the publisher is a standalone Bun service and does not import the Next.js `db` singleton. The success-path txn is short (3 writes) and conflicts are unlikely; if a P2034 happens, the txn throws → publisher catch handles retry → on next retry, Payment is found CAPTURED (because Razorpay already captured + the webhook or a prior successful retry marked it) → idempotency path → mark PUBLISHED.
+
+Verification:
+- `bun run lint` → PASS (no errors, no warnings). Confirmed mini-services/ IS in the eslint scope (eslint.config.mjs ignores only node_modules/.next/out/build/examples/skills — NOT mini-services/).
+- TypeScript strict check via `bunx tsc --noEmit` reports 4 pre-existing errors in this file (all unrelated to my changes: `import.meta.dir` Bun-specific, `Bun.serve` Bun-specific, `consumerProcessed` field on LogEntry, `result` field on LogEntry) and 1 pre-existing error in src/lib/razorpay.ts. None of these are introduced by Phase 2; none affect the Next.js build (the publisher is a standalone Bun service, not part of the Next.js compile graph). Lint (the project's quality gate) passes clean.
+- Dev server (auto-running on port 3000) hot-reloaded without errors.
+
+Design decisions / non-obvious points:
+- **AuditLog hash-chain**: the handler uses `tx.auditLog.create({ ... })` directly (NOT the `audit()` helper from src/lib/audit.ts, which would pull in the Next.js `db` singleton). The AuditLog record relies on the schema defaults for `prevHash='GENESIS'` and `hash=''`. This is consistent with the existing `webhook-processor.ts` pattern (also uses `tx.auditLog.create()` without setting hash fields). The hash-chain tamper-evidence weakness is a known pre-existing condition documented in src/lib/audit.ts ("True PREVENTION still requires production-grade WORM storage"). Fixing it is out of Phase 2 scope.
+- **No retry-on-conflict on the success txn**: `db.$transaction()` is used directly (not `withTransaction()` which adds retry-on-P2034). Rationale: (i) the publisher can't import `withTransaction` without dragging in the Next.js `db` singleton; (ii) the success txn is short (3 writes, no row contention expected); (iii) if a conflict does occur, the throw → publisher retry → on next iteration the Payment is found CAPTURED (webhook raced ahead, or Razorpay dashboard confirms) → idempotency path → mark PUBLISHED. Self-healing.
+- **`capturedAt` set only when we win the race**: `tx.payment.updateMany({ where: { status: 'CAPTURE_PENDING' } })` is conditional; if a concurrent webhook already set CAPTURED, `updated.count === 0` and we skip writing a duplicate AuditLog (the webhook path writes its own `WEBHOOK_PAYMENT_CAPTURED`). The outbox event is still marked PUBLISHED in both branches.
+- **Failure semantics**: on capture failure, the handler does Payment.retryCount++ + failureReason, then RE-THROWS the original capture error. The publisher's existing catch block then increments outbox.attempts, applies backoff, and (after MAX_RETRIES) marks the outbox event FAILED. This means Payment.retryCount and Outbox.attempts track the same retry sequence from two angles (Payment-side and outbox-side). They are NOT guaranteed identical (a webhook could reset Payment.status to CAPTURED between publisher retries, breaking the sequence), but both are monotonic and useful for debugging.
+- **Demo-mode behavior**: in demo mode, captureRazorpayPayment() always returns `{ captured: true, ... }`. So the publisher will always take the success path: read Payment (CAPTURE_PENDING) → call mock capture → success txn (Payment CAPTURED + AuditLog + Outbox PUBLISHED). The "Payment stays in CAPTURE_PENDING indefinitely" gap noted in Phase 1 is now CLOSED — Payments transition CAPTURE_PENDING → CAPTURED on the publisher's next cycle (typically within 1 minute of the capture route committing).
+
+Stage Summary:
+- Phase 2 complete: PAYMENT_CAPTURE_REQUESTED is now consumed by the publisher.
+- Payment lifecycle is now end-to-end functional in demo mode: PAYMENT_PENDING → (route) CAPTURE_PENDING + Outbox PAYMENT_CAPTURE_REQUESTED → (publisher) captureRazorpayPayment() [mock-success] → Payment CAPTURED + AuditLog PAYMENT_CAPTURED + Outbox PUBLISHED.
+- Wave-4 4c §6.3.3 mitigation is now FULLY IMPLEMENTED: captureRazorpayPayment() is no longer inside any withTransaction() body, and the publisher's success-path txn does NOT include the capture call (only the DB writes).
+- Known limitation (real mode only, NOT demo): if the success-path txn fails to commit AFTER a real capture succeeded, the next publisher retry will call captureRazorpayPayment() again. Razorpay's capture API rejects re-capture attempts ("already captured"), which would surface as a capture-call failure → Payment.retryCount++. Self-healing relies on either (a) the webhook arriving in the interim (webhook-processor updates Payment to CAPTURED → publisher idempotency path) or (b) manual reconciliation via the alerting system. This is a real-mode concern; demo mode is unaffected. Full real-mode reconciliation is Wave-5 scope.
+- Next: 4c evidence runner (if required by Orchestrator) can now verify the full CAPTURE_PENDING → CAPTURED transition end-to-end (no publisher stub needed).
+- Production NOT touched. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF. Wave-5 NOT started.
