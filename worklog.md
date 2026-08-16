@@ -6195,3 +6195,56 @@ Stage Summary:
 - Wave-5 LOCKED.
 - IDE is STOPPING. Wave-4 is complete. No further implementation authorized.
 
+
+
+---
+Task ID: prod-readiness-gate-review
+Agent: Software Architect / Gate Reviewer
+Task: Post-Wave-4 Production Readiness Gate Review (READ/PLAN-FIRST ONLY — NO IMPLEMENTATION)
+
+Work Log:
+- Read worklog.md tail (~lines 5500-6197) to confirm Wave-0 through Wave-4 ALL CLOSED (4a/4b/4c/4d S5 PASS / CLOSED — Wave-4 COMPLETE). Confirmed Orchestrator's governance model: Wave-4 closure ≠ production authorization. Feature flags currently OFF in production: realPayments, webhookHandler, requestHashEnforcement.
+
+- Read Wave-4 closure artifacts in parallel: WAVE4_EVIDENCE.md (409 lines, §8 final governance state — Wave-4 COMPLETE / ALL SUB-WAVES S5 PASS / CLOSED), WAVE4_GATE_REVIEW.md (941 lines, READ/PLAN-FIRST Gate Review with D1-D10 decision points + Wave-5 deferrals + CONDITIONAL-GO recommendation), SUBWAVE_3_GATE_REVIEW.md (142 lines, original 3 Gate Review with Wave-4/5 deferrals — webhook → Wave-4, refund → Wave-5, reconciliation → Wave-5).
+
+- Read P0 inventory + governance docs in parallel: P0_TRACEABILITY_MAP.md (192 lines, 28 P0s mapped to 14 invariants; G-B1 resolved — P0-07 fully owns I-13; Coverage A-F GREEN, G+H FAIL pending implementation), P0_DEPENDENCY_GRAPH.md (407 lines), CRITICAL_PATH.md (407 lines — 7-edge critical path P0-15→P0-25→P0-24→P0-01→P0-02→P0-04→P0-06→P0-07), IMPLEMENTATION_ORDER.md (298 lines — 8 waves; Wave-5 = P0-04 + P0-03, Wave-6 = P0-06, Wave-7 = P0-07 terminus), PRODUCTION_READINESS_MATRIX.md (1024 lines — §14.1 7 launch-gate AND-conditions), P0-27-PHASE2-REMEDIATION.md (566 lines — 12 open items, 8 staging-blocking + 4 Phase-3 deferred).
+
+- Read infrastructure + architecture + DR docs in parallel: INFRASTRUCTURE_READINESS.md (427 lines — 17 blockers: 8 staging-blocking + 9 Phase-3 deferred; Final verdict: BLOCKED at runtime provisioning layer), docs/STAGING_ARCHITECTURE.md (403 lines — Option B recommended for production = separate Supabase project; 14-item staging readiness checklist S-1..S-14), docs/POSTGRESQL_CUTOVER_PLAN.md (311 lines — 11-step cutover + 5-scenario rollback; snakzap_app vs snakzap_admin role separation), docs/DR_RUNBOOK.md (216 lines — DR architecture + backup/restore procedure + reconciliation procedure — DESIGN ONLY, drill NOT executed), docs/TRANSACTION_RETRY_INVARIANT.md (559 lines — IMPLEMENTED / VERIFIED via Wave-4 4c; §8.2 enforcement items 1, 2, 4, 5 still deferred).
+
+- Read codebase + config in parallel: src/lib/deployment.ts (103 lines — 7 feature flags all default false), prisma/schema.prisma head (50 lines — confirmed provider="postgresql" at line 14), vercel.json (75 lines — region hnd1 Tokyo, function maxDurations, security headers, crons: []), package.json (103 lines — confirmed razorpay@^2.9.8 + firebase-admin@^14.2.0 + @supabase/supabase-js@^2.112.2 + socket.io@^4.8.3 installed), src/lib/csrf.ts (40 lines — double-submit cookie, secure: NODE_ENV==='production'), src/lib/rate-limit.ts (40 lines — in-memory Map fallback, Redis NOT provisioned), src/app/api/alerts/evaluate/route.ts (40 lines — on-demand alert evaluation endpoint), .env (1 line — local SQLite only: DATABASE_URL=file:/home/z/my-project/db/custom.db).
+
+- Inspected directory structures: prisma/migrations/ (2 migrations — initial_schema + audit_hash_chain + migration_lock.toml; Wave-1..4 sub-wave migrations live in prisma/scripts/ applied to staging only), .github/workflows/ (35 workflows — deploy.yml, rollback.yml, staging-rollback-drill.yml, 4x dev-001-*.yml, wave{N}-{Nx}-staging-migration.yml, subwave-{Nx}-postgresql-concurrent-evidence.yml, plus operational workflows vercel-preflight/vercel-env-config/fix-preview-database-url/disable-vercel-protection/diagnose-db-hostname).
+
+- Assessed production readiness gaps across 9 categories: Database (7 sub-items), Feature flags (7 flags all OFF), P0 items (24/28 CLOSED, 4 LOCKED, 1 PARTIAL), External services (9 services — only staging Supabase + staging Vercel preview exist; all production services UNPROVISIONED), Security (CSRF + WORM ready; rate-limiter + Firebase partial; admin password default + realtime CORS hygiene), Infrastructure (4 of 7 mini-services need deployment; 3 portal shims should be retired), Testing (smoke script + Wave-0..4 evidence complete; load tests + DR drill + rollback drill MISSING), Monitoring (13 alert rules defined but alert-evaluator NOT deployed; no dashboard; no on-call), DR (runbook complete; drill NOT executed — launch-gate #4 fails).
+
+- Produced risk assessment: 24 risks identified (R1-R24 + folded trivial items). 4 CRITICAL (R1 P0-04 LOCKED, R3 P0-07 LOCKED, R7 prod Supabase UNPROVISIONED, R12 snakzap_app role not yet applied to prod). 9 HIGH (R2 P0-03 LOCKED, R4 P0-06 LOCKED, R5 DR drill NOT executed, R8 prod Vercel env vars NOT configured, R9 Fly.io mini-services NOT deployed, R10 Razorpay keys NOT provisioned, R11 Firebase service account NOT provisioned, R19 backup-scheduler needs pg_dump rewrite, R23 GitHub secrets/environments NOT configured). 7 MEDIUM. 5 LOW.
+
+- Mapped each risk to launch-gate AND-conditions (§14.1 of PRODUCTION_READINESS_MATRIX.md). Status: Condition #1 FAIL (4 P0s not Production-ready), #2 FAIL (I-03/I-06/I-08/I-11/I-13 have LOCKED direct protectors), #3 PARTIAL (Razorpay real-mode scenarios NOT tested, Firebase NOT tested in prod mode), #4 FAIL (DR drill NOT executed), #5 FAIL (rollback drill NOT executed), #6 PASS (no traffic today → no exceptions), #7 PASS (no waivers today). 4 of 7 conditions FAIL.
+
+- Defined 15 Hard Blockers (HB-1..HB-15), 14 Soft Blockers (SB-1..SB-14), 8 Post-Production items (PP-1..PP-8).
+
+- Authored 12 Decision Points for Orchestrator (D1..D12): Wave-5 authorization, operator provisioning sequence, drill execution authorization, staging real-mode evidence, requestHashEnforcement/webhookHandler/realPayments flag enablement timing, production launch strategy, §8.2 enforcement implementation wave, backup rewrite, load testing, AuditLog WORM storage.
+
+- Produced final recommendation: NOT READY. Justification: 4 P0s LOCKED on critical path (including terminus P0-07 fully owning I-13); 2 of 7 launch-gate AND-conditions FAIL (DR drill + rollback drill); all production infrastructure UNPROVISIONED; 3 of 7 feature flags correctly OFF and CANNOT be safely enabled (realPayments blocked on P0-04; webhookHandler blocked on Razorpay webhook secret + recommended post-Wave-5; pickupAttributionEnforcement blocked on P0-07); TRANSACTION_RETRY_INVARIANT partial enforcement (§8.2 items deferred).
+
+Constraints honored:
+- ✅ Did NOT modify any source code (no .ts files edited).
+- ✅ Did NOT modify schema.prisma.
+- ✅ Did NOT create migrations.
+- ✅ Did NOT run evidence tests.
+- ✅ Did NOT deploy anything.
+- ✅ Did NOT enable any feature flag (all 7 remain OFF).
+- ✅ Did NOT start Wave-5 implementation.
+- ✅ Did NOT reopen Wave-4 (Wave-4 stays COMPLETE / CLOSED).
+- ✅ Did NOT touch production systems.
+- ✅ Did NOT activate real payments (realPayments remains OFF).
+- ✅ Used only Read / Grep / Glob / LS tools — no writes except the Gate Review document + this worklog entry.
+
+Stage Summary:
+- Document: PRODUCTION_READINESS_GATE_REVIEW.md (comprehensive — 11 sections, 24 risks, 15 hard blockers, 14 soft blockers, 8 post-production items, 12 decision points).
+- P0 inventory: 24/28 CLOSED, 4/28 LOCKED (P0-04, P0-03, P0-06, P0-07), 1/28 PARTIAL (P0-26 — DR design only, drill NOT executed).
+- Launch-gate AND-conditions: 4 of 7 FAIL (#1 all P0s Production-ready, #2 all invariants verified, #4 DR drill, #5 rollback drill).
+- Recommendation: NOT READY. Path to READY requires: Wave-5/6/7 IDE work + Phase-3 operator provisioning + drills + real-mode staging evidence. Estimated 3–6 months IDE + ~4–6 hours operator + ~2–4 hours drills + ~1–2 days real-mode staging.
+- Production NOT AUTHORIZED. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF. Wave-5 LOCKED (recommended for authorization in D1). Wave-4 stays CLOSED.
+- IDE is STOPPING. Awaiting Orchestrator decision on D1-D12.
+
