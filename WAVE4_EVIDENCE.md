@@ -18,7 +18,7 @@
 | 4a | P0-05 Webhook handler (HMAC verify + dedup + idempotent processing) | ✅ S5 PASS / CLOSED |
 | 4b | P0-02 Ledger formalization | ✅ S5 PASS / CLOSED |
 | 4c | TRANSACTION_RETRY_INVARIANT mitigation | ✅ S5 PASS / CLOSED |
-| 4d | orphan_business_count fix | 🔒 PENDING (awaiting authorization) |
+| 4d | orphan_business_count fix | 🟡 Evidence-Complete (awaiting Orchestrator S5 review) |
 
 ---
 
@@ -244,3 +244,120 @@ Publisher retry:
 ```
 
 4c will NOT reopen for evidence.
+
+---
+
+## 7. Sub-Wave 4d — orphan_business_count Fix (Evidence-Complete)
+
+> **Sub-Wave 4d evidence captured via GitHub Actions run 31935166775.**
+> Workflow: `.github/workflows/subwave-4d-postgresql-evidence.yml`
+> Fix: 1-line SQL `WHERE` clause addition in `mini-services/alert-evaluator/index.ts:191`
+>   `AND o."createdAt" >= (SELECT MIN("createdAt") FROM "Outbox")`
+> No schema change. No migration. No feature flag. No application logic change.
+> Risk: LOW (read-only query fix, zero blast radius).
+> PostgreSQL-native evidence REQUIRED for S5.
+> After evidence capture, STOP and report to Orchestrator. Do NOT self-close.
+
+### Status: 🟡 Evidence-Complete (awaiting Orchestrator S5 review)
+
+- **Workflow:** GitHub Actions run `31935166775`
+- **Job ID:** `95135808149` — "4d-PG — Orphan business count fix verification on PostgreSQL"
+- **Job window:** started 2026-08-16T07:56:23Z, completed 2026-08-16T07:58:00Z (~1m37s)
+- **Conclusion:** ✅ success
+- **Database:** PostgreSQL (Supabase staging, project ref `zmzqqcyapcezmaqvuzzd`)
+- **Staging URL:** `https://snakpass-476kyssdf-snakzap.vercel.app`
+- **Evidence JSON:** `evidence/wave4-4d/evidence-postgresql-4d-pg-ev.json`
+- **Run ID:** `4d-pg-ev-1786867070`
+- **Timestamp:** 2026-08-16T07:57:57Z
+
+#### 4d Evidence Summary
+
+| # | Scenario | Status | Evidence |
+|---|----------|--------|----------|
+| 4d-E1 | Historical baseline exclusion (pre-outbox orders NOT counted) | ✅ PASS | PostgreSQL |
+| 4d-E2 | Genuine orphan detection (post-outbox orphan IS detected) | ✅ PASS | PostgreSQL |
+| 4d-E3 | Mixed population correctness (valid order WITH outbox NOT counted) | ✅ PASS | PostgreSQL |
+
+#### 4d-E1: Historical Baseline Exclusion — ✅ PASS
+
+```json
+{
+  "name": "Historical baseline exclusion",
+  "passed": true,
+  "oldOrphanCount": 78,
+  "newOrphanCount": 7,
+  "preOutboxOrderCount": 72,
+  "description": "Pre-outbox orders should NOT be counted as orphans"
+}
+```
+
+#### 4d-E2: Genuine Orphan Detection — ✅ PASS
+
+```json
+{
+  "name": "Genuine orphan detection",
+  "passed": true,
+  "orphanCountAfterInsert": 8,
+  "description": "Post-outbox order without outbox event SHOULD be detected"
+}
+```
+
+#### 4d-E3: Mixed Population Correctness — ✅ PASS
+
+```json
+{
+  "name": "Mixed population correctness",
+  "passed": true,
+  "orphanCountAfterMixed": 8,
+  "expectedCount": 8,
+  "description": "Valid order WITH outbox event should NOT be counted as orphan"
+}
+```
+
+#### Decisive Evidence (orchestrator-required fields)
+
+```text
+database = postgresql
+historicalExclusionWorking = true
+genuineOrphanDetected = true
+mixedPopulationCorrect = true
+ok = true
+```
+
+#### Baseline
+
+```text
+oldOrphanCount = 78
+newOrphanCount = 7
+outboxBaseline = 2026-08-15 05:56:51.55
+totalOrders = 90
+preOutboxOrderCount = 72
+```
+
+#### Governance
+
+```text
+realPaymentsEnabled = false
+productionTouched = false
+schemaChanged = false
+migrationCreated = false
+note = "4d evidence: orphan_business_count timestamp filter fix verified on staging PostgreSQL. Test data cleaned up. No production traffic touched."
+```
+
+### Governance State (awaiting Orchestrator S5 review)
+
+```text
+Wave-4        🟢 IMPLEMENTATION AUTHORIZED (4d fold-in)
+
+Sub-Wave 4d   🟡 EVIDENCE-COMPLETE — awaiting Orchestrator S5 review
+              ├─ 4d-E1: Historical baseline exclusion ✅ PASS
+              ├─ 4d-E2: Genuine orphan detection ✅ PASS
+              ├─ 4d-E3: Mixed population correctness ✅ PASS
+              ├─ Fix: 1-line SQL WHERE clause addition (read-only)
+              └─ No schema/migration/feature-flag needed
+
+Production    🚫 NOT AUTHORIZED
+realPayments  🚫 OFF
+```
+
+**STOP — IDE is not self-closing 4d. Awaiting Orchestrator S5 decision.**

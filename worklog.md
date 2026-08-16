@@ -6133,3 +6133,38 @@ Stage Summary:
 - Risk: LOW
 - Recommendation: GO
 
+
+
+---
+Task ID: 4d-postgresql-evidence
+Agent: General-purpose sub-agent (IDE)
+Task: Monitor GitHub Actions run 31935166775 — extract 4d PostgreSQL evidence JSON
+
+Work Log:
+- Polled GET https://api.github.com/repos/zheoOviya/snakpass/actions/runs/31935166775 every 20s.
+- Iteration 1 (07:57:11): status=in_progress, conclusion=None
+- Iteration 2 (07:57:32): status=in_progress, conclusion=None
+- Iteration 3 (07:57:53): status=in_progress, conclusion=None
+- Iteration 4 (07:58:13): status=completed, conclusion=success
+- Total wall-clock: ~60s (well under 15-minute cap).
+- Workflow: "Wave-4 4d — PostgreSQL Orphan Business Count Evidence" (.github/workflows/subwave-4d-postgresql-evidence.yml)
+- Job ID: 95135808149 — Name: "4d-PG — Orphan business count fix verification on PostgreSQL"
+- Job window: started 2026-08-16T07:56:23Z, completed 2026-08-16T07:58:00Z (~1m37s).
+- Downloaded logs via GET /actions/jobs/95135808149/logs (-L redirect flag).
+- Found 2 occurrences of "=== Evidence JSON ===" in logs (1st = echo script, 2nd = actual emitted JSON).
+- Extracted JSON block (from { to matching }) at the 2nd occurrence using Python brace-counting parser.
+- Saved evidence file: /home/z/my-project/evidence/wave4-4d/evidence-postgresql-4d-pg-ev.json (1642 bytes, valid JSON).
+- Updated WAVE4_EVIDENCE.md: changed 4d status from "🔒 PENDING" → "🟡 Evidence-Complete (awaiting Orchestrator S5 review)" and added 4d evidence section with E1/E2/E3 results.
+- Did NOT enable realPayments. Did NOT start Wave-5. Did NOT self-close 4d.
+
+Stage Summary:
+- Workflow run 31935166775: ✅ success
+- Evidence file: /home/z/my-project/evidence/wave4-4d/evidence-postgresql-4d-pg-ev.json
+- ok: true
+- runId: 4d-pg-ev-1786867070
+- database: postgresql
+- 4d-E1 (Historical baseline exclusion): PASS — oldOrphanCount=78, newOrphanCount=7, preOutboxOrderCount=72
+- 4d-E2 (Genuine orphan detection): PASS — orphanCountAfterInsert=8 (orphan correctly detected)
+- 4d-E3 (Mixed population correctness): PASS — orphanCountAfterMixed=8, expectedCount=8 (valid order WITH outbox NOT counted)
+- governance: realPaymentsEnabled=false, productionTouched=false, schemaChanged=false, migrationCreated=false
+- 4d NOT self-closed. Awaiting Orchestrator S5 review.
