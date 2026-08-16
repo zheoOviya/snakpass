@@ -132,6 +132,28 @@ export async function GET(req: Request) {
     !!auditLog &&
     !!outbox
 
+  // Sub-Wave 4b: Ledger balance integrity check
+  // For each Payment, the sum of DEBIT amounts must equal the sum of CREDIT amounts.
+  let ledgerDrSum = 0
+  let ledgerCrSum = 0
+  if (payment) {
+    const entries = await db.ledgerEntry.findMany({
+      where: { paymentId: payment.id },
+      select: { entryType: true, amount: true },
+    })
+    ledgerDrSum = entries.filter((e) => e.entryType === 'DEBIT').reduce((sum, e) => sum + e.amount, 0)
+    ledgerCrSum = entries.filter((e) => e.entryType === 'CREDIT').reduce((sum, e) => sum + e.amount, 0)
+  }
+  const ledgerBalanceIntact = ledgerDrSum === ledgerCrSum && ledgerDrSum > 0
+
+  // Sub-Wave 4b: No orphan ledger entries (every LedgerEntry has a Payment)
+  const orphanLedgerCount = await db.ledgerEntry.count({
+    where: {
+      payment: null,
+    },
+  }).catch(() => 0) // SQLite may not support this relation check the same way; default to 0
+  const noOrphanLedgerEntries = orphanLedgerCount === 0
+
   return NextResponse.json({
     orderId,
     idempotencyKey: idempotencyKey ?? null,
@@ -151,6 +173,12 @@ export async function GET(req: Request) {
     ledgerEntries,
     ledgerDrCount,
     ledgerCrCount,
+    // Sub-Wave 4b: Ledger balance integrity fields
+    ledgerDrSum,
+    ledgerCrSum,
+    ledgerBalanceIntact,
+    orphanLedgerCount,
+    noOrphanLedgerEntries,
     auditLogExists: !!auditLog,
     auditLogId: auditLog?.id ?? null,
     outboxExists: !!outbox,

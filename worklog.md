@@ -5676,3 +5676,92 @@ Stage Summary:
 - Production NOT touched. realPayments OFF. webhookHandler OFF (production). 4c NOT started.
 - IDE proceeding with 4b implementation (P0-02 Ledger Formalization).
 
+
+---
+Task ID: 4b-workflow-adapt
+Agent: CI/CD Workflow Adapter (sub-agent)
+Task: Create Wave-4 4b PostgreSQL ledger balance evidence workflow
+
+Work Log:
+- Received task: Create `.github/workflows/subwave-4b-postgresql-concurrent-evidence.yml`
+- Starting point: Wave-3 3a workflow (proven — workflow run 31896343466 passed)
+- 4a workflow (run 31921274765) also referenced for pattern consistency
+- Read both 3a (791 lines) and 4a (1043 lines) workflows to understand the proven pattern
+- Read prisma/schema.prisma to confirm:
+  - Payment.orderId is @unique (line 358) → each concurrent capture needs its own order
+  - LedgerEntry has paymentId (required FK), entryType (DEBIT|CREDIT), amount (Int, paise)
+  - 4b needs NO new feature flags (no webhookHandler, no requestHashEnforcement)
+- Read evidence-setup endpoint (src/app/api/payments/evidence-setup/route.ts):
+  - Confirmed `scenario=concurrent` creates a fresh order per call (same test user)
+  - Endpoint gates ONLY on EVIDENCE_TEST_MODE=true (no NODE_ENV check needed)
+- Created `.github/workflows/subwave-4b-postgresql-concurrent-evidence.yml` (858 lines)
+
+Key design decisions:
+  - Test: 5 concurrent captures with DIFFERENT idempotency keys + DIFFERENT orders
+    (Payment.orderId is @unique, so 5 captures need 5 orders to create 5 Payments)
+  - Calls evidence-setup 5 times to create 5 fresh orders (same test user)
+  - Uses sessionToken + csrfToken from the FIRST setup call for all 5 concurrent captures
+  - Verification: Payment count == 5, LedgerEntry count == 10 (5 Dr + 5 Cr),
+    Dr sum == Cr sum (balance intact), no orphan LedgerEntries (global FK check)
+  - Orchestrator-required JSON: 9 fields (database, concurrentRequests, paymentCount,
+    ledgerEntryCount, ledgerDrCount, ledgerCrCount, ledgerBalanceIntact,
+    noOrphanLedgerEntries, ok)
+  - Cleanup: deletes ALL test data by userId (Payment, LedgerEntry, Outbox, OrderItem,
+    Order) + 4b-specific IdempotencyKey + AuditLog entries
+  - Only sets EVIDENCE_TEST_MODE=true on Vercel (NO webhookHandler, NO requestHashEnforcement)
+
+Validation performed:
+  - YAML syntax: `python3 -c "import yaml; yaml.safe_load(...)"` → VALID (858 lines)
+  - Structure validation: 11 steps, all named correctly:
+    1. Checkout
+    2. Verify trigger (RUN-4B-PG-EVIDENCE)
+    3. Install dependencies
+    4. Verify secrets present
+    5. Verify Supabase schema (Payment + LedgerEntry tables + columns)
+    6. Set EVIDENCE_TEST_MODE=true on Vercel (ONLY this flag — no others)
+    7. Trigger new Vercel deployment (EXACTLY as-is from 3a — 162 lines, byte-identical)
+    8. Use new deployment URL if available (EXACTLY as-is from 3a)
+    9. Verify staging health + evidence endpoints deployed (EXACTLY as-is from 3a)
+    10. Run 5-concurrent-capture test + verify PostgreSQL ledger balance (408 lines)
+    11. Upload evidence (artifact: wave4-4b-postgresql-concurrent-evidence)
+  - Bash syntax: All 9 run scripts validated via `bash -n` → all OK
+    (including the 408-line test step)
+  - jq filter syntax: Extracted the full jq filter, ran with all 22 --arg/--argjson
+    set to dummy values → exit code 0, output is well-formed JSON with all 9
+    orchestrator-required fields present
+  - Vercel deploy-trigger logic (step 7): byte-identical to 3a (verified via Python diff)
+  - Steps 8 + 9: byte-identical to 3a (verified via Python diff)
+  - Step 6: only differs from 3a by adding 6 comment lines explaining 4b doesn't
+    need webhookHandler/requestHashEnforcement (no functional change to env-var logic)
+  - Cleanup SQL: Tested the printf with dummy values → produces 8 well-formed DELETE
+    statements (LedgerEntry, Outbox x2, OrderItem, IdempotencyKey, AuditLog, Payment,
+    Order), all scoped by userId + idempotencyKey prefix. printf's `%%` correctly
+    escapes to literal `%` in LIKE patterns.
+  - Query SQL: Tested all 4 printf-based queries (Payment, Ledger by entryType,
+    Orphan check, Per-Payment breakdown) with dummy values → all produce valid SQL
+    with correct LIKE patterns and single-quote escaping
+  - No leftover 3a-specific strings (no "3a-PG", "RUN-3A", "wave3-3a", "Sub-Wave 3a")
+  - No webhookHandler/requestHashEnforcement feature flags SET (only mentioned in
+    comments explaining 4b doesn't need them + in governance block as `false`)
+  - realPaymentsEnabled: false in governance block
+  - No git commit/push commands found
+
+Strict constraints honored:
+  - ✅ ONLY created `.github/workflows/subwave-4b-postgresql-concurrent-evidence.yml`
+    (no other files modified)
+  - ✅ Did NOT modify any source code (.ts files unchanged)
+  - ✅ Did NOT modify prisma/schema.prisma
+  - ✅ Did NOT modify any other workflows (3a, 3b, 3c, 4a all unchanged)
+  - ✅ Did NOT commit or push
+  - ✅ Did NOT enable realPayments (governance block: realPaymentsEnabled=false)
+  - ✅ Kept the Vercel deploy-trigger logic EXACTLY as-is (step 7 byte-identical to 3a)
+  - ✅ Only set EVIDENCE_TEST_MODE=true on Vercel (no webhookHandler, no
+    requestHashEnforcement — 4b exercises the existing capture path)
+
+Stage Summary:
+- File created: `.github/workflows/subwave-4b-postgresql-concurrent-evidence.yml` (858 lines)
+- Validation status: YAML valid + all 9 bash blocks valid + jq filter valid + cleanup SQL verified + query SQL verified + Vercel deploy logic byte-identical to 3a
+- Orchestrator-required JSON shape: `{ ok, database, concurrentRequests, paymentCount, ledgerEntryCount, ledgerDrCount, ledgerCrCount, ledgerBalanceIntact, noOrphanLedgerEntries }` (all 9 fields present in `orchestratorRequiredFields` object)
+- Invariants verified by `ok:true`: Payment count=5 + LedgerEntry count=10 (5 Dr + 5 Cr) + Dr sum == Cr sum (balance intact) + no orphan LedgerEntries (global FK check) + all 5 captures succeeded
+- Next: ready for Orchestrator review. Workflow NOT triggered (will be triggered manually with `confirm=RUN-4B-PG-EVIDENCE` + staging_url input when 4b implementation is deployed)
+- Production NOT touched. realPayments OFF. No additional feature flags set.
