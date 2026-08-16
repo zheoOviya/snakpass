@@ -51,6 +51,20 @@ export const FEATURE_FLAGS = {
   // When ON:  Handler processes incoming Razorpay webhooks (HMAC verify + dedup + idempotent processing).
   // Production enablement requires separate Orchestrator authorization.
   webhookHandler: { key: 'webhook-handler', enabled: getFlag('webhook-handler', false), description: 'Enable Razorpay webhook handler endpoint (P0-05)' },
+
+  // Sub-Wave 5C: Reconciliation auto-repair (default OFF — narrowly scoped)
+  // When OFF: ReconciliationFinding rows are created for detected mismatches, but NO
+  //           remediation/repair action is attempted. Findings are escalated to
+  //           ExceptionQueue for CRITICAL/HIGH severity (existing 5B behavior).
+  // When ON:  ONLY M16 (outbox lag — operational, non-financial) remediation is active.
+  //           M16 remediation triggers the outbox publisher's /trigger endpoint (operational
+  //           restart) — it does NOT mutate any money-state table (Payment, Refund,
+  //           LedgerEntry, Outbox, WebhookEvent, IdempotencyKey, AuditLog).
+  //           M3/M9/M10 (CLASS C — status mutation) are NOT authorized by this flag;
+  //           they require separate Orchestrator authorization.
+  //           CLASS B/D/E mismatches are NEVER automatically repaired (regardless of flag).
+  // Production enablement requires separate Orchestrator authorization.
+  reconciliationAutoRepair: { key: 'reconciliation-auto-repair', enabled: getFlag('reconciliation-auto-repair', false), description: 'Enable M16-only reconciliation auto-repair (operational, non-financial)' },
 } as const
 
 export function isFeatureEnabled(key: keyof typeof FEATURE_FLAGS): boolean {

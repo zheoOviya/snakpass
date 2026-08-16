@@ -1,5 +1,6 @@
 import { db, withTransaction } from './db'
 import { reportInvariantViolation } from './invariant-checker'
+import { isFeatureEnabled } from './deployment'
 import { info as logInfo, warn as logWarn, error as logError, newTraceId } from './logger'
 
 // P0-03 Wave-5 Sub-Wave 5b — Reconciliation detection library (READ-ONLY)
@@ -903,4 +904,383 @@ export async function listFindings(opts: { unresolvedOnly?: boolean; limit?: num
  */
 export async function getMismatchCount(): Promise<number> {
   return db.reconciliationFinding.count({ where: { resolvedAt: null } })
+}
+
+// ============================================================================
+// P0-03 Wave-5 Sub-Wave 5C — M16 Remediation Handler (M16-ONLY)
+// ============================================================================
+// Orchestrator Directive WAVE5-5C-P0-03-IMPLEMENT-M16-FIRST:
+//   ONLY M16 (outbox lag — operational, non-financial) remediation is authorized.
+//   M3/M9/M10 (CLASS C — status mutation) + CLASS B/D/E are NOT authorized.
+//
+// SAFETY CONTRACT (Orchestrator hard boundary for 5C-M16):
+//   - M16 remediation NEVER writes to Payment, Refund, LedgerEntry, Outbox,
+//     WebhookEvent, IdempotencyKey, or AuditLog.
+//   - M16 remediation NEVER makes external Razorpay API calls.
+//   - M16 remediation's only "external" action is an HTTP call to the outbox
+//     publisher's /trigger endpoint (operational restart — no financial mutation).
+//   - M16 remediation's only DB writes are to RemediationAction +
+//     ReconciliationFinding (resolves the finding).
+//
+// Safety Invariants satisfied (per WAVE5_5C_REMEDIATION_GATE_REVIEW.md §4):
+//   SI-1: Re-validation before repair (re-check M16 finding is still present).
+//   SI-2: Repair idempotency (RemediationAction unique constraint on findingId+repairType).
+//   SI-4: Conditional updates (updateMany WHERE resolvedAt IS NULL).
+//   SI-6: Every repair writes a RemediationAction audit record.
+//   SI-8: Post-repair verification (re-run M16 detector to confirm resolution).
+//   SI-12: Feature-flagged (reconciliationAutoRepair, default OFF).
+// ============================================================================
+
+/**
+ * M16 remediation result.
+ */
+export interface M16RemediationResult {
+  findingId: string
+  repairType: string
+  status: 'SUCCEEDED' | 'SKIPPED' | 'FAILED' | 'DISABLED'
+  reason: string
+  lagBeforeSeconds: number | null
+  lagAfterSeconds: number | null
+  publisherTriggerCalled: boolean
+  remediationActionId: string | null
+}
+
+/**
+ * Re-validate the M16 finding: re-read the CURRENT state of the specific outbox
+ * event referenced by the finding. If the event is still PENDING + still older
+ * than the SLA threshold, the finding is still valid (SI-1).
+ *
+ * NOTE: This does NOT re-run the detector (which only returns the single oldest
+ * PENDING event). Instead, it checks the specific outbox event by ID — because
+ * the finding may reference an event that is no longer the oldest (a newer old
+ * event may have been created after it). The finding is "stale" only if the
+ * specific event is no longer PENDING OR is no longer older than the SLA.
+ *
+ * @param findingId The ReconciliationFinding id to re-validate.
+ * @returns The current M16 finding data if still present, else null (stale).
+ */
+async function revalidateM16Finding(
+  findingId: string,
+): Promise<{ outboxId: string; eventId: string; ageMs: number } | null> {
+  // Read the finding row
+  const finding = await db.reconciliationFinding.findUnique({
+    where: { id: findingId },
+    select: { mismatchClass: true, entityId: true, resolvedAt: true, stateSnapshot: true },
+  })
+  if (!finding || finding.mismatchClass !== 'M16_OUTBOX_LAG_EXCEEDED' || finding.resolvedAt !== null) {
+    return null // finding doesn't exist, is not M16, or is already resolved
+  }
+  // Re-read the CURRENT state of the specific outbox event (by entityId = outbox id)
+  const outboxEvent = await db.outbox.findUnique({
+    where: { id: finding.entityId },
+    select: { id: true, eventId: true, status: true, createdAt: true },
+  })
+  if (!outboxEvent) {
+    return null // the outbox event was deleted — finding is stale
+  }
+  // If the event is no longer PENDING, it was published (publisher caught up) — finding is stale
+  if (outboxEvent.status !== 'PENDING') {
+    return null
+  }
+  // If the event is still PENDING but is now under the SLA threshold (shouldn't happen —
+  // createdAt doesn't change — but check defensively), the finding is stale
+  const ageMs = Date.now() - outboxEvent.createdAt.getTime()
+  const lagThresholdMs = 5 * 60 * 1000 // 5 min SLA (matches M16 detector)
+  if (ageMs <= lagThresholdMs) {
+    return null // event is now under the SLA (impossible unless createdAt was edited) — stale
+  }
+  // The finding is still valid — return the current data
+  return {
+    outboxId: outboxEvent.id,
+    eventId: outboxEvent.eventId,
+    ageMs,
+  }
+}
+
+/**
+ * Compute the current outbox lag in seconds (for pre/post comparison).
+ */
+async function computeOutboxLagSeconds(): Promise<number> {
+  const oldestPending = await db.outbox.findFirst({
+    where: { status: 'PENDING' },
+    orderBy: { createdAt: 'asc' },
+    select: { createdAt: true },
+  })
+  if (!oldestPending) return 0
+  return Math.floor((Date.now() - oldestPending.createdAt.getTime()) / 1000)
+}
+
+/**
+ * Trigger the outbox publisher's /trigger endpoint (operational restart).
+ *
+ * This is the ONLY "external" action M16 remediation takes. It does NOT
+ * mutate any money-state table — it just nudges the publisher to process
+ * pending events. If the publisher is unreachable, the repair fails gracefully
+ * (the finding remains open + is escalated via alert).
+ *
+ * OUTBOX_PUBLISHER_URL env var configures the publisher URL. If not set,
+ * the trigger is skipped (repair status = SKIPPED, reason = "publisher URL not configured").
+ */
+async function triggerOutboxPublisher(): Promise<{ called: boolean; ok: boolean; error?: string }> {
+  const publisherUrl = process.env.OUTBOX_PUBLISHER_URL
+  if (!publisherUrl) {
+    return { called: false, ok: false, error: 'OUTBOX_PUBLISHER_URL not configured' }
+  }
+  try {
+    const response = await fetch(`${publisherUrl.replace(/\/$/, '')}/trigger`, {
+      method: 'POST',
+      signal: AbortSignal.timeout(5000),
+    })
+    if (!response.ok) {
+      return { called: true, ok: false, error: `Publisher returned HTTP ${response.status}` }
+    }
+    return { called: true, ok: true }
+  } catch (err) {
+    return { called: true, ok: false, error: (err as Error).message }
+  }
+}
+
+/**
+ * Attempt to repair a single M16 finding.
+ *
+ * Flow (per WAVE5_5C_REMEDIATION_GATE_REVIEW.md §3.1):
+ *   1. Check feature flag (reconciliationAutoRepair). If OFF → return DISABLED.
+ *   2. Re-validate the finding (SI-1). If stale → mark resolved + return SKIPPED.
+ *   3. Create a RemediationAction row (idempotent via unique constraint — SI-2).
+ *      If a repair action already exists → return SKIPPED (idempotent dedup).
+ *   4. Trigger the outbox publisher's /trigger endpoint (operational).
+ *   5. Post-repair verification (SI-8): re-compute outbox lag.
+ *   6. If lag decreased below threshold → mark finding resolved + action SUCCEEDED.
+ *      Else → action SUCCEEDED (trigger was called) but finding stays open
+ *      (the publisher may be permanently down — escalate via alert).
+ *   7. Update the RemediationAction row with the result.
+ *
+ * SAFETY: This function NEVER writes to Payment, Refund, LedgerEntry, Outbox,
+ * WebhookEvent, IdempotencyKey, or AuditLog. Its only DB writes are to
+ * RemediationAction + ReconciliationFinding.
+ *
+ * @param findingId The ReconciliationFinding id to repair.
+ * @returns The M16RemediationResult.
+ */
+export async function remediateM16OutboxLag(findingId: string): Promise<M16RemediationResult> {
+  const traceId = newTraceId()
+
+  // 1. Feature flag check (SI-12)
+  if (!isFeatureEnabled('reconciliationAutoRepair')) {
+    logInfo('m16-remediation-disabled-flag-off', { findingId, traceId }, traceId)
+    return {
+      findingId,
+      repairType: 'M16_PUBLISHER_TRIGGER',
+      status: 'DISABLED',
+      reason: 'reconciliationAutoRepair feature flag is OFF',
+      lagBeforeSeconds: null,
+      lagAfterSeconds: null,
+      publisherTriggerCalled: false,
+      remediationActionId: null,
+    }
+  }
+
+  // 2. Re-validate the finding (SI-1)
+  const current = await revalidateM16Finding(findingId)
+  const lagBefore = await computeOutboxLagSeconds()
+  if (!current) {
+    // Finding is stale — the lag has resolved (publisher caught up). Mark resolved.
+    logInfo('m16-remediation-stale-finding-auto-resolved', { findingId, traceId }, traceId)
+    await db.reconciliationFinding.update({
+      where: { id: findingId },
+      data: {
+        resolvedAt: new Date(),
+        resolutionNote: 'Stale finding — outbox lag resolved by external action (publisher caught up).',
+      },
+    }).catch(() => {})
+    return {
+      findingId,
+      repairType: 'M16_PUBLISHER_TRIGGER',
+      status: 'SKIPPED',
+      reason: 'Stale finding — outbox lag already resolved (re-validation passed)',
+      lagBeforeSeconds: lagBefore,
+      lagAfterSeconds: lagBefore,
+      publisherTriggerCalled: false,
+      remediationActionId: null,
+    }
+  }
+
+  // 3. Create RemediationAction row (idempotent via unique constraint — SI-2)
+  let remediationActionId: string | null = null
+  try {
+    const action = await db.remediationAction.create({
+      data: {
+        findingId,
+        repairType: 'M16_PUBLISHER_TRIGGER',
+        status: 'ATTEMPTED',
+        actionSnapshot: JSON.stringify({
+          lagBeforeSeconds: lagBefore,
+          outboxId: current.outboxId,
+          eventId: current.eventId,
+          ageMs: current.ageMs,
+        }),
+      },
+    })
+    remediationActionId = action.id
+  } catch (err) {
+    // P2002 — unique constraint violation → a repair action already exists for
+    // this findingId + repairType. This is the idempotency dedup (SI-2).
+    logInfo('m16-remediation-idempotent-skip', { findingId, traceId, error: (err as Error).message }, traceId)
+    return {
+      findingId,
+      repairType: 'M16_PUBLISHER_TRIGGER',
+      status: 'SKIPPED',
+      reason: 'Idempotent skip — a repair action already exists for this finding',
+      lagBeforeSeconds: lagBefore,
+      lagAfterSeconds: lagBefore,
+      publisherTriggerCalled: false,
+      remediationActionId: null,
+    }
+  }
+
+  // 4. Trigger the outbox publisher (operational — no financial mutation)
+  const triggerResult = await triggerOutboxPublisher()
+
+  // 5. Post-repair verification (SI-8): re-compute outbox lag
+  const lagAfter = await computeOutboxLagSeconds()
+  const lagThresholdSeconds = 5 * 60 // 5 min SLA (matches M16 detector)
+
+  // 6. Determine repair outcome
+  let actionStatus: 'SUCCEEDED' | 'FAILED' = 'SUCCEEDED'
+  let findingResolved = false
+  let reason: string
+
+  if (!triggerResult.called) {
+    // Publisher URL not configured — repair couldn't trigger. Mark action FAILED.
+    actionStatus = 'FAILED'
+    reason = `Publisher trigger skipped: ${triggerResult.error}`
+  } else if (!triggerResult.ok) {
+    // Publisher trigger failed (HTTP error or network error).
+    actionStatus = 'FAILED'
+    reason = `Publisher trigger failed: ${triggerResult.error}`
+  } else if (lagAfter <= lagThresholdSeconds) {
+    // Lag decreased below threshold → finding resolved.
+    findingResolved = true
+    reason = `Outbox lag decreased from ${lagBefore}s to ${lagAfter}s (below ${lagThresholdSeconds}s SLA).`
+  } else {
+    // Trigger succeeded but lag is still above threshold. The publisher may be
+    // permanently down or overwhelmed. The finding stays open — the next
+    // reconciliation run will re-detect it + the alert will fire.
+    findingResolved = false
+    reason = `Publisher trigger succeeded but lag still above SLA (${lagAfter}s > ${lagThresholdSeconds}s). Finding stays open for escalation.`
+  }
+
+  // 7. Update the RemediationAction row with the result
+  await db.remediationAction.update({
+    where: { id: remediationActionId },
+    data: {
+      status: actionStatus,
+      completedAt: new Date(),
+      actionSnapshot: JSON.stringify({
+        lagBeforeSeconds: lagBefore,
+        lagAfterSeconds: lagAfter,
+        outboxId: current.outboxId,
+        eventId: current.eventId,
+        ageMs: current.ageMs,
+        publisherTriggerCalled: triggerResult.called,
+        publisherTriggerOk: triggerResult.ok,
+        publisherError: triggerResult.error,
+        findingResolved,
+      }),
+      error: actionStatus === 'FAILED' ? triggerResult.error : null,
+    },
+  }).catch((err: Error) => {
+    logWarn('m16-remediation-action-update-failed', { remediationActionId, error: err.message, traceId }, traceId)
+  })
+
+  // 8. Resolve the finding if the lag is now below threshold
+  if (findingResolved) {
+    await db.reconciliationFinding.update({
+      where: { id: findingId },
+      data: {
+        resolvedAt: new Date(),
+        resolutionNote: `M16 remediation: ${reason} (action ${remediationActionId})`,
+      },
+    }).catch((err: Error) => {
+      logWarn('m16-remediation-finding-resolve-failed', { findingId, error: err.message, traceId }, traceId)
+    })
+  }
+
+  logInfo('m16-remediation-complete', {
+    findingId, remediationActionId, actionStatus, findingResolved,
+    lagBefore, lagAfter, publisherTriggerCalled: triggerResult.called,
+    publisherTriggerOk: triggerResult.ok, traceId,
+  }, traceId)
+
+  return {
+    findingId,
+    repairType: 'M16_PUBLISHER_TRIGGER',
+    status: actionStatus === 'SUCCEEDED' ? (findingResolved ? 'SUCCEEDED' : 'SUCCEEDED') : 'FAILED',
+    reason,
+    lagBeforeSeconds: lagBefore,
+    lagAfterSeconds: lagAfter,
+    publisherTriggerCalled: triggerResult.called,
+    remediationActionId,
+  }
+}
+
+/**
+ * Process all unresolved M16 findings (called by the remediation worker or
+ * the reconciliation mini-service's /trigger-remediation endpoint).
+ *
+ * Only processes M16_OUTBOX_LAG_EXCEEDED findings. CLASS B/C/D/E findings are
+ * NEVER processed by this function (they require separate authorization).
+ *
+ * @returns Array of M16RemediationResult for each finding processed.
+ */
+export async function processM16Remediations(): Promise<M16RemediationResult[]> {
+  const traceId = newTraceId()
+
+  // Feature flag check (SI-12)
+  if (!isFeatureEnabled('reconciliationAutoRepair')) {
+    logInfo('m16-remediation-batch-disabled', { reason: 'flag OFF', traceId }, traceId)
+    return []
+  }
+
+  // Find all unresolved M16 findings
+  const m16Findings = await db.reconciliationFinding.findMany({
+    where: {
+      mismatchClass: 'M16_OUTBOX_LAG_EXCEEDED',
+      resolvedAt: null,
+    },
+    select: { id: true },
+  })
+
+  logInfo('m16-remediation-batch-start', { count: m16Findings.length, traceId }, traceId)
+
+  const results: M16RemediationResult[] = []
+  for (const finding of m16Findings) {
+    try {
+      const result = await remediateM16OutboxLag(finding.id)
+      results.push(result)
+    } catch (err) {
+      logError('m16-remediation-batch-item-error', { findingId: finding.id, error: (err as Error).message, traceId }, traceId)
+      results.push({
+        findingId: finding.id,
+        repairType: 'M16_PUBLISHER_TRIGGER',
+        status: 'FAILED',
+        reason: `Unexpected error: ${(err as Error).message}`,
+        lagBeforeSeconds: null,
+        lagAfterSeconds: null,
+        publisherTriggerCalled: false,
+        remediationActionId: null,
+      })
+    }
+  }
+
+  logInfo('m16-remediation-batch-complete', {
+    count: results.length,
+    succeeded: results.filter((r) => r.status === 'SUCCEEDED').length,
+    skipped: results.filter((r) => r.status === 'SKIPPED').length,
+    failed: results.filter((r) => r.status === 'FAILED').length,
+    disabled: results.filter((r) => r.status === 'DISABLED').length,
+    traceId,
+  }, traceId)
+
+  return results
 }

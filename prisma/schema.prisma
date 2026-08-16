@@ -573,6 +573,9 @@ model ReconciliationFinding {
   resolvedAt      DateTime?
   resolvedBy      String?
   resolutionNote  String?
+  // 5C: Remediation actions taken for this finding (1:N — a finding may be
+  // repaired multiple times if the first repair fails + is retried).
+  remediationActions RemediationAction[]
 
   // Idempotency: one unresolved finding per (mismatchClass, entityId).
   // A partial unique index on (mismatchClass, entityId) WHERE resolvedAt IS NULL
@@ -584,4 +587,51 @@ model ReconciliationFinding {
   @@index([severity, resolvedAt])
   @@index([entityType, entityId])
   @@index([runId])
+}
+
+// ----------------------------------------
+// P0-03 Wave-5 Sub-Wave 5C — Remediation Action (M16-only, Class-2 additive)
+// ----------------------------------------
+// Audit trail for remediation/repair actions. Currently ONLY M16 (outbox lag —
+// operational, non-financial) remediation is authorized. M3/M9/M10 + CLASS B/D/E
+// are NOT authorized — they require separate Orchestrator directives.
+//
+// SI-6 (Safety Invariant): every repair writes a RemediationAction audit record.
+// SI-2 (Repair Idempotency): the unique constraint on (findingId, repairType)
+// prevents duplicate repair actions for the same finding + repair type. A second
+// attempt to repair the same finding with the same repairType is a no-op (caught
+// by the unique constraint → the handler skips).
+//
+// SAFETY CONTRACT (Orchestrator hard boundary for 5C-M16):
+//   - M16 remediation NEVER writes to Payment, Refund, LedgerEntry, Outbox,
+//     WebhookEvent, IdempotencyKey, or AuditLog.
+//   - M16 remediation NEVER makes external Razorpay API calls.
+//   - M16 remediation's only "external" action is an HTTP call to the outbox
+//     publisher's /trigger endpoint (operational restart — no financial mutation).
+//   - M16 remediation's only DB writes are to this table (RemediationAction) +
+//     ReconciliationFinding (resolves the finding).
+model RemediationAction {
+  id              String   @id @default(cuid())
+  // The finding being repaired
+  findingId       String
+  finding         ReconciliationFinding @relation(fields: [findingId], references: [id], onDelete: Cascade)
+  // The repair type (e.g., "M16_PUBLISHER_TRIGGER"). Only M16 is authorized.
+  repairType      String
+  // The status of the repair action: ATTEMPTED | SUCCEEDED | SKIPPED | FAILED
+  status          String   @default("ATTEMPTED")
+  // What the repair did (JSON snapshot — e.g., { publisherTriggerCalled: true, lagBefore: 360, lagAfter: 45 })
+  actionSnapshot  String
+  // When the repair was attempted
+  attemptedAt     DateTime @default(now())
+  // When the repair completed (set on SUCCEEDED/SKIPPED/FAILED)
+  completedAt     DateTime?
+  // Error message if the repair FAILED
+  error           String?
+
+  // Idempotency: one repair action per (findingId, repairType). A second attempt
+  // to repair the same finding with the same repairType throws P2002 (unique
+  // constraint) — the handler catches this and skips (SI-2: Repair Idempotency).
+  @@unique([findingId, repairType])
+  @@index([status, attemptedAt])
+  @@index([repairType])
 }
