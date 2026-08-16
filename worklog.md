@@ -6374,3 +6374,102 @@ refund-flow (P0-04) E1-E5 evidence workflow and persist the evidence JSON locall
 - Evidence JSON committed + pushed to `main` (evidence/ + this worklog update).
 - Wave-5 5a remains OPEN pending Orchestrator S5 review of PostgreSQL evidence.
 - Awaiting Orchestrator decision on Wave-5 5a closure + transition to next wave.
+
+---
+
+## Task ID: 5a-e6-postgresql — Wave-5 5a-E6 PostgreSQL Refund Failure / Pending Ledger Semantics Evidence
+
+Timestamp: 2026-08-16T10:52Z (UTC)
+
+### Objective
+Create + run a self-validating PostgreSQL evidence workflow for Wave-5 Sub-Wave
+5a-E6 (refund failure → pending ledger state → retry success) against the
+staging Supabase PostgreSQL, then capture and persist the evidence JSON locally.
+
+### Pipeline execution
+
+1. **Workflow file created + pushed**
+   - Path: `.github/workflows/subwave-5a-e6-postgresql-evidence.yml`
+   - Commit `b815f3a` pushed to `main` (833 insertions, 1 file).
+   - Trigger: `workflow_dispatch` with inputs `staging_url` +
+     `confirm=RUN-5A-E6-PG-EVIDENCE`.
+
+2. **Workflow dispatched** via GitHub API
+   - `POST /repos/zheoOviya/snakpass/actions/workflows/subwave-5a-e6-postgresql-evidence.yml/dispatches`
+   - Body: `{"ref":"main","inputs":{"staging_url":"https://snakpass-eqkarf10s-snakzap.vercel.app","confirm":"RUN-5A-E6-PG-EVIDENCE"}}`
+   - HTTP 204 (accepted).
+
+3. **Workflow run** (id: 31942679845, job id: 95154014612)
+   - Workflow: "Wave-5 5a-E6 — PostgreSQL Refund Failure / Pending Ledger Semantics"
+   - Job: "5a-E6-PG — Refund failure → pending ledger → retry success on PostgreSQL"
+   - Started: 2026-08-16T10:49:28Z → Completed: 2026-08-16T10:51:28Z (~2 min).
+   - Polled every 20s (6 polls); final status `completed`, conclusion `success`.
+   - Job logs downloaded (118863 bytes); 2 occurrences of the
+     `=== Evidence JSON ===` marker. 1st = literal shell command echo; 2nd =
+     the authoritative evidence output (extracted + parsed cleanly).
+
+### Test flow executed (7 steps, all PASS)
+
+| Step | Action | Expected | Result |
+|------|--------|----------|--------|
+| A | GET /api/payments/evidence-setup?scenario=refund-full | CAPTURED Payment | paymentId=`cmsvopb9c0009ld04v62fjoff`, status=CAPTURED ✅ |
+| B | POST /api/payments/refund {paymentId} + Idempotency-Key | REFUND_PENDING | refundId=`cmsvopcxt000hld04mxnxmpbc`, status=REFUND_PENDING ✅ |
+| C | GET /api/payments/evidence-verify?orderId=X&refundId=Y | Payment=CAPTURED, Ledger=4, balanced | Payment=CAPTURED, Ledger=4 (2 Dr / 2 Cr, sums 64000/64000), balanced, Refund=REFUND_PENDING ✅ |
+| D | POST /api/payments/evidence-publisher-run?refundId=Y&mode=refund&simulateFail=true | refundCalled=true, SIMULATED_FAILURE error, state unchanged | refundCalled=true, error="SIMULATED_FAILURE: gateway unavailable", Refund=REFUND_PENDING, Payment=CAPTURED ✅ |
+| E | GET /api/payments/evidence-verify | Payment=CAPTURED unchanged, Ledger=4 (no dup), balanced | Payment=CAPTURED, Ledger=4, Dr=Cr=64000, balanced, Refund=REFUND_PENDING ✅ |
+| F | POST /api/payments/evidence-publisher-run?refundId=Y&mode=refund (retry) | refundCalled=true, statusAfter=REFUNDED | refundCalled=true, statusAfter=REFUNDED, paymentStatusAfter=REFUNDED, gatewayRefundId=`rpf_demo_1786877473634_j15l28`, idempotencySkipped=false ✅ |
+| G | GET /api/payments/evidence-verify (final) | Payment=REFUNDED, Ledger=4 (no dup), balanced, no orphan | Payment=REFUNDED, Ledger=4 (2 Dr / 2 Cr, sums 64000/64000), balanced=true, noOrphanLedgerEntries=true, Refund=REFUNDED, PAYMENT_REFUNDED audit exists, Outbox=PUBLISHED ✅ |
+
+### PostgreSQL direct verification (Supabase Management API /database/query)
+Bypasses the app layer and confirms identical durable state in PostgreSQL:
+- Payment.status = **REFUNDED**
+- Refund.status = **REFUNDED**, gatewayRefundId = `rpf_demo_1786877473634_j15l28`
+- LedgerEntry count = **4** (no duplicate from publisher retry)
+- LedgerEntry Dr sum = Cr sum = **64000** (I-06 preserved at all times)
+- AuditLog `PAYMENT_REFUNDED` count = **1**
+- Outbox (Refund aggregate) status = **PUBLISHED**
+- IdempotencyKey count for `ev-5a-E6-pg-...` = **1**
+- Refund rows for paymentId = **1** (no duplicate Refund record)
+
+### Evidence captured
+- File: `/home/z/my-project/evidence/wave5-5a/evidence-E6-postgresql-5a-pg-ev.json`
+- `ok` : **true**
+- `database` : postgresql
+- `evidenceType` : refund-failure-pending-ledger-semantics-postgresql
+- `runId` : 5a-E6-pg-1786877458-1656
+- `stagingUrl` : https://snakpass-1lxbkr17p-snakzap.vercel.app (fresh preview deployment)
+- All 7 steps (A–G) → **PASS**
+- Invariant (Option A — Pending Ledger Semantics):
+  - publisherFailDoesNotDuplicate: true (Ledger still 4 after fail)
+  - publisherRetryDoesNotDuplicate: true (Ledger still 4 after retry success)
+  - ledgerBalanceIntactAlways: true (Dr=Cr at all 3 verification points C/E/G)
+  - noOrphanLedgerEntries: true
+  - optionASemanticsProven: true
+
+### Invariant proven (TRANSACTION_RETRY_INVARIANT + Option A pending ledger)
+- Refund route writes `Refund` (REFUND_PENDING) + reversal Dr CONSUMER_REVENUE +
+  Cr GATEWAY_RECEIVABLE + `PAYMENT_REFUND_PENDING` AuditLog +
+  `PAYMENT_REFUND_REQUESTED` Outbox event inside ONE txn (atomic).
+- Publisher calls `refundRazorpayPayment()` OUTSIDE any txn body.
+- On publisher failure (simulateFail=true): Refund stays REFUND_PENDING, Payment
+  stays CAPTURED, ledger still balanced with exactly 4 entries (no duplicate).
+- On publisher retry success: Refund → REFUNDED, Payment → REFUNDED (full
+  refund), reversal entries become canonical (NO new ledger entries created —
+  still exactly 4), Outbox → PUBLISHED, PAYMENT_REFUNDED audit logged.
+- Dr sum == Cr sum invariant holds at ALL three checkpoints (pending, failed, refunded).
+
+### Governance safeguards honored
+- ✅ realPayments remained **OFF** (`governance.realPaymentsEnabled = false`).
+  `simulateFail=true` triggers an in-app `SIMULATED_FAILURE: gateway unavailable`
+  error — no real Razorpay API call made.
+- ✅ productionTouched = false — no production traffic touched.
+- ✅ Did NOT enable realPayments.
+- ✅ Did NOT self-close 5a (Wave-5 5a remains OPEN pending Orchestrator S5 review).
+- ✅ Did NOT start P0-03 (separate evidence package required).
+- ✅ Test data cleaned up via direct SQL (LedgerEntry + Outbox + Refund +
+  IdempotencyKey + Payment + OrderItem + Order + AuditLog).
+
+### Next actions
+- Evidence JSON committed + pushed to `main` (evidence/wave5-5a/ + this worklog).
+- Wave-5 5a remains OPEN pending Orchestrator S5 review of E6 PostgreSQL evidence.
+- Awaiting Orchestrator decision on Wave-5 5a closure + transition to next wave.
