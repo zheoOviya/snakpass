@@ -5795,3 +5795,25 @@ Stage Summary:
 - NOT implemented: production deployment, 4c/4d, realPayments OFF, webhookHandler OFF
 - STOP: IDE is not self-closing 4b. Awaiting Orchestrator S5 decision.
 
+
+---
+Task ID: 4b-s5-closure + 4c-authorized
+Agent: IDE (main)
+Task: 4b S5 PASS / CLOSED formalization + 4c implementation authorized
+
+Work Log:
+- Received Orchestrator S5 PASS decision for Sub-Wave 4b (P0-02 Ledger Formalization).
+- Updated WAVE4_EVIDENCE.md:
+  - Status: 4a + 4b S5 PASS / CLOSED + 4c Implementation Authorized
+  - Sub-Wave 4b: ✅ S5 PASS / CLOSED
+  - Sub-Wave 4c: 🟢 IMPLEMENTATION AUTHORIZED
+  - Added §5 "Sub-Wave 4b — S5 PASS / CLOSED" section
+  - Added §6 "Sub-Wave 4c — Implementation Authorized" section
+- 4b will NOT reopen for evidence.
+
+Stage Summary:
+- Sub-Wave 4a: ✅ S5 PASS / CLOSED
+- Sub-Wave 4b: ✅ S5 PASS / CLOSED
+- Sub-Wave 4c: 🟢 IMPLEMENTATION AUTHORIZED — beginning implementation
+- Production NOT touched. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF.
+

@@ -14,8 +14,8 @@
 | Sub-Wave | Scope | Status |
 |----------|-------|--------|
 | 4a | P0-05 Webhook handler (HMAC verify + dedup + idempotent processing) | ✅ S5 PASS / CLOSED |
-| 4b | P0-02 Ledger formalization | 🟡 Implementation Authorized (awaiting evidence) |
-| 4c | TRANSACTION_RETRY_INVARIANT mitigation | 🟡 CONDITIONALLY AUTHORIZED (after 4a/4b) |
+| 4b | P0-02 Ledger formalization | ✅ S5 PASS / CLOSED |
+| 4c | TRANSACTION_RETRY_INVARIANT mitigation | 🟢 IMPLEMENTATION AUTHORIZED |
 | 4d | orphan_business_count fix | 🟢 AUTHORIZED (folded into 4b/4c) |
 
 ---
@@ -170,6 +170,49 @@ database = postgresql
 > 4c NOT started. Production NOT touched. `realPayments` OFF. `webhookHandler` OFF in production.
 > PostgreSQL-native evidence REQUIRED for S5.
 > After implementation + evidence, STOP and report to Orchestrator. Do NOT self-close.
+
+### Status: 🟡 IMPLEMENTATION IN PROGRESS
+
+(Evidence will be appended after implementation + SQLite + PostgreSQL tests pass.)
+
+---
+
+## 5. Sub-Wave 4b — S5 PASS / CLOSED (Orchestrator Decision)
+
+> **ORCHESTRATOR DECISION — Sub-Wave 4b = S5 PASS / EVIDENCE-COMPLETE / CLOSED.**
+
+**Date:** 2026-08-16
+**Decision:** Sub-Wave 4b (P0-02 Ledger Formalization) authorized scope fulfilled. Declared **S5 PASS** and **CLOSED**.
+
+### Decisive Evidence
+
+- **PostgreSQL Evidence:** `evidence/wave4-4b/evidence-postgresql-4b-pg-ev.json` (`ok: true`, `database: postgresql`)
+- **Workflow:** GitHub Actions run `31922913773`
+
+### Proven
+
+```text
+concurrentRequests = 5
+paymentCount = 5
+ledgerEntryCount = 10
+ledgerDrCount = 5
+ledgerCrCount = 5
+ledgerBalanceIntact = true
+noOrphanLedgerEntries = true
+ok = true
+database = postgresql
+```
+
+4b will NOT reopen for evidence.
+
+---
+
+## 6. Sub-Wave 4c — Transaction Retry Invariant Mitigation (Implementation Authorized)
+
+> **Orchestrator authorized Sub-Wave 4c implementation.**
+> Primary objective: Move `captureRazorpayPayment()` out of `withTransaction()` body.
+> SQLite + PostgreSQL evidence REQUIRED. No production. realPayments OFF.
+> 4c NOT self-closed. Await Orchestrator S5 review.
 
 ### Status: 🟡 IMPLEMENTATION IN PROGRESS
 
