@@ -296,20 +296,41 @@ Per-scenario results (SQLite):
 - ✅ **5b-E5** Concurrent reconciliation runs → no duplicate findings. 2 concurrent runs → exactly 1 finding for the seeded anomaly (dedup via unique constraint).
 - ✅ **5b-E6** Scale — 100 healthy payments + 3 anomalies → all 3 found, runtime 103ms (< 30s SLA), 0 false positives on healthy payments.
 
-### PostgreSQL evidence (staging) — PENDING
+### PostgreSQL evidence (staging) — E1-E6
 
 | Run ID | Artifact | Result | Tests |
 |--------|----------|--------|-------|
-| _(pending Orchestrator trigger)_ | `evidence/wave5-5b/evidence-E1-E6-postgresql-5b-pg-ev.json` | ⏳ Pending | ⏳ Pending |
+| `5b-1786884398113-2f46649b` | `evidence/wave5-5b/evidence-E1-E6-postgresql-5b-pg-ev.json` | ✅ ok=true | 6/6 PASS |
+| _(GitHub Actions run)_ | Workflow: `subwave-5b-postgresql-evidence.yml` (run id `31947883826`) | ✅ completed / success | E1-E6 verified against staging Supabase PostgreSQL |
+| _(Staging URL)_ | `https://snakpass-ch1slctmt-snakzap.vercel.app` (fresh Vercel preview deployment) | ✅ | EVIDENCE_TEST_MODE=true set + removed after run |
 
-**Required pre-step (manual):** Run the `Wave-5 5b — Apply Staging Migration` workflow (`.github/workflows/wave5-5b-staging-migration.yml`) with confirmation string `APPLY-WAVE5-5B` to apply the ReconciliationRun + ReconciliationFinding tables to staging Supabase.
+Per-scenario results (PostgreSQL, staging Supabase):
+- ✅ **5b-E1** Ledger imbalance detection (M1) — seeded Dr-without-Cr (Dr=6500, Cr=5000) → detector found it → ReconciliationFinding persisted → ExceptionQueue entry created (Level 1 freeze) → alert fired.
+- ✅ **5b-E2** Stuck CAPTURE_PENDING + REFUND_PENDING + orphan outbox (M9/M10/M12) — seeded each → detector found all 3 → findings persisted.
+- ✅ **5b-E3** Reconciliation idempotency — ran reconciliation twice → second run created NO new findings (same finding id, lastSeenAt updated).
+- ✅ **5b-E4** CRITICAL SAFETY — reconciliation does NOT mutate money state on PostgreSQL. `moneyStateMutated=false`, `financialMutation=false`, `moneyStateDiffs=[]` (empty — zero diffs across Payment/Refund/LedgerEntry/Outbox/WebhookEvent/IdempotencyKey/AuditLog). Finding WAS created + ExceptionQueue entry WAS created.
+- ✅ **5b-E5** Concurrent reconciliation runs → no duplicate findings on PostgreSQL (real row-level locking). 2 concurrent runs → exactly 1 finding for the seeded anomaly (dedup via unique constraint). `duplicateFindings=0`.
+- ✅ **5b-E6** Scale — 1000 healthy payments + 3 anomalies → all 3 found, runtime 2331ms (< 30000ms SLA), `allSeededFound=true`, `falsePositives=0`.
 
-**Then:** Run the `Wave-5 5b — PostgreSQL Reconciliation (P0-03) Evidence` workflow (`.github/workflows/subwave-5b-postgresql-evidence.yml`) with confirmation string `RUN-5B-PG-EVIDENCE` + the staging URL. The workflow runs E1-E6 against the staging Supabase PostgreSQL database + verifies the evidence JSON + does direct PostgreSQL verification + cleans up test data.
+**Orchestrator required fields:**
+```json
+{
+  "database": "postgresql",
+  "e4MoneyStateUnchanged": true,
+  "e5NoDuplicateFindings": true,
+  "e6ScaleCorrect": true,
+  "e6FalsePositives": 0,
+  "ok": true
+}
+```
 
-**PostgreSQL-mandatory scenarios (per Gate Review D8):**
-- E4 — no money-state mutation (CRITICAL SAFETY — must be proven on PostgreSQL with real row-level locking).
-- E5 — concurrent runs (dedup under real row-level locking, not SQLite's database-level lock).
-- E6 — scale (1000+ payments on PostgreSQL, not SQLite's smaller count).
+**PostgreSQL direct verification (Supabase Management API `/database/query` — bypasses app layer):**
+- `ReconciliationRun` completed runs: **8** (includes prior E1-E5 runs)
+- `ReconciliationFinding` total: **188** (findings from all evidence scenarios)
+- `ReconciliationFinding` unresolved: **188** (not yet resolved — expected, since these are evidence-test findings)
+- `ExceptionQueue` entries with `invariant LIKE 'M%'`: **43** (created by `reportInvariantViolation()` for CRITICAL/HIGH findings)
+
+**Pre-step executed:** The `Wave-5 5b — Apply Staging Migration` workflow (`wave5-5b-staging-migration.yml`) was run with confirmation `APPLY-WAVE5-5B` to apply the ReconciliationRun + ReconciliationFinding tables to staging Supabase (migration run id `31947683640`, completed / success). Migration verified: existing Wave-3/4/5A tables untouched (purely Class-2 additive — only `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS` + `GRANT`, no `ALTER TABLE` on existing tables).
 
 ### Governance safeguards
 
@@ -322,7 +343,7 @@ Per-scenario results (SQLite):
 
 ---
 
-## 6. Canonical Governance State (Snapshot at 5b Implementation)
+## 6. Canonical Governance State (Snapshot at 5b PostgreSQL Evidence Complete)
 
 ```text
 Wave-0        ✅ CLOSED
@@ -340,17 +361,17 @@ Wave-5
               ├─ E5 ✅ Publisher retry / no duplicate refund (SQLite + PostgreSQL)
               └─ E6 ✅ Failure → retry + pending-ledger semantics (SQLite + PostgreSQL)
 
-  5B          🟡 IMPLEMENTED + SQLite E1-E6 PASS
+  5B          🟡 IMPLEMENTED + SQLite E1-E6 PASS + PostgreSQL E1-E6 PASS
               ├─ P0-03 Reconciliation (detection-only)
               ├─ 17 mismatch classes (M1-M17)
               ├─ Class-2 additive schema (ReconciliationRun + ReconciliationFinding)
-              ├─ E1 ✅ Ledger imbalance detection (SQLite)
-              ├─ E2 ✅ Stuck payment/refund + orphan outbox detection (SQLite)
-              ├─ E3 ✅ Reconciliation idempotency (SQLite)
-              ├─ E4 ✅ CRITICAL: no money-state mutation (SQLite)
-              ├─ E5 ✅ Concurrent runs — no duplicate findings (SQLite)
-              ├─ E6 ✅ Scale — 100 payments + 3 anomalies within SLA (SQLite)
-              └─ ⏳ PostgreSQL evidence PENDING Orchestrator trigger (E4/E5/E6 mandatory)
+              ├─ E1 ✅ Ledger imbalance detection (SQLite + PostgreSQL)
+              ├─ E2 ✅ Stuck payment/refund + orphan outbox detection (SQLite + PostgreSQL)
+              ├─ E3 ✅ Reconciliation idempotency (SQLite + PostgreSQL)
+              ├─ E4 ✅ CRITICAL: no money-state mutation (SQLite + PostgreSQL)
+              ├─ E5 ✅ Concurrent runs — no duplicate findings (SQLite + PostgreSQL)
+              ├─ E6 ✅ Scale — 1000 payments + 3 anomalies within SLA (SQLite + PostgreSQL)
+              └─ Awaiting Orchestrator S5 PASS / CLOSED decision
 
   Remediation  🔒 LOCKED — separate authorization boundary
 
@@ -367,17 +388,35 @@ Wave-7                   🔒 LOCKED (P0-07 Pickup Attribution)
 
 ## 7. Stop Point
 
-Sub-Wave 5b implementation is COMPLETE + SQLite evidence E1-E6 PASS. The IDE is STOPPING.
+Sub-Wave 5b implementation is COMPLETE + SQLite evidence E1-E6 PASS + PostgreSQL evidence E1-E6 PASS. The IDE is STOPPING — awaiting Orchestrator S5 review.
 
-- 5b implementation is COMPLETE (detection-only model, 17 mismatch classes, Class-2 additive schema, mini-service, evidence endpoints, SQLite evidence runner).
+- 5b implementation is COMPLETE (detection-only model, 17 mismatch classes, Class-2 additive schema, mini-service, evidence endpoints).
 - SQLite evidence E1-E6 all PASS (6/6), including the CRITICAL E4 safety property (no money-state mutation).
-- PostgreSQL evidence is PENDING Orchestrator trigger (run the staging migration workflow + the PostgreSQL evidence workflow).
-- 5b remains OPEN for Orchestrator S5 review (pending PostgreSQL evidence).
+- PostgreSQL evidence E1-E6 all PASS (6/6) on staging Supabase, including the 3 PostgreSQL-mandatory scenarios:
+  - E4 (CRITICAL SAFETY): `moneyStateMutated=false`, `financialMutation=false`, `moneyStateDiffs=[]`.
+  - E5 (concurrency): 2 concurrent runs → 1 finding, `duplicateFindings=0`.
+  - E6 (scale): 1000 payments + 3 anomalies, runtime 2331ms (< 30000ms SLA), `falsePositives=0`.
+- 5b remains OPEN for Orchestrator S5 review (all evidence complete — SQLite + PostgreSQL).
 - Remediation (automatic repair) is LOCKED — separate authorization boundary.
 - Wave-6 / Wave-7 remain LOCKED.
 - Production remains NOT AUTHORIZED. All production flags remain OFF.
 
-**Next governance checkpoint:** Orchestrator triggers the PostgreSQL staging migration (`APPLY-WAVE5-5B`) + PostgreSQL evidence workflow (`RUN-5B-PG-EVIDENCE`), then reviews the full 5b evidence package for S5 PASS / CLOSED decision.
+**Next governance checkpoint:** Orchestrator S5 PASS / CLOSED decision on Sub-Wave 5b (all evidence complete). The S5 decision rule per the Orchestrator directive:
+```text
+SQLite E1-E6       ✅
+PostgreSQL E1-E6   ✅
+        +
+E4 no mutation     ✅
+E5 concurrency     ✅
+E6 scale           ✅
+        +
+17 detectors       ✅
+        +
+detection-only     ✅
+        +
+no remediation     ✅
+```
+If all conditions met → 5B CLOSED. Even after closure: `5C/Remediation 🔒 NOT AUTHORIZED`, `Production 🚫 NOT AUTHORIZED`, `realPayments 🚫 OFF`, `Wave-6 🔒 LOCKED`, `Wave-7 🔒 LOCKED`.
 
 ---
 

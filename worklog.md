@@ -6701,3 +6701,141 @@ Execute the Orchestrator-authorized 5B implementation (detection-only reconcilia
 - Wave-3/4/5A CLOSED — immutable. 5b is read-only w.r.t. their tables.
 - Next governance checkpoint: Orchestrator triggers PostgreSQL staging migration + evidence workflow, then reviews full 5b evidence package for S5 PASS / CLOSED decision.
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5b-postgresql-evidence — Wave-5 Sub-Wave 5B (P0-03 Reconciliation) PostgreSQL Evidence Gate
+
+Timestamp: 2026-08-16 (Orchestrator 5B PostgreSQL Evidence Gate directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized 5B PostgreSQL Evidence Gate:
+1. Phase 1: Trigger `APPLY-WAVE5-5B` staging migration workflow.
+2. Phase 1: Verify migration safety (Wave-3/4/5A tables untouched, only Class-2 additive).
+3. Phase 2: Trigger `RUN-5B-PG-EVIDENCE` PostgreSQL evidence workflow.
+4. Phase 2: Capture + verify PostgreSQL evidence JSON (E4/E5/E6 mandatory + orchestratorRequiredFields).
+5. Append this worklog entry + commit evidence + push.
+6. STOP for Orchestrator S5 review (do NOT self-close 5B).
+
+### Governance boundaries honored
+- ✅ No Payment/Refund/LedgerEntry/Outbox/WebhookEvent/IdempotencyKey/AuditLog mutation.
+- ✅ No Razorpay API calls.
+- ✅ No automatic reconciliation / financial remediation.
+- ✅ No production migration / deployment.
+- ✅ No `realPayments` / `webhookHandler` / `requestHashEnforcement` flag flip.
+- ✅ Wave-6/7 NOT started. Wave-3/4/5A CLOSED — immutable.
+- ✅ Staging evidence captured; any real financial inconsistencies would be reported as findings, NOT repaired.
+
+### Phase 1 — Staging Migration (APPLY-WAVE5-5B)
+1. Triggered `wave5-5b-staging-migration.yml` via GitHub API `workflow_dispatch` with `confirm=APPLY-WAVE5-5B`.
+   - HTTP 204 (accepted).
+2. Polled run id `31947683640` → `status=completed`, `conclusion=success` (~17s).
+3. Migration verification (from workflow logs):
+   - `ReconciliationRun` table: **1** (exists)
+   - `ReconciliationRun.triggerType` column: **1** (exists)
+   - `ReconciliationRun.mismatchCount` column: **1** (exists)
+   - `ReconciliationFinding` table: **1** (exists)
+   - `ReconciliationFinding.mismatchClass` column: **1** (exists)
+   - `ReconciliationFinding.exceptionId` column: **1** (exists)
+   - `ReconciliationFinding_mismatchClass_entityId_resolvedAt_key` unique index: **1** (exists)
+4. Migration safety verified: the migration SQL (`prisma/scripts/wave5-subwave-5b-migration.sql`) contains only `CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`, and `GRANT` statements for the two NEW tables. Zero `ALTER TABLE` on existing Wave-3/4/5A tables (Payment, Refund, LedgerEntry, Outbox, WebhookEvent, IdempotencyKey, AuditLog). Purely Class-2 additive.
+
+### Phase 2 — PostgreSQL Evidence (RUN-5B-PG-EVIDENCE)
+1. Updated `.github/workflows/subwave-5b-postgresql-evidence.yml` to mirror the 5a pattern: set `EVIDENCE_TEST_MODE=true` on Vercel preview environment + trigger a fresh Vercel deployment + use the fresh URL. Committed (`414f0ad`).
+2. Fixed job ID `5b-pg-evidence` → `pg-evidence-5b` (GitHub requires job IDs to start with a letter). Committed (`58c50ab`).
+3. Triggered `subwave-5b-postgresql-evidence.yml` via GitHub API `workflow_dispatch` with `confirm=RUN-5B-PG-EVIDENCE` + `staging_url=https://snakpass-eqkarf10s-snakzap.vercel.app`.
+   - HTTP 204 (accepted).
+4. Polled run id `31947883826` → `status=completed`, `conclusion=success` (~3 min).
+5. All 18 workflow steps completed successfully:
+   - Verify trigger ✅
+   - Install dependencies ✅
+   - Verify secrets present ✅
+   - Verify reconciliation tables exist on staging ✅ (both tables found)
+   - Set EVIDENCE_TEST_MODE=true on Vercel preview environment ✅
+   - Trigger new Vercel deployment ✅ (fresh deployment: `https://snakpass-ch1slctmt-snakzap.vercel.app`)
+   - Use new deployment URL if available ✅
+   - Wait for health endpoint ✅
+   - **Run E1-E6 evidence script ✅**
+   - **Extract + verify evidence JSON ✅** (enforces E4/E5/E6 mandatory checks)
+   - PostgreSQL direct verification (bypass app layer) ✅
+   - Upload evidence artifact ✅
+   - Cleanup test data ✅
+   - Remove EVIDENCE_TEST_MODE from Vercel (restore safe state) ✅
+
+### PostgreSQL Evidence Results (ALL 6/6 PASS)
+
+| # | Evidence | Result | Key metrics |
+|---|----------|--------|-------------|
+| **E1** | Ledger imbalance detection (M1) | ✅ PASS | Seeded Dr=6500/Cr=5000 imbalance → detector found it → ReconciliationFinding persisted → ExceptionQueue entry (Level 1 freeze) → alert fired |
+| **E2** | Stuck CAPTURE_PENDING + REFUND_PENDING + orphan outbox (M9/M10/M12) | ✅ PASS | All 3 seeded anomalies detected + findings persisted |
+| **E3** | Reconciliation idempotency | ✅ PASS | Second run → same finding id, lastSeenAt updated, 0 duplicates |
+| **E4** | **CRITICAL SAFETY — no money-state mutation** | ✅ PASS | `moneyStateMutated=false`, `financialMutation=false`, `moneyStateDiffs=[]` (zero diffs across all 7 money-state tables). Finding WAS created + ExceptionQueue entry WAS created. |
+| **E5** | Concurrent runs → no duplicate findings | ✅ PASS | `concurrentRuns=2`, `duplicateFindings=0`, `findingsForEntity=1` (dedup via unique constraint on real PostgreSQL row-level locking) |
+| **E6** | Scale — 1000 payments + 3 anomalies within SLA | ✅ PASS | `scaleCount=1000`, `runtimeMs=2331` (< 30000ms SLA), `allSeededFound=true`, `falsePositives=0` |
+
+### Orchestrator required fields (verified)
+```json
+{
+  "database": "postgresql",
+  "e4MoneyStateUnchanged": true,
+  "e5NoDuplicateFindings": true,
+  "e6ScaleCorrect": true,
+  "e6FalsePositives": 0,
+  "ok": true
+}
+```
+
+### PostgreSQL direct verification (Supabase Management API — bypasses app layer)
+- `ReconciliationRun` completed runs: **8** (includes prior E1-E5 runs)
+- `ReconciliationFinding` total: **188** (findings from all evidence scenarios)
+- `ReconciliationFinding` unresolved: **188** (expected — evidence-test findings not yet resolved)
+- `ExceptionQueue` entries with `invariant LIKE 'M%'`: **43** (created by `reportInvariantViolation()` for CRITICAL/HIGH findings)
+
+### Evidence captured
+- File: `/home/z/my-project/evidence/wave5-5b/evidence-E1-E6-postgresql-5b-pg-ev.json`
+- `ok` : **true**
+- `database` : **postgresql**
+- `runId` : `5b-1786884398113-2f46649b`
+- `stagingUrl` : `https://snakpass-ch1slctmt-snakzap.vercel.app` (fresh Vercel preview deployment)
+- `runId_workflow` : `31947883826` (GitHub Actions run id)
+- All 6 scenarios (E1-E6) → **PASS**
+- `orchestratorRequiredFields`: all true (e4MoneyStateUnchanged, e5NoDuplicateFindings, e6ScaleCorrect, e6FalsePositives=0, ok)
+- `governance`: `realPaymentsEnabled=false`, `productionTouched=false`, `financialMutation=false`, `externalGatewayCall=false`, `automaticRepair=false`
+
+### S5 Decision Rule Status (per Orchestrator directive)
+```text
+SQLite E1-E6       ✅ (6/6 PASS — prior commit)
+PostgreSQL E1-E6   ✅ (6/6 PASS — this task)
+        +
+E4 no mutation     ✅ (moneyStateMutated=false, financialMutation=false)
+E5 concurrency     ✅ (duplicateFindings=0, findingsForEntity=1)
+E6 scale           ✅ (1000 payments, 2331ms < 30s SLA, falsePositives=0)
+        +
+17 detectors       ✅ (M1-M17 implemented, all read-only)
+        +
+detection-only     ✅ (no writes to money-state tables)
+        +
+no remediation      ✅ (remediation LOCKED — separate boundary)
+```
+
+All conditions for S5 PASS / CLOSED are met. The IDE does NOT self-close 5B — it presents the evidence package to the Orchestrator for the S5 decision.
+
+### Stage Summary
+- **Wave-5 Sub-Wave 5b (P0-03 Reconciliation) — IMPLEMENTED + SQLite E1-E6 PASS + PostgreSQL E1-E6 PASS (all 6/6 on both databases).**
+- CRITICAL SAFETY (E4): reconciliation did NOT mutate any money-state table on PostgreSQL (`moneyStateMutated=false`, `financialMutation=false`, 0 diffs).
+- Concurrency (E5): 2 concurrent runs on PostgreSQL (real row-level locking) → 1 finding, 0 duplicates.
+- Scale (E6): 1000 payments + 3 anomalies on PostgreSQL → all found, runtime 2331ms (< 30s SLA), 0 false positives on healthy payments.
+- 17 mismatch classes (M1-M17) all read-only + batch-optimized.
+- Class-2 additive schema applied to staging Supabase (ReconciliationRun + ReconciliationFinding). Wave-3/4/5A tables untouched.
+- `reportInvariantViolation()` integration verified: 43 ExceptionQueue entries created for CRITICAL/HIGH findings (Level 1 freeze on Payment).
+- `reconciliation_mismatch_count` metric now emitted (activates existing alert rule).
+- `EVIDENCE_TEST_MODE` was set on Vercel for the evidence run + removed after (safe state restored).
+- Test data cleaned up from staging Supabase.
+- Production remains LOCKED. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF.
+- Remediation (automatic repair) LOCKED — separate authorization boundary.
+- Wave-6/7 NOT started.
+- Wave-3/4/5A CLOSED — immutable. 5b is read-only w.r.t. their tables (E4 proves zero money-state mutation).
+- Next governance checkpoint: Orchestrator S5 PASS / CLOSED decision on Sub-Wave 5b.
+- IDE is STOPPING after commit + push. Awaiting Orchestrator S5 review.
