@@ -365,7 +365,11 @@ model Payment {
   // Amount (paise — consistent with Order.totalAmount)
   amount           Int
   currency         String    @default("INR")
-  // Status lifecycle: PAYMENT_PENDING → CAPTURED | FAILED | FROZEN; CAPTURED → REFUNDED (Wave-5)
+  // Status lifecycle:
+  //   PAYMENT_PENDING → CAPTURE_PENDING → CAPTURED
+  //   CAPTURE_PENDING → FAILED
+  //   CAPTURED → REFUND_PENDING → REFUNDED | FAILED (Wave-5 Sub-Wave 5a — P0-04)
+  //   (any state) → FROZEN (P0-28 invariant freeze)
   status           String    @default("PAYMENT_PENDING")
   // I-04 Capture Uniqueness: capturedAt set once, never reset
   capturedAt       DateTime?
@@ -380,6 +384,11 @@ model Payment {
   retryCount       Int       @default(0)
   // Ledger entries (double-entry: Dr + Cr per payment)
   ledgerEntries    LedgerEntry[]
+  // P0-04 Wave-5 Sub-Wave 5a: Refunds (1:N — a payment may have multiple
+  // partial refunds over its lifetime). Each Refund carries its own status
+  // lifecycle (REFUND_PENDING → REFUNDED | FAILED) + double-entry reversal
+  // LedgerEntry pair tied to its own paymentId FK (entries are append-only).
+  refunds          Refund[]
   // Audit
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
@@ -431,4 +440,53 @@ model WebhookEvent {
 
   @@index([eventType, receivedAt])
   @@index([processed, receivedAt])
+}
+
+// ----------------------------------------
+// P0-04 Wave-5 Sub-Wave 5a — Refund (Razorpay refund lifecycle)
+// ----------------------------------------
+// A Refund is created when a CAPTURED payment is to be (partially or fully)
+// refunded. The refund API call to Razorpay is performed by the outbox publisher
+// (OUTSIDE any DB transaction) — the same Wave-4 4c pattern that protects the
+// capture flow's TRANSACTION_RETRY_INVARIANT. The refund route only writes the
+// Refund + reversal LedgerEntry pair + AuditLog + Outbox event inside a single
+// transaction; the publisher then calls refundRazorpayPayment() and on success
+// transitions Refund.status REFUND_PENDING → REFUNDED + Payment.status
+// CAPTURED → REFUNDED (full refund) atomically.
+//
+// Lifecycle:
+//   REFUND_PENDING (created by refund route, inside txn)
+//     → REFUNDED   (publisher confirms Razorpay refund success, inside new txn)
+//     → FAILED     (publisher exhausts retries / gateway declined)
+//
+// Partial refunds: amount < Payment.amount is allowed. Multiple Refunds per
+// Payment are supported (1:N). Each Refund produces its own Dr/Cr reversal
+// LedgerEntry pair tied to the same paymentId (entries are append-only — no
+// updates to existing rows).
+model Refund {
+  id              String   @id @default(cuid())
+  paymentId       String
+  payment         Payment  @relation(fields: [paymentId], references: [id])
+  // Amount (paise). For a full refund, equals Payment.amount. For a partial
+  // refund, is less than Payment.amount. Must be > 0.
+  amount          Int
+  currency        String   @default("INR")
+  // REFUND_PENDING → REFUNDED | FAILED
+  status          String   @default("REFUND_PENDING")
+  // Razorpay refund ID (rpf_*) — set by the publisher after a successful refund.
+  gatewayRefundId String?
+  // P0-17: Idempotency-Key linkage (refund double-click dedup). Unique per
+  // refund attempt — same key on retry returns the cached Refund.
+  idempotencyKey  String?  @unique
+  // Failure tracking (set by publisher on retry/decline).
+  failureReason   String?
+  // Set by publisher when Razorpay confirms the refund.
+  refundedAt      DateTime?
+  // P0-25: Optimistic-locking version field (race-safe conditional update).
+  version         Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([paymentId, status])
+  @@index([status, createdAt])
 }

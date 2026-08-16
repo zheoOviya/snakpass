@@ -6248,3 +6248,67 @@ Stage Summary:
 - Production NOT AUTHORIZED. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF. Wave-5 LOCKED (recommended for authorization in D1). Wave-4 stays CLOSED.
 - IDE is STOPPING. Awaiting Orchestrator decision on D1-D12.
 
+
+---
+Task ID: wave5a-p0-04-refund
+Agent: IDE (Full-Stack Developer)
+Task: Wave-5 Sub-Wave 5a (P0-04 Refund Implementation) — mirror of Wave-4 4c capture pattern
+
+Authorization: Orchestrator WAVE-5 AUTHORIZED — P0-04 REFUND. START WITH P0-04. Production remains LOCKED. No production flag activation. No Wave-6/7. After P0-04 evidence package: STOP and request Orchestrator S5 review.
+
+Work Log:
+- Read worklog.md tail (~lines 5900-6250) to confirm Wave-0 through Wave-4 ALL CLOSED (4a/4b/4c/4d S5 PASS / CLOSED — Wave-4 COMPLETE). Orchestrator's governance model: Wave-4 closure ≠ production authorization. Feature flags currently OFF in production: realPayments, webhookHandler, requestHashEnforcement.
+- Read predecessor agent-ctx: `4c-implementation-phase2-ide-main.md` (Wave-4 4c publisher PAYMENT_CAPTURE_REQUESTED handler implementation).
+
+What I changed (file-by-file):
+1. `prisma/schema.prisma` — updated Payment model status lifecycle doc (CAPTURED → REFUND_PENDING → REFUNDED | FAILED); added `refunds Refund[]` 1:N relation; added new Refund model (Class-2 additive — id, paymentId, amount, currency, status='REFUND_PENDING', gatewayRefundId?, idempotencyKey? @unique, failureReason?, refundedAt?, version=0, createdAt, updatedAt; indexes `[paymentId, status]` + `[status, createdAt]`).
+2. `prisma/scripts/wave5-subwave-5a-migration.sql` (new) — Class-2 ADDITIVE: CREATE TABLE IF NOT EXISTS Refund (unique idempotencyKey index + paymentId_status index + status_createdAt index + FK to Payment ON DELETE RESTRICT); GRANT to snakzap_app + snakzap_admin; BEGIN/COMMIT + DO $$ RAISE NOTICE.
+3. `src/lib/razorpay.ts` — added RazorpayRefundResponse interface + refundRazorpayPayment(razorpayPaymentId, amount, currency) function (demo mode: mock success; real mode: instance.payments.refund; treats 'pending'+'processed' as success).
+4. `src/app/api/payments/refund/route.ts` (new) — POST /api/payments/refund: Zod-validated body { paymentId, amount? }; inside withTransaction: getCachedResponse → read Payment → assert CAPTURED + not frozen + authorized → compute refundAmount (default=Payment.amount; >Payment.amount → 400) → create Refund REFUND_PENDING → create reversal Dr CONSUMER_REVENUE + Cr GATEWAY_RECEIVABLE LedgerEntry pair → AuditLog PAYMENT_REFUND_PENDING → enqueueOutboxEvent PAYMENT_REFUND_REQUESTED (aggregateType='Refund', aggregateId=refund.id) → storeIdempotencyRecord → returns { refund: { id, paymentId, status: 'REFUND_PENDING', amount, currency, fullRefund } }. Error handling: IdempotencyKeyReuseError (422), TransactionConflictError (409), AppError rethrow.
+5. `mini-services/outbox-publisher/index.ts` — added refundRazorpayPayment import; extended COMMAND_EVENT_TYPES to include 'PAYMENT_REFUND_REQUESTED'; added refundId? to LogEntry; added processPaymentRefundRequested(event) function (~290 lines): parses payload (aggregateId=refund.id) → reads Refund → idempotency check (if REFUNDED → mark outbox PUBLISHED, exit) → if FAILED (terminal) → mark outbox PUBLISHED, exit → if status !== REFUND_PENDING → throw → resolve gatewayPaymentId → call refundRazorpayPayment() OUTSIDE any txn → on failure: increment Refund.version + set failureReason, rethrow → on success: NEW db.$transaction() atomically commits (a) Refund REFUND_PENDING → REFUNDED + refundedAt + gatewayRefundId (race-safe conditional updateMany WHERE status='REFUND_PENDING'); (b) if full refund AND Payment.status==='CAPTURED': Payment CAPTURED → REFUNDED (race-safe conditional updateMany); (c) AuditLog PAYMENT_REFUNDED if either Refund or Payment was updated; (d) Outbox.status=PUBLISHED (always). Updated dispatch loop: routes PAYMENT_REFUND_REQUESTED to processPaymentRefundRequested.
+6. `src/app/api/payments/evidence-setup/route.ts` — added `refund-full` + `refund-partial` scenarios that pre-create a CAPTURED Payment (status='CAPTURED', capturedAt=now, version=1, gatewayPaymentId='pay_evidence_<scenario>_<timestamp>_<rand>') + capture Dr/Cr LedgerEntry pair (Dr GATEWAY_RECEIVABLE + Cr CONSUMER_REVENUE) + AuditLog PAYMENT_CAPTURED (source='evidence-setup', simulating publisher). Returns paymentId, paymentStatus, paymentAmount, gatewayPaymentId alongside existing fields.
+7. `src/app/api/payments/evidence-verify/route.ts` — added refundId + refundIdempotencyKey query params; returns refund state (exists, id, paymentId, amount, status, gatewayRefundId, idempotencyKey, failureReason, refundedAt, version); reversal Dr/Cr counts + sums (DEBIT CONSUMER_REVENUE + CREDIT GATEWAY_RECEIVABLE); refund-specific AuditLog entries (PAYMENT_REFUND_PENDING + PAYMENT_REFUNDED); refund-specific Outbox event (aggregateType='Refund'); refund IdempotencyKey record; computed invariants exactlyOneRefundInitiated + refundCompleted.
+8. `src/app/api/payments/evidence-publisher-run/route.ts` — added mode=refund + refundId query params; added runRefundPublisher(refundId) function (mirrors capture simulator): reads Refund + Payment; idempotency check (if REFUNDED → refundCalled=false, idempotencySkipped=true); if FAILED (terminal) → return error; if status !== REFUND_PENDING → return error; calls refundRazorpayPayment() OUTSIDE any txn (mirrors 4c safety); on success: race-safe conditional updateMany Refund (WHERE status='REFUND_PENDING') + Payment (WHERE status='CAPTURED', only for full refund); AuditLog PAYMENT_REFUNDED if either was updated; Outbox marked PUBLISHED; returns { mode: 'refund', refundId, paymentId, statusBefore, refundCalled, statusAfter, refundedAt, gatewayRefundId, paymentStatusBefore, paymentStatusAfter, idempotencySkipped, versionAfter, error, traceId }.
+9. `scripts/wave5-5a-evidence.mjs` (new) — E1-E5 evidence runner (5 scenarios): E1 (refund returns REFUND_PENDING), E2 (atomic writes — Refund + reversal Dr/Cr + AuditLog + Outbox + IdempotencyKey + ledgerBalanceIntact), E3 (idempotency preserved — same key → same Refund, no duplicates), E4 (concurrent refunds → exactly 1 Refund + 1 reversal Dr/Cr pair), E5 (publisher retry → no duplicate refund — first run refundCalled=true, second run refundCalled=false + idempotencySkipped=true; final Refund REFUNDED + Payment REFUNDED + 1 reversal Dr/Cr + 1 PAYMENT_REFUNDED audit + Outbox PUBLISHED + ledger balanced). Emits self-validating evidence JSON to evidence/wave5-5a/evidence-E1-E5-<runId>.json.
+10. `scripts/run-5a-evidence.sh` (new) — bash wrapper: flips schema to SQLite, pushes schema, seeds, starts dev server with EVIDENCE_TEST_MODE=true, runs evidence, restores PostgreSQL schema + .env.
+11. `.github/workflows/wave5-5a-staging-migration.yml` (new) — manual workflow: applies wave5-subwave-5a-migration.sql to staging Supabase; confirmation string APPLY-WAVE5-5A; verifies Refund table + indexes + FK after migration.
+12. `.github/workflows/subwave-5a-postgresql-evidence.yml` (new) — manual workflow: runs E1-E5 against staging Supabase PostgreSQL; confirmation string RUN-5A-PG-EVIDENCE; pre-step verifies Refund table exists; sets EVIDENCE_TEST_MODE=true on Vercel preview + triggers new deployment; for each scenario creates CAPTURED Payment via evidence-setup?scenario=refund-full, fires refund POST(s), then queries Supabase directly via /database/query to verify state; E5 runs publisher twice; cleans up ALL test data after each scenario; emits wave5-5a-postgresql-evidence.json self-validating evidence file (uploaded as Actions artifact).
+13. `WAVE5_EVIDENCE.md` (new) — Wave-5 evidence document with full implementation summary + governance safeguards.
+14. `agent-ctx/wave5a-p0-04-refund-ide-main.md` (new) — this work record.
+
+Dependencies:
+- Installed razorpay@2.9.8 (was in package.json but not in node_modules — `bun install razorpay` resolved it). Required for the existing `import Razorpay from 'razorpay'` in src/lib/razorpay.ts.
+
+SQLite Evidence Result (5/5 PASS):
+- Run ID: 5a-1786874767980-fbc2ef75
+- Artifact: evidence/wave5-5a/evidence-E1-E5-5a-1786874767980-fbc2ef75.json
+- ok: true, summary.totalTests: 5, summary.passed: 5, summary.failed: 0, summary.allPassed: true
+- governance.realPaymentsEnabled: false, governance.productionTouched: false
+- Per-scenario:
+  - ✅ 5a-E1: Refund returns REFUND_PENDING
+  - ✅ 5a-E2: Payment state consistent (atomic writes — Refund + 1 reversal Dr + 1 reversal Cr + PAYMENT_REFUND_PENDING audit + PAYMENT_REFUND_REQUESTED outbox (PENDING) + IdempotencyKey record + ledgerBalanceIntact=true)
+  - ✅ 5a-E3: Idempotency preserved (same Idempotency-Key on retry returns the SAME Refund id; no duplicate reversal entries, no duplicate Outbox event)
+  - ✅ 5a-E4: Concurrent refund requests → exactly 1 Refund (2 simultaneous POSTs with same key → 1 Refund row + 1 reversal Dr/Cr pair)
+  - ✅ 5a-E5: Publisher retry → no duplicate refund (first run refundCalled=true, Refund → REFUNDED, Payment → REFUNDED; second run refundCalled=false, idempotencySkipped=true; final state: 1 reversal Dr/Cr pair, 1 PAYMENT_REFUNDED audit, Outbox PUBLISHED, ledger balanced)
+
+Lint:
+- `bun run lint` → exit 0 (no errors, no warnings).
+
+Constraints honored:
+- ✅ Did NOT enable realPayments (still OFF — demo mode; refundRazorpayPayment returns mock success).
+- ✅ Did NOT modify db.ts or idempotency.ts.
+- ✅ Did NOT reopen Wave-3/4 evidence.
+- ✅ Did NOT start P0-03 (separate evidence package required).
+- ✅ Followed the 4c pattern (external call OUTSIDE txn, via outbox publisher).
+- ✅ Used idempotency pattern (3c) — same getCachedResponse + storeIdempotencyRecord + computeRequestHash as capture route.
+- ✅ Preserved ledger double-entry (Dr/Cr reversal for refund — Dr CONSUMER_REVENUE + Cr GATEWAY_RECEIVABLE mirrors the capture flow's Dr GATEWAY_RECEIVABLE + Cr CONSUMER_REVENUE in reverse).
+- ✅ Verified lint passes.
+
+Stage Summary:
+- Wave-5 Sub-Wave 5a (P0-04 Refund) — IMPLEMENTED + SQLite evidence E1-E5 PASS (5/5).
+- PostgreSQL evidence workflow committed (pending Orchestrator trigger via APPLY-WAVE5-5A then RUN-5A-PG-EVIDENCE).
+- WAVE5_EVIDENCE.md created with full implementation summary + governance safeguards.
+- Production remains LOCKED. realPayments OFF. webhookHandler OFF. requestHashEnforcement OFF.
+- P0-03 (Reconciliation) NOT started — separate evidence package required.
+- Wave-6/7 NOT started.
+- IDE is STOPPING. Awaiting Orchestrator S5 review of P0-04 evidence package.

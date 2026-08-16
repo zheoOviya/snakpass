@@ -22,6 +22,10 @@ import { cookies } from 'next/headers'
 //   - "replay"       — fresh order for replay test
 //   - "conflict"     — fresh order for conflict test (will be captured once first)
 //   - "concurrent"   — fresh order for concurrent test
+//   - "refund-full"  — fresh order + CAPTURED Payment (Wave-5 5a full-refund test)
+//                      Returns paymentId for use by the refund route + publisher.
+//   - "refund-partial" — fresh order + CAPTURED Payment (Wave-5 5a partial-refund test)
+//                        Returns paymentId for use by the refund route + publisher.
 // ----------------------------------------------------------------------------
 
 const EVIDENCE_PHONE = '+919999900001'
@@ -102,6 +106,84 @@ export async function GET(req: Request) {
   const store = await cookies()
   const sessionCookieValue = store.get('snakzap_session')?.value ?? sessionToken
 
+  // Wave-5 Sub-Wave 5a: For refund scenarios, also create a CAPTURED Payment
+  // (the refund route requires Payment.status === 'CAPTURED'). We bypass the
+  // capture API and write the Payment directly as CAPTURED, simulating the
+  // state AFTER the publisher has processed a successful capture. This lets
+  // the evidence runner focus on testing the refund flow specifically.
+  //
+  // We also write the original capture Dr/Cr LedgerEntry pair + AuditLog so the
+  // ledger balance is intact when the refund's reversal pair is written.
+  // Capture Dr: DEBIT GATEWAY_RECEIVABLE   (we are owed money by gateway)
+  // Capture Cr: CREDIT CONSUMER_REVENUE   (we recognized revenue)
+  // Refund reversal Dr: DEBIT CONSUMER_REVENUE   (reverse revenue)
+  // Refund reversal Cr: CREDIT GATEWAY_RECEIVABLE (reverse receivable)
+  // Net: ledger still balances (I-06 invariant preserved).
+  let paymentId: string | null = null
+  let paymentStatus: string | null = null
+  let paymentAmount: number | null = null
+  let gatewayPaymentId: string | null = null
+  if (scenario === 'refund-full' || scenario === 'refund-partial') {
+    const traceId = `evidence-setup-${Date.now()}`
+    gatewayPaymentId = `pay_evidence_${scenario}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+    const payment = await db.payment.create({
+      data: {
+        orderId: order.id,
+        userId: user.id,
+        gatewayOrderId: `order_evidence_${scenario}_${Date.now()}`,
+        gatewayPaymentId,
+        gatewaySignature: `sig_evidence_${scenario}`,
+        amount: order.totalAmount,
+        currency: 'INR',
+        status: 'CAPTURED',
+        capturedAt: new Date(),
+        idempotencyKey: null, // capture-side key, intentionally null for evidence
+        version: 1, // bumped once for the capture transition
+      },
+    })
+    paymentId = payment.id
+    paymentStatus = payment.status
+    paymentAmount = payment.amount
+
+    // Capture Dr/Cr pair (mirrors src/app/api/payments/route.ts:193-216)
+    await db.ledgerEntry.create({
+      data: {
+        paymentId: payment.id,
+        entryType: 'DEBIT',
+        accountType: 'GATEWAY_RECEIVABLE',
+        amount: order.totalAmount,
+        traceId,
+      },
+    })
+    await db.ledgerEntry.create({
+      data: {
+        paymentId: payment.id,
+        entryType: 'CREDIT',
+        accountType: 'CONSUMER_REVENUE',
+        amount: order.totalAmount,
+        traceId,
+      },
+    })
+
+    // AuditLog — PAYMENT_CAPTURED (source: evidence-setup, simulating publisher)
+    await db.auditLog.create({
+      data: {
+        actorId: null,
+        actorRole: 'SYSTEM',
+        action: 'PAYMENT_CAPTURED',
+        metadata: JSON.stringify({
+          paymentId: payment.id,
+          orderId: order.id,
+          gatewayPaymentId,
+          amount: payment.amount,
+          source: 'evidence-setup',
+          note: `Simulated CAPTURED state for refund-${scenario} evidence`,
+          traceId,
+        }),
+      },
+    })
+  }
+
   return NextResponse.json({
     scenario,
     sessionToken: sessionCookieValue,
@@ -114,6 +196,11 @@ export async function GET(req: Request) {
     menuItemId: menuItem.id,
     menuItemName: menuItem.name,
     menuItemPrice: menuItem.price,
+    // Wave-5 5a refund scenarios: pre-created CAPTURED Payment
+    paymentId,
+    paymentStatus,
+    paymentAmount,
+    gatewayPaymentId,
     evidenceTestMode: true,
   })
 }

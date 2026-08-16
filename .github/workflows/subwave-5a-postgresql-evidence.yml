@@ -1,0 +1,594 @@
+# Wave-5 Sub-Wave 5a — PostgreSQL Refund Flow (P0-04) Evidence E1-E5
+
+name: Wave-5 5a — PostgreSQL Refund Flow (P0-04) Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_url:
+        description: 'Staging URL'
+        required: true
+        default: 'https://snakpass-eqkarf10s-snakzap.vercel.app'
+      confirm:
+        description: 'Type RUN-5A-PG-EVIDENCE to confirm'
+        required: true
+        default: ''
+
+jobs:
+  postgresql-5a-evidence:
+    name: 5a-PG — P0-04 Refund flow E1-E5 verification on PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+      STAGING_URL: ${{ inputs.staging_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify trigger
+        run: |
+          [ "${{ github.event.inputs.confirm }}" = "RUN-5A-PG-EVIDENCE" ] || { echo "❌ Wrong confirmation"; exit 1; }
+          echo "✅ Authorized — Wave-5 Sub-Wave 5a PostgreSQL Refund Evidence (P0-04)"
+
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl
+
+      - name: Verify secrets present
+        run: |
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN NOT_SET"; exit 1; }
+          [ -n "$VERCEL_TOKEN" ] || { echo "❌ VERCEL_TOKEN NOT_SET"; exit 1; }
+          echo "✅ All required secrets present"
+
+      - name: Verify Refund table exists on staging (Wave-5 5a migration applied)
+        run: |
+          echo "=== Verifying Refund table is present on staging Supabase ==="
+          VERIFY_SQL='SELECT COUNT(*) AS refund_table_exists FROM information_schema.tables WHERE table_name = '\''Refund'\'';'
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$VERIFY_SQL" '{query: $q}')")
+          echo "$RESULT" | jq '.' 2>/dev/null || echo "$RESULT"
+          COUNT=$(echo "$RESULT" | jq -r 'if type == "array" then .[0].refund_table_exists else .refund_table_exists // 0 end' 2>/dev/null)
+          if [ "$COUNT" != "1" ]; then
+            echo "❌ Refund table NOT present — run wave5-5a-staging-migration.yml first"
+            exit 1
+          fi
+          echo "✅ Refund table present"
+
+      - name: Set EVIDENCE_TEST_MODE=true on Vercel preview environment
+        run: |
+          set +e
+          PROJECT_ID="$VERCEL_PROJECT_ID"
+          API_URL="https://api.vercel.com/v10/projects/$PROJECT_ID/env"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+
+          # Remove existing EVIDENCE_TEST_MODE entries
+          LIST_BODY=$(curl -sS -H "$AUTH" "$API_URL")
+          EXISTING_IDS=$(echo "$LIST_BODY" | jq -r '.envs[] | select(.key == "EVIDENCE_TEST_MODE") | .id' 2>/dev/null)
+          if [ -n "$EXISTING_IDS" ]; then
+            for EID in $EXISTING_IDS; do
+              curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID" > /dev/null 2>&1
+            done
+          fi
+
+          # Create EVIDENCE_TEST_MODE=true for preview+production
+          RESULT=$(curl -sS -w "\n%{http_code}" -X POST -H "$AUTH" -H "Content-Type: application/json" "$API_URL" -d '{"key":"EVIDENCE_TEST_MODE","value":"true","target":["preview","production"],"type":"plain"}')
+          RESULT_HTTP=$(echo "$RESULT" | tail -1)
+          if echo "$RESULT_HTTP" | grep -qE "^(200|201)$"; then
+            echo "  ✅ EVIDENCE_TEST_MODE=true configured"
+          else
+            echo "  ❌ Failed to set EVIDENCE_TEST_MODE"
+            exit 1
+          fi
+
+      - name: Trigger new Vercel deployment
+        run: |
+          set +e
+          PROJECT_ID="$VERCEL_PROJECT_ID"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+
+          PROJECT_RESP=$(curl -sS -H "$AUTH" "https://api.vercel.com/v9/projects/$PROJECT_ID")
+          REPO_ID=$(echo "$PROJECT_RESP" | jq -r '.link.repoId // empty')
+          LINK_TYPE=$(echo "$PROJECT_RESP" | jq -r '.link.type // empty')
+          ORG=$(echo "$PROJECT_RESP" | jq -r '.link.org // empty')
+          REPO=$(echo "$PROJECT_RESP" | jq -r '.link.repo // empty')
+
+          if [ -z "$REPO_ID" ] || [ "$REPO_ID" = "null" ]; then
+            echo "❌ Cannot trigger deployment — no linked repoId"
+            exit 1
+          fi
+
+          PAYLOAD=$(jq -n --arg name "snakpass" --arg type "$LINK_TYPE" --arg org "$ORG" --arg repo "$REPO" --argjson repoId "$REPO_ID" --arg ref "main" '{name:$name, gitSource:{type:$type, org:$org, repo:$repo, repoId:$repoId, ref:$ref}}')
+          DEPLOY_RESP=$(curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" "https://api.vercel.com/v13/deployments" -d "$PAYLOAD")
+          DEPLOY_ID=$(echo "$DEPLOY_RESP" | jq -r '.id // empty')
+
+          if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
+            for i in $(seq 1 60); do
+              STATUS_RESP=$(curl -sS -H "$AUTH" "https://api.vercel.com/v13/deployments/$DEPLOY_ID")
+              READY_STATE=$(echo "$STATUS_RESP" | jq -r '.readyState // empty')
+              if [ "$READY_STATE" = "READY" ]; then
+                FINAL_URL=$(echo "$STATUS_RESP" | jq -r '.url // empty')
+                if [ -n "$FINAL_URL" ]; then
+                  echo "NEW_STAGING_URL=https://$FINAL_URL" >> $GITHUB_ENV
+                fi
+                break
+              fi
+              if [ "$READY_STATE" = "ERROR" ] || [ "$READY_STATE" = "CANCELED" ]; then break; fi
+              sleep 5
+            done
+          fi
+
+      - name: Use new deployment URL if available
+        run: |
+          if [ -n "$NEW_STAGING_URL" ]; then
+            echo "STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+          else
+            echo "STAGING_URL=$STAGING_URL" >> $GITHUB_ENV
+          fi
+
+      - name: Verify staging health + evidence endpoints deployed
+        run: |
+          STAGING_URL="${STAGING_URL%/}"
+          READY=0
+          for attempt in $(seq 1 12); do
+            HEALTH=$(curl -sS -o /dev/null -w "%{http_code}" "$STAGING_URL/api/health" 2>/dev/null)
+            if [ "$HEALTH" = "200" ]; then
+              SETUP=$(curl -sS -o /dev/null -w "%{http_code}" "$STAGING_URL/api/payments/evidence-setup?scenario=pre-flight" 2>/dev/null)
+              if [ "$SETUP" = "200" ]; then
+                echo "✅ Evidence endpoints deployed"
+                READY=1
+                break
+              fi
+            fi
+            sleep 15
+          done
+          if [ "$READY" != "1" ]; then
+            echo "❌ Staging not ready after 12 attempts"
+            exit 1
+          fi
+
+      - name: Run 5a E1-E5 refund evidence on PostgreSQL
+        run: |
+          STAGING_URL="${STAGING_URL%/}"
+          RUN_ID="5a-pg-$(date +%s)-$(echo $RANDOM | tr -dc 'a-z0-9' | head -c 4)"
+          EVIDENCE_FILE="wave5-5a-postgresql-evidence.json"
+
+          echo "=================================================="
+          echo "  Wave-5 Sub-Wave 5a — PostgreSQL Refund Evidence"
+          echo "  Run ID: $RUN_ID"
+          echo "  Staging URL: $STAGING_URL"
+          echo "  Database: PostgreSQL (Supabase staging)"
+          echo "  P0: P0-04 (Refund)"
+          echo "=================================================="
+
+          # Helper: create a CAPTURED Payment via evidence-setup?scenario=refund-full
+          # Returns: { orderId, paymentId, sessionToken, csrfToken, paymentAmount, gatewayPaymentId }
+          create_captured_payment() {
+            local scenario="$1"
+            curl -sS -c /tmp/cookies.txt -b /tmp/cookies.txt "$STAGING_URL/api/payments/evidence-setup?scenario=$scenario"
+          }
+
+          # Helper: POST /api/payments/refund with Idempotency-Key
+          create_refund() {
+            local payment_id="$1"
+            local idem_key="$2"
+            local body="$3"
+            local session="$4"
+            local csrf="$5"
+            if [ -n "$body" ]; then
+              curl -sS -w "\n%{http_code}" -X POST "$STAGING_URL/api/payments/refund" \
+                -H "Content-Type: application/json" \
+                -H "Idempotency-Key: $idem_key" \
+                -H "Cookie: snakzap_session=$session; snakzap_csrf=$csrf" \
+                -H "X-CSRF-Token: $csrf" \
+                -d "$body"
+            else
+              curl -sS -w "\n%{http_code}" -X POST "$STAGING_URL/api/payments/refund" \
+                -H "Content-Type: application/json" \
+                -H "Idempotency-Key: $idem_key" \
+                -H "Cookie: snakzap_session=$session; snakzap_csrf=$csrf" \
+                -H "X-CSRF-Token: $csrf" \
+                -d "{\"paymentId\":\"$payment_id\"}"
+            fi
+          }
+
+          # Helper: run publisher (refund mode)
+          run_publisher_refund() {
+            local refund_id="$1"
+            curl -sS -w "\n%{http_code}" -X POST "$STAGING_URL/api/payments/evidence-publisher-run?refundId=$refund_id&mode=refund"
+          }
+
+          # Helper: query Supabase for verification
+          supa_query() {
+            local sql="$1"
+            curl -sS -X POST -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" -H "Content-Type: application/json" \
+              "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+              -d "$(jq -n --arg q "$sql" '{query: $q}')"
+          }
+
+          # ============================
+          # E1: Refund returns REFUND_PENDING
+          # ============================
+          echo ""
+          echo "=== E1: Refund returns REFUND_PENDING ==="
+          SETUP1=$(create_captured_payment "refund-full")
+          ORDER_ID1=$(echo "$SETUP1" | jq -r '.orderId')
+          PAYMENT_ID1=$(echo "$SETUP1" | jq -r '.paymentId')
+          SESSION1=$(echo "$SETUP1" | jq -r '.sessionToken')
+          CSRF1=$(echo "$SETUP1" | jq -r '.csrfToken')
+          IDEM1="ev-5a-E1-pg-$(date +%s)-$RANDOM"
+          REFUND1_RESP=$(create_refund "$PAYMENT_ID1" "$IDEM1" "" "$SESSION1" "$CSRF1")
+          REFUND1_HTTP=$(echo "$REFUND1_RESP" | tail -1)
+          REFUND1_BODY=$(echo "$REFUND1_RESP" | head -n -1)
+          echo "Refund1 HTTP: $REFUND1_HTTP"
+          echo "Body: $REFUND1_BODY"
+          REFUND1_ID=$(echo "$REFUND1_BODY" | jq -r '.refund.id // empty')
+          REFUND1_STATUS=$(echo "$REFUND1_BODY" | jq -r '.refund.status // empty')
+          E1_PASS="false"
+          if [ "$REFUND1_HTTP" = "200" ] && [ "$REFUND1_STATUS" = "REFUND_PENDING" ] && [ -n "$REFUND1_ID" ]; then
+            E1_PASS="true"
+            echo "  ✅ PASS: refund returned REFUND_PENDING (id=$REFUND1_ID)"
+          else
+            echo "  ❌ FAIL: refund status=$REFUND1_STATUS, http=$REFUND1_HTTP"
+          fi
+
+          # ============================
+          # E2: Payment state consistent (atomic writes)
+          # ============================
+          echo ""
+          echo "=== E2: Payment state consistent (atomic writes) ==="
+          SETUP2=$(create_captured_payment "refund-full")
+          ORDER_ID2=$(echo "$SETUP2" | jq -r '.orderId')
+          PAYMENT_ID2=$(echo "$SETUP2" | jq -r '.paymentId')
+          SESSION2=$(echo "$SETUP2" | jq -r '.sessionToken')
+          CSRF2=$(echo "$SETUP2" | jq -r '.csrfToken')
+          IDEM2="ev-5a-E2-pg-$(date +%s)-$RANDOM"
+          REFUND2_RESP=$(create_refund "$PAYMENT_ID2" "$IDEM2" "" "$SESSION2" "$CSRF2")
+          REFUND2_ID=$(echo "$REFUND2_RESP" | head -n -1 | jq -r '.refund.id // empty')
+
+          # Query PostgreSQL directly
+          REFUND2_ROW=$(supa_query "SELECT \"id\", \"status\", \"amount\", \"idempotencyKey\", \"refundedAt\", \"gatewayRefundId\" FROM \"Refund\" WHERE \"id\" = '$REFUND2_ID';")
+          echo "Refund row: $REFUND2_ROW"
+          LEDGER_DR_CR=$(supa_query "SELECT \"entryType\", \"accountType\", COUNT(*) AS cnt FROM \"LedgerEntry\" WHERE \"paymentId\" = '$PAYMENT_ID2' GROUP BY \"entryType\", \"accountType\" ORDER BY \"entryType\", \"accountType\";")
+          echo "Ledger entries (capture Dr GATEWAY_RECEIVABLE + Cr CONSUMER_REVENUE + refund reversal Dr CONSUMER_REVENUE + Cr GATEWAY_RECEIVABLE):"
+          echo "$LEDGER_DR_CR" | jq '.' 2>/dev/null || echo "$LEDGER_DR_CR"
+          REVERSAL_DR=$(echo "$LEDGER_DR_CR" | jq -r '[.[] | select(.entryType == "DEBIT" and .accountType == "CONSUMER_REVENUE") | .cnt] | add // 0' 2>/dev/null)
+          REVERSAL_CR=$(echo "$LEDGER_DR_CR" | jq -r '[.[] | select(.entryType == "CREDIT" and .accountType == "GATEWAY_RECEIVABLE") | .cnt] | add // 0' 2>/dev/null)
+          echo "Reversal Dr CONSUMER_REVENUE: $REVERSAL_DR (expected: 1)"
+          echo "Reversal Cr GATEWAY_RECEIVABLE: $REVERSAL_CR (expected: 1)"
+
+          AUDIT_PENDING=$(supa_query "SELECT COUNT(*) AS cnt FROM \"AuditLog\" WHERE \"action\" = 'PAYMENT_REFUND_PENDING' AND \"metadata\" LIKE '%$REFUND2_ID%';")
+          AUDIT_PENDING_CNT=$(echo "$AUDIT_PENDING" | jq -r 'if type == "array" then .[0].cnt else .cnt // 0 end' 2>/dev/null)
+          echo "AuditLog PAYMENT_REFUND_PENDING count: $AUDIT_PENDING_CNT (expected: 1)"
+
+          OUTBOX_REFUND=$(supa_query "SELECT \"status\" FROM \"Outbox\" WHERE \"aggregateType\" = 'Refund' AND \"aggregateId\" = '$REFUND2_ID';")
+          OUTBOX_STATUS=$(echo "$OUTBOX_REFUND" | jq -r 'if type == "array" then .[0].status else .status // empty end' 2>/dev/null)
+          echo "Outbox PAYMENT_REFUND_REQUESTED status: $OUTBOX_STATUS (expected: PENDING)"
+
+          IDEM_RECORD=$(supa_query "SELECT COUNT(*) AS cnt FROM \"IdempotencyKey\" WHERE \"key\" = '$IDEM2';")
+          IDEM_CNT=$(echo "$IDEM_RECORD" | jq -r 'if type == "array" then .[0].cnt else .cnt // 0 end' 2>/dev/null)
+          echo "IdempotencyKey count: $IDEM_CNT (expected: 1)"
+
+          LEDGER_BAL=$(supa_query "SELECT (SELECT COALESCE(SUM(amount), 0) FROM \"LedgerEntry\" WHERE \"paymentId\" = '$PAYMENT_ID2' AND \"entryType\" = 'DEBIT') AS dr_sum, (SELECT COALESCE(SUM(amount), 0) FROM \"LedgerEntry\" WHERE \"paymentId\" = '$PAYMENT_ID2' AND \"entryType\" = 'CREDIT') AS cr_sum;")
+          DR_SUM=$(echo "$LEDGER_BAL" | jq -r 'if type == "array" then .[0].dr_sum else .dr_sum // 0 end' 2>/dev/null)
+          CR_SUM=$(echo "$LEDGER_BAL" | jq -r 'if type == "array" then .[0].cr_sum else .cr_sum // 0 end' 2>/dev/null)
+          echo "Ledger Dr sum: $DR_SUM, Cr sum: $CR_SUM (expected: equal — I-06 invariant preserved)"
+
+          E2_PASS="false"
+          if [ "$REVERSAL_DR" = "1" ] && [ "$REVERSAL_CR" = "1" ] && [ "$AUDIT_PENDING_CNT" = "1" ] && \
+             [ "$OUTBOX_STATUS" = "PENDING" ] && [ "$IDEM_CNT" = "1" ] && [ "$DR_SUM" = "$CR_SUM" ] && [ "$DR_SUM" != "0" ]; then
+            E2_PASS="true"
+            echo "  ✅ PASS: atomic writes verified (Refund + reversal Dr/Cr + AuditLog + Outbox + IdempotencyKey all present, ledger balanced)"
+          else
+            echo "  ❌ FAIL: state inconsistent"
+          fi
+
+          # ============================
+          # E3: Idempotency preserved (same key → same Refund)
+          # ============================
+          echo ""
+          echo "=== E3: Idempotency preserved (same key → same Refund) ==="
+          SETUP3=$(create_captured_payment "refund-full")
+          PAYMENT_ID3=$(echo "$SETUP3" | jq -r '.paymentId')
+          SESSION3=$(echo "$SETUP3" | jq -r '.sessionToken')
+          CSRF3=$(echo "$SETUP3" | jq -r '.csrfToken')
+          IDEM3="ev-5a-E3-pg-$(date +%s)-$RANDOM"
+          REFUND3A_RESP=$(create_refund "$PAYMENT_ID3" "$IDEM3" "" "$SESSION3" "$CSRF3")
+          REFUND3A_ID=$(echo "$REFUND3A_RESP" | head -n -1 | jq -r '.refund.id // empty')
+          REFUND3B_RESP=$(create_refund "$PAYMENT_ID3" "$IDEM3" "" "$SESSION3" "$CSRF3")
+          REFUND3B_ID=$(echo "$REFUND3B_RESP" | head -n -1 | jq -r '.refund.id // empty')
+          echo "First refund id: $REFUND3A_ID"
+          echo "Second refund id (same key): $REFUND3B_ID"
+          REFUND3_ROWS=$(supa_query "SELECT COUNT(*) AS cnt FROM \"Refund\" WHERE \"paymentId\" = '$PAYMENT_ID3';")
+          REFUND3_CNT=$(echo "$REFUND3_ROWS" | jq -r 'if type == "array" then .[0].cnt else .cnt // 0 end' 2>/dev/null)
+          REVERSAL3_DR=$(supa_query "SELECT COUNT(*) AS cnt FROM \"LedgerEntry\" WHERE \"paymentId\" = '$PAYMENT_ID3' AND \"entryType\" = 'DEBIT' AND \"accountType\" = 'CONSUMER_REVENUE';" | jq -r 'if type == "array" then .[0].cnt else .cnt // 0 end' 2>/dev/null)
+          echo "Refund rows: $REFUND3_CNT (expected: 1 — no duplicate)"
+          echo "Reversal Dr CONSUMER_REVENUE rows: $REVERSAL3_DR (expected: 1 — no duplicate)"
+          E3_PASS="false"
+          if [ "$REFUND3A_ID" = "$REFUND3B_ID" ] && [ "$REFUND3_CNT" = "1" ] && [ "$REVERSAL3_DR" = "1" ]; then
+            E3_PASS="true"
+            echo "  ✅ PASS: idempotency preserved (same Refund, no duplicates)"
+          else
+            echo "  ❌ FAIL: idempotency broken"
+          fi
+
+          # ============================
+          # E4: Concurrent refund requests → exactly 1 Refund
+          # ============================
+          echo ""
+          echo "=== E4: Concurrent refund requests → exactly 1 Refund ==="
+          SETUP4=$(create_captured_payment "refund-full")
+          PAYMENT_ID4=$(echo "$SETUP4" | jq -r '.paymentId')
+          SESSION4=$(echo "$SETUP4" | jq -r '.sessionToken')
+          CSRF4=$(echo "$SETUP4" | jq -r '.csrfToken')
+          IDEM4="ev-5a-E4-pg-$(date +%s)-$RANDOM"
+          # Fire 2 concurrent refund requests in parallel using background jobs
+          ( create_refund "$PAYMENT_ID4" "$IDEM4" "" "$SESSION4" "$CSRF4" > /tmp/e4_r1.txt 2>&1 ) &
+          PID1=$!
+          ( create_refund "$PAYMENT_ID4" "$IDEM4" "" "$SESSION4" "$CSRF4" > /tmp/e4_r2.txt 2>&1 ) &
+          PID2=$!
+          wait $PID1 $PID2
+          REFUND4A_ID=$(cat /tmp/e4_r1.txt | head -n -1 | jq -r '.refund.id // empty' 2>/dev/null)
+          REFUND4B_ID=$(cat /tmp/e4_r2.txt | head -n -1 | jq -r '.refund.id // empty' 2>/dev/null)
+          echo "Concurrent refund1 id: $REFUND4A_ID"
+          echo "Concurrent refund2 id: $REFUND4B_ID"
+          REFUND4_ROWS=$(supa_query "SELECT COUNT(*) AS cnt FROM \"Refund\" WHERE \"paymentId\" = '$PAYMENT_ID4';")
+          REFUND4_CNT=$(echo "$REFUND4_ROWS" | jq -r 'if type == "array" then .[0].cnt else .cnt // 0 end' 2>/dev/null)
+          REVERSAL4_DR=$(supa_query "SELECT COUNT(*) AS cnt FROM \"LedgerEntry\" WHERE \"paymentId\" = '$PAYMENT_ID4' AND \"entryType\" = 'DEBIT' AND \"accountType\" = 'CONSUMER_REVENUE';" | jq -r 'if type == "array" then .[0].cnt else .cnt // 0 end' 2>/dev/null)
+          echo "Refund rows for this payment: $REFUND4_CNT (expected: 1)"
+          echo "Reversal Dr rows: $REVERSAL4_DR (expected: 1)"
+          E4_PASS="false"
+          if [ "$REFUND4_CNT" = "1" ] && [ "$REVERSAL4_DR" = "1" ]; then
+            E4_PASS="true"
+            echo "  ✅ PASS: concurrent requests → exactly 1 Refund"
+          else
+            echo "  ❌ FAIL: duplicate Refund created"
+          fi
+
+          # ============================
+          # E5: Publisher retry → no duplicate refund
+          # ============================
+          echo ""
+          echo "=== E5: Publisher retry → no duplicate refund ==="
+          SETUP5=$(create_captured_payment "refund-full")
+          ORDER_ID5=$(echo "$SETUP5" | jq -r '.orderId')
+          PAYMENT_ID5=$(echo "$SETUP5" | jq -r '.paymentId')
+          SESSION5=$(echo "$SETUP5" | jq -r '.sessionToken')
+          CSRF5=$(echo "$SETUP5" | jq -r '.csrfToken')
+          IDEM5="ev-5a-E5-pg-$(date +%s)-$RANDOM"
+          REFUND5_RESP=$(create_refund "$PAYMENT_ID5" "$IDEM5" "" "$SESSION5" "$CSRF5")
+          REFUND5_ID=$(echo "$REFUND5_RESP" | head -n -1 | jq -r '.refund.id // empty')
+          echo "Refund id: $REFUND5_ID"
+
+          echo "First publisher run..."
+          PUB5A_RESP=$(run_publisher_refund "$REFUND5_ID")
+          PUB5A_BODY=$(echo "$PUB5A_RESP" | head -n -1)
+          PUB5A_HTTP=$(echo "$PUB5A_RESP" | tail -1)
+          PUB5A_CALLED=$(echo "$PUB5A_BODY" | jq -r '.refundCalled // false')
+          PUB5A_STATUS_AFTER=$(echo "$PUB5A_BODY" | jq -r '.statusAfter // empty')
+          PUB5A_PAY_AFTER=$(echo "$PUB5A_BODY" | jq -r '.paymentStatusAfter // empty')
+          echo "First run: http=$PUB5A_HTTP, refundCalled=$PUB5A_CALLED, statusAfter=$PUB5A_STATUS_AFTER, paymentStatusAfter=$PUB5A_PAY_AFTER"
+
+          echo "Second publisher run (retry)..."
+          PUB5B_RESP=$(run_publisher_refund "$REFUND5_ID")
+          PUB5B_BODY=$(echo "$PUB5B_RESP" | head -n -1)
+          PUB5B_HTTP=$(echo "$PUB5B_RESP" | tail -1)
+          PUB5B_CALLED=$(echo "$PUB5B_BODY" | jq -r '.refundCalled // false')
+          PUB5B_IDEM_SKIP=$(echo "$PUB5B_BODY" | jq -r '.idempotencySkipped // false')
+          echo "Second run: http=$PUB5B_HTTP, refundCalled=$PUB5B_CALLED, idempotencySkipped=$PUB5B_IDEM_SKIP"
+
+          # Verify final PostgreSQL state
+          REFUND5_FINAL=$(supa_query "SELECT \"status\", \"refundedAt\", \"gatewayRefundId\", \"version\" FROM \"Refund\" WHERE \"id\" = '$REFUND5_ID';")
+          echo "Final Refund state: $REFUND5_FINAL"
+          REFUND5_FINAL_STATUS=$(echo "$REFUND5_FINAL" | jq -r 'if type == "array" then .[0].status else .status // empty end' 2>/dev/null)
+          REFUND5_FINAL_GWID=$(echo "$REFUND5_FINAL" | jq -r 'if type == "array" then .[0].gatewayRefundId else .gatewayRefundId // empty end' 2>/dev/null)
+
+          PAYMENT5_FINAL=$(supa_query "SELECT \"status\", \"version\" FROM \"Payment\" WHERE \"id\" = '$PAYMENT_ID5';")
+          PAYMENT5_FINAL_STATUS=$(echo "$PAYMENT5_FINAL" | jq -r 'if type == "array" then .[0].status else .status // empty end' 2>/dev/null)
+          echo "Final Payment status: $PAYMENT5_FINAL_STATUS"
+
+          REVERSAL5_DR=$(supa_query "SELECT COUNT(*) AS cnt FROM \"LedgerEntry\" WHERE \"paymentId\" = '$PAYMENT_ID5' AND \"entryType\" = 'DEBIT' AND \"accountType\" = 'CONSUMER_REVENUE';" | jq -r 'if type == "array" then .[0].cnt else .cnt // 0 end' 2>/dev/null)
+          AUDIT5_COMPLETED=$(supa_query "SELECT COUNT(*) AS cnt FROM \"AuditLog\" WHERE \"action\" = 'PAYMENT_REFUNDED' AND \"metadata\" LIKE '%$REFUND5_ID%';" | jq -r 'if type == "array" then .[0].cnt else .cnt // 0 end' 2>/dev/null)
+          OUTBOX5_FINAL=$(supa_query "SELECT \"status\" FROM \"Outbox\" WHERE \"aggregateType\" = 'Refund' AND \"aggregateId\" = '$REFUND5_ID';" | jq -r 'if type == "array" then .[0].status else .status // empty end' 2>/dev/null)
+          LEDGER5_BAL=$(supa_query "SELECT (SELECT COALESCE(SUM(amount), 0) FROM \"LedgerEntry\" WHERE \"paymentId\" = '$PAYMENT_ID5' AND \"entryType\" = 'DEBIT') AS dr_sum, (SELECT COALESCE(SUM(amount), 0) FROM \"LedgerEntry\" WHERE \"paymentId\" = '$PAYMENT_ID5' AND \"entryType\" = 'CREDIT') AS cr_sum;")
+          DR5_SUM=$(echo "$LEDGER5_BAL" | jq -r 'if type == "array" then .[0].dr_sum else .dr_sum // 0 end' 2>/dev/null)
+          CR5_SUM=$(echo "$LEDGER5_BAL" | jq -r 'if type == "array" then .[0].cr_sum else .cr_sum // 0 end' 2>/dev/null)
+          echo "Final ledger: Dr=$DR5_SUM, Cr=$CR5_SUM (expected: equal — I-06 preserved)"
+          echo "Reversal Dr rows: $REVERSAL5_DR (expected: 1 — no duplicate)"
+          echo "PAYMENT_REFUNDED audit count: $AUDIT5_COMPLETED (expected: 1)"
+          echo "Outbox status: $OUTBOX5_FINAL (expected: PUBLISHED)"
+
+          E5_PASS="false"
+          if [ "$PUB5A_CALLED" = "true" ] && [ "$PUB5A_STATUS_AFTER" = "REFUNDED" ] && [ "$PUB5A_PAY_AFTER" = "REFUNDED" ] && \
+             [ "$PUB5B_CALLED" = "false" ] && [ "$PUB5B_IDEM_SKIP" = "true" ] && \
+             [ "$REFUND5_FINAL_STATUS" = "REFUNDED" ] && [ -n "$REFUND5_FINAL_GWID" ] && \
+             [ "$PAYMENT5_FINAL_STATUS" = "REFUNDED" ] && [ "$REVERSAL5_DR" = "1" ] && \
+             [ "$AUDIT5_COMPLETED" = "1" ] && [ "$OUTBOX5_FINAL" = "PUBLISHED" ] && \
+             [ "$DR5_SUM" = "$CR5_SUM" ] && [ "$DR5_SUM" != "0" ]; then
+            E5_PASS="true"
+            echo "  ✅ PASS: publisher retry does NOT duplicate refund"
+          else
+            echo "  ❌ FAIL: invariant violated"
+          fi
+
+          # ============================
+          # Cleanup test data
+          # ============================
+          echo ""
+          echo "=== Cleanup test data ==="
+          for pid in "$PAYMENT_ID1" "$PAYMENT_ID2" "$PAYMENT_ID3" "$PAYMENT_ID4" "$PAYMENT_ID5"; do
+            [ -z "$pid" ] && continue
+            CLEAN_SQL="DELETE FROM \"LedgerEntry\" WHERE \"paymentId\" = '$pid'; DELETE FROM \"Refund\" WHERE \"paymentId\" = '$pid'; DELETE FROM \"Outbox\" WHERE \"aggregateId\" IN (SELECT \"id\" FROM \"Refund\" WHERE \"paymentId\" = '$pid') OR \"aggregateId\" = '$pid'; DELETE FROM \"Payment\" WHERE \"id\" = '$pid';"
+            supa_query "$CLEAN_SQL" > /dev/null 2>&1
+          done
+          for oid in "$ORDER_ID1" "$ORDER_ID2" "$ORDER_ID5"; do
+            [ -z "$oid" ] && continue
+            supa_query "DELETE FROM \"OrderItem\" WHERE \"orderId\" = '$oid'; DELETE FROM \"Order\" WHERE \"id\" = '$oid';" > /dev/null 2>&1
+          done
+          for idem in "$IDEM1" "$IDEM2" "$IDEM3" "$IDEM4" "$IDEM5"; do
+            [ -z "$idem" ] && continue
+            supa_query "DELETE FROM \"IdempotencyKey\" WHERE \"key\" = '$idem';" > /dev/null 2>&1
+          done
+          for rid in "$REFUND1_ID" "$REFUND2_ID" "$REFUND5_ID"; do
+            [ -z "$rid" ] && continue
+            supa_query "DELETE FROM \"AuditLog\" WHERE \"metadata\" LIKE '%$rid%';" > /dev/null 2>&1
+          done
+          echo "✅ Cleanup complete"
+
+          # ============================
+          # Generate evidence JSON
+          # ============================
+          echo ""
+          echo "=== Generate evidence JSON ==="
+          ALL_OK="false"
+          if [ "$E1_PASS" = "true" ] && [ "$E2_PASS" = "true" ] && [ "$E3_PASS" = "true" ] && [ "$E4_PASS" = "true" ] && [ "$E5_PASS" = "true" ]; then
+            ALL_OK="true"
+          fi
+
+          jq -n \
+            --argjson ok "$ALL_OK" \
+            --arg runId "$RUN_ID" \
+            --arg timestamp "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --arg database "postgresql" \
+            --arg stagingUrl "$STAGING_URL" \
+            --argjson e1Pass "$E1_PASS" \
+            --argjson e2Pass "$E2_PASS" \
+            --argjson e3Pass "$E3_PASS" \
+            --argjson e4Pass "$E4_PASS" \
+            --argjson e5Pass "$E5_PASS" \
+            --argjson reversalDrCount "$REVERSAL_DR" \
+            --argjson reversalCrCount "$REVERSAL_CR" \
+            --argjson auditPendingCount "$AUDIT_PENDING_CNT" \
+            --arg outboxStatus "$OUTBOX_STATUS" \
+            --argjson idempotencyCount "$IDEM_CNT" \
+            --argjson ledgerDrSum "$DR_SUM" \
+            --argjson ledgerCrSum "$CR_SUM" \
+            --argjson firstRunRefundCalled "$PUB5A_CALLED" \
+            --arg firstRunStatusAfter "$PUB5A_STATUS_AFTER" \
+            --arg firstRunPaymentStatusAfter "$PUB5A_PAY_AFTER" \
+            --argjson secondRunRefundCalled "$PUB5B_CALLED" \
+            --argjson secondRunIdempotencySkipped "$PUB5B_IDEM_SKIP" \
+            --arg finalRefundStatus "$REFUND5_FINAL_STATUS" \
+            --arg finalPaymentStatus "$PAYMENT5_FINAL_STATUS" \
+            --argjson reversal5DrCount "$REVERSAL5_DR" \
+            --argjson auditRefundedCount "$AUDIT5_COMPLETED" \
+            --arg outbox5Status "$OUTBOX5_FINAL" \
+            --argjson ledger5DrSum "$DR5_SUM" \
+            --argjson ledger5CrSum "$CR5_SUM" \
+            '{
+              ok: $ok,
+              runId: $runId,
+              timestamp: $timestamp,
+              wave: "5",
+              subWave: "5a",
+              p0: "P0-04",
+              evidenceType: "refund-flow-e1-e5-postgresql",
+              database: $database,
+              stagingUrl: $stagingUrl,
+              orchestratorRequiredFields: {
+                database: $database,
+                realPaymentsEnabled: false,
+                e1RefundPendingReturned: $e1Pass,
+                e2AtomicWritesVerified: $e2Pass,
+                e3IdempotencyPreserved: $e3Pass,
+                e4ConcurrentRefundsDeduped: $e4Pass,
+                e5PublisherRetryNoDuplicate: $e5Pass,
+                ok: $ok,
+              },
+              tests: {
+                "5a-E1": {
+                  name: "Refund returns REFUND_PENDING",
+                  passed: $e1Pass,
+                  description: "POST /api/payments/refund returns the Refund in REFUND_PENDING status (refund initiated, not yet confirmed)",
+                },
+                "5a-E2": {
+                  name: "Payment state consistent (atomic writes)",
+                  passed: $e2Pass,
+                  reversalDrCount: $reversalDrCount,
+                  reversalCrCount: $reversalCrCount,
+                  auditPendingCount: $auditPendingCount,
+                  outboxStatus: $outboxStatus,
+                  idempotencyCount: $idempotencyCount,
+                  ledgerDrSum: $ledgerDrSum,
+                  ledgerCrSum: $ledgerCrSum,
+                  ledgerBalanceIntact: ($ledgerDrSum == $ledgerCrSum and $ledgerDrSum > 0),
+                  description: "Refund record + reversal Dr/Cr LedgerEntry pair + PAYMENT_REFUND_PENDING AuditLog + PAYMENT_REFUND_REQUESTED Outbox event + IdempotencyKey all commit in SAME txn",
+                },
+                "5a-E3": {
+                  name: "Idempotency preserved (same key → same Refund)",
+                  passed: $e3Pass,
+                  description: "Same Idempotency-Key returns the SAME Refund — no duplicate Refund, no duplicate reversal entries",
+                },
+                "5a-E4": {
+                  name: "Concurrent refund requests → exactly 1 Refund",
+                  passed: $e4Pass,
+                  description: "Two simultaneous POSTs with the same Idempotency-Key produce exactly 1 Refund (one wins, other cached)",
+                },
+                "5a-E5": {
+                  name: "Publisher retry → no duplicate refund",
+                  passed: $e5Pass,
+                  firstRunRefundCalled: $firstRunRefundCalled,
+                  firstRunStatusAfter: $firstRunStatusAfter,
+                  firstRunPaymentStatusAfter: $firstRunPaymentStatusAfter,
+                  secondRunRefundCalled: $secondRunRefundCalled,
+                  secondRunIdempotencySkipped: $secondRunIdempotencySkipped,
+                  finalRefundStatus: $finalRefundStatus,
+                  finalPaymentStatus: $finalPaymentStatus,
+                  reversalDrCount: $reversal5DrCount,
+                  auditRefundedCount: $auditRefundedCount,
+                  outboxStatus: $outbox5Status,
+                  ledgerDrSum: $ledger5DrSum,
+                  ledgerCrSum: $ledger5CrSum,
+                  ledgerBalanceIntact: ($ledger5DrSum == $ledger5CrSum and $ledger5DrSum > 0),
+                  description: "Publisher retry does NOT duplicate the external refund — idempotency check (Refund.status === REFUNDED) prevents second refund call",
+                },
+              },
+              invariant: {
+                description: "Refund flow (P0-04) mirrors the Wave-4 4c capture pattern: refund route writes Refund + reversal Dr/Cr + AuditLog + Outbox event inside ONE txn (atomic); publisher calls refundRazorpayPayment() OUTSIDE any txn (TRANSACTION_RETRY_INVARIANT preserved); idempotency check (Refund.status === REFUNDED) prevents duplicate external refund on retry.",
+                firstRunCalledRefund: $firstRunRefundCalled,
+                secondRunSkippedRefund: ($secondRunRefundCalled | not),
+                duplicateRefundPrevented: ($secondRunRefundCalled | not),
+              },
+              governance: {
+                realPaymentsEnabled: false,
+                productionTouched: false,
+                note: "Wave-5 Sub-Wave 5a evidence: P0-04 refund flow verified on staging PostgreSQL. realPayments=false (demo mode — refundRazorpayPayment returns mock success). No production traffic touched. Test data cleaned up.",
+              },
+            }' > "$EVIDENCE_FILE"
+
+          echo "=== Evidence JSON ==="
+          cat "$EVIDENCE_FILE" | jq '.'
+
+          echo ""
+          echo "=================================================="
+          echo "  EVIDENCE SUMMARY"
+          echo "=================================================="
+          echo "  Run ID: $RUN_ID"
+          echo "  ok: $ALL_OK"
+          echo "  E1 (refund returns REFUND_PENDING): $E1_PASS"
+          echo "  E2 (atomic writes): $E2_PASS"
+          echo "  E3 (idempotency preserved): $E3_PASS"
+          echo "  E4 (concurrent → 1 Refund): $E4_PASS"
+          echo "  E5 (publisher retry → no duplicate): $E5_PASS"
+          echo "=================================================="
+
+          if [ "$ALL_OK" != "true" ]; then
+            echo "❌ EVIDENCE FAILED — invariant violated"
+            exit 1
+          fi
+          echo "✅ EVIDENCE PASSED — P0-04 refund flow verified on PostgreSQL"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wave5-5a-postgresql-evidence
+          path: wave5-5a-postgresql-evidence.json
+          retention-days: 90

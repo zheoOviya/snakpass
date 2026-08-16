@@ -136,6 +136,67 @@ export function isRazorpayConfigured(): boolean {
 }
 
 // ----------------------------------------------------------------------------
+// P0-04 Wave-5 Sub-Wave 5a — Razorpay refund (mirrors 4c capture pattern)
+// ----------------------------------------------------------------------------
+
+export interface RazorpayRefundResponse {
+  refunded: boolean
+  gatewayRefundId: string // Razorpay refund ID (rpf_*)
+  amount: number // paise actually refunded
+  currency: string
+}
+
+/**
+ * Refund a Razorpay payment (full or partial).
+ *
+ * In demo mode (realPayments=false): returns a simulated success response —
+ * no real Razorpay API call is made. This is the SAME safety contract as
+ * `captureRazorpayPayment()` (Wave-4 4c): the call is performed by the outbox
+ * publisher OUTSIDE any DB transaction body, so a P2034 retry of the success
+ * txn does NOT re-execute the refund HTTP call (no double-refund risk).
+ *
+ * In real mode: calls `instance.payments.refund(razorpayPaymentId, { amount,
+ * currency })`. Razorpay returns a refund object whose `id` is `rpf_*` and
+ * whose `status` is `pending`/`processed`/`failed`. We treat `processed` +
+ * `pending` as success (the gateway has accepted the refund request — final
+ * settlement is async and confirmed via webhook).
+ *
+ * @param razorpayPaymentId - The Razorpay payment ID (pay_*)
+ * @param amount - Refund amount in paise (must be > 0; for full refund, equals Payment.amount)
+ * @param currency - ISO 4217 currency code (default INR)
+ * @returns RazorpayRefundResponse — refunded=true on success
+ */
+export async function refundRazorpayPayment(
+  razorpayPaymentId: string,
+  amount: number,
+  currency: string = 'INR',
+): Promise<RazorpayRefundResponse> {
+  if (!isFeatureEnabled('realPayments')) {
+    // Demo mode: simulate successful refund
+    return {
+      refunded: true,
+      gatewayRefundId: `rpf_demo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      amount,
+      currency,
+    }
+  }
+
+  const instance = getRazorpayInstance()!
+  const refund = await instance.payments.refund(razorpayPaymentId, { amount, currency })
+
+  // Razorpay refund statuses: 'pending' | 'processed' | 'failed'.
+  // 'pending' means the refund request is accepted and queued for processing
+  // (bank settlement is async). Treat both 'pending' and 'processed' as success.
+  const acceptedStatuses = ['pending', 'processed']
+  return {
+    refunded: acceptedStatuses.includes(refund.status ?? ''),
+    gatewayRefundId: refund.id,
+    amount: refund.amount ?? amount,
+    currency: refund.currency ?? currency,
+  }
+}
+
+// ----------------------------------------------------------------------------
 // Sub-Wave 4a: Webhook signature verification (P0-05)
 // ----------------------------------------------------------------------------
 

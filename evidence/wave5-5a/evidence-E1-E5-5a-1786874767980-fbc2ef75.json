@@ -1,0 +1,207 @@
+{
+  "ok": true,
+  "runId": "5a-1786874767980-fbc2ef75",
+  "wave": "5",
+  "subWave": "5a",
+  "evidenceType": "refund-flow-e1-e5",
+  "p0": "P0-04",
+  "generatedAt": "2026-08-16T10:06:10.732Z",
+  "environment": {
+    "baseUrl": "http://127.0.0.1:3000",
+    "evidenceTestMode": true,
+    "realPaymentsFlag": false,
+    "database": "sqlite"
+  },
+  "tests": [
+    {
+      "testId": "test-5a-E1-pending-status",
+      "testName": "5a-E1: Refund returns REFUND_PENDING",
+      "criterion": "POST /api/payments/refund returns the Refund in REFUND_PENDING status (refund initiated, not yet confirmed)",
+      "passed": true,
+      "setup": {
+        "orderId": "cmsvn3nav0006rnaofjbxdwkm",
+        "paymentId": "cmsvn3nb3000arnaow6hkrk5d",
+        "idempotencyKey": "ev-5a-E1-d02e28c4-f02"
+      },
+      "refundResponse": {
+        "httpStatus": 200,
+        "refundId": "cmsvn3o2w000irnaoxldpq3rq",
+        "refundStatus": "REFUND_PENDING",
+        "paymentId": "cmsvn3nb3000arnaow6hkrk5d"
+      },
+      "expected": {
+        "httpStatus": 200,
+        "refundStatus": "REFUND_PENDING"
+      }
+    },
+    {
+      "testId": "test-5a-E2-state-consistent",
+      "testName": "5a-E2: Payment state consistent (atomic writes)",
+      "criterion": "Refund record + reversal Dr/Cr LedgerEntry pair + PAYMENT_REFUND_PENDING AuditLog + PAYMENT_REFUND_REQUESTED Outbox event + IdempotencyKey all commit in SAME txn",
+      "passed": true,
+      "setup": {
+        "orderId": "cmsvn3o3k000srnaohezm7uv0",
+        "paymentId": "cmsvn3o3p000wrnaokw02kp6a",
+        "refundId": "cmsvn3o4q0014rnaoqnuf21zd",
+        "idempotencyKey": "ev-5a-E2-382474dc-c50"
+      },
+      "verification": {
+        "refundExists": true,
+        "refundStatus": "REFUND_PENDING",
+        "reversalDrCount": 1,
+        "reversalCrCount": 1,
+        "reversalDrSum": 32000,
+        "reversalCrSum": 32000,
+        "reversalBalanced": true,
+        "refundPendingAuditExists": true,
+        "refundOutboxExists": true,
+        "refundOutboxStatus": "PENDING",
+        "refundIdempotencyRecordExists": true,
+        "ledgerBalanceIntact": true,
+        "exactlyOneRefundInitiated": true
+      },
+      "expected": {
+        "refundStatus": "REFUND_PENDING",
+        "reversalDrCount": 1,
+        "reversalCrCount": 1,
+        "reversalBalanced": true,
+        "refundPendingAuditExists": true,
+        "refundOutboxStatus": "PENDING",
+        "refundIdempotencyRecordExists": true,
+        "ledgerBalanceIntact": true
+      }
+    },
+    {
+      "testId": "test-5a-E3-idempotency",
+      "testName": "5a-E3: Idempotency preserved (same key → same Refund)",
+      "criterion": "Same Idempotency-Key returns the SAME Refund — no duplicate Refund, no duplicate reversal entries, no duplicate Outbox event",
+      "passed": true,
+      "setup": {
+        "orderId": "cmsvn3obm001ernao62ie1fxp",
+        "paymentId": "cmsvn3obr001irnaoq7mvvthn",
+        "idempotencyKey": "ev-5a-E3-0d4a5f64-e00"
+      },
+      "firstRefund": {
+        "httpStatus": 200,
+        "refundId": "cmsvn3oci001qrnaock4fxsdp"
+      },
+      "secondRefund": {
+        "httpStatus": 200,
+        "refundId": "cmsvn3oci001qrnaock4fxsdp"
+      },
+      "verification": {
+        "sameRefundId": true,
+        "reversalDrCount": 1,
+        "reversalCrCount": 1,
+        "reversalBalanced": true,
+        "refundOutboxExists": true,
+        "refundIdempotencyRecordExists": true
+      },
+      "expected": {
+        "sameRefundId": true,
+        "reversalDrCount": 1,
+        "reversalCrCount": 1,
+        "refundOutboxExists": true,
+        "refundIdempotencyRecordExists": true
+      }
+    },
+    {
+      "testId": "test-5a-E4-concurrent",
+      "testName": "5a-E4: Concurrent refund requests → exactly 1 Refund",
+      "criterion": "Two simultaneous POSTs with the same Idempotency-Key produce exactly 1 Refund (one wins, other cached)",
+      "passed": true,
+      "setup": {
+        "orderId": "cmsvn3oe80020rnaoiqcv5wct",
+        "paymentId": "cmsvn3oed0024rnaoua9em4yj",
+        "idempotencyKey": "ev-5a-E4-cb3ba682-8c0"
+      },
+      "firstRefund": {
+        "httpStatus": 200,
+        "refundId": "cmsvn3of7002crnaox7p4wwjq",
+        "errorCode": null
+      },
+      "secondRefund": {
+        "httpStatus": 200,
+        "refundId": "cmsvn3of7002crnaox7p4wwjq",
+        "errorCode": null
+      },
+      "verification": {
+        "refundExists": true,
+        "refundStatus": "REFUND_PENDING",
+        "reversalDrCount": 1,
+        "reversalCrCount": 1,
+        "reversalBalanced": true,
+        "refundIdempotencyRecordExists": true
+      },
+      "expected": {
+        "reversalDrCount": 1,
+        "reversalCrCount": 1,
+        "refundIdempotencyRecordExists": true
+      }
+    },
+    {
+      "testId": "test-5a-E5-publisher-retry",
+      "testName": "5a-E5: Publisher retry → no duplicate refund",
+      "criterion": "Publisher retry (or second publisher run) does NOT duplicate the external refund — idempotency check (Refund.status === REFUNDED) prevents second refund call",
+      "passed": true,
+      "setup": {
+        "orderId": "cmsvn3ogi002mrnaofe3v9nav",
+        "paymentId": "cmsvn3ogm002qrnaof4zduzvf",
+        "refundId": "cmsvn3ohr002yrnaobx8hbq5l",
+        "idempotencyKey": "ev-5a-E5-ae70fba8-d3b"
+      },
+      "firstPublisherRun": {
+        "refundCalled": true,
+        "statusBefore": "REFUND_PENDING",
+        "statusAfter": "REFUNDED",
+        "paymentStatusAfter": "REFUNDED",
+        "refundedAt": "2026-08-16T10:06:10.646Z",
+        "gatewayRefundId": "rpf_demo_1786874770641_lsb4fe"
+      },
+      "secondPublisherRun": {
+        "refundCalled": false,
+        "statusBefore": "REFUNDED",
+        "statusAfter": "REFUNDED",
+        "idempotencySkipped": true
+      },
+      "verification": {
+        "finalRefundStatus": "REFUNDED",
+        "finalPaymentStatus": "REFUNDED",
+        "reversalDrCount": 1,
+        "reversalCrCount": 1,
+        "reversalDrSum": 32000,
+        "reversalCrSum": 32000,
+        "reversalBalanced": true,
+        "ledgerBalanceIntact": true,
+        "refundCompletedAuditExists": true,
+        "refundOutboxStatus": "PUBLISHED"
+      },
+      "expected": {
+        "firstRunRefundCalled": true,
+        "secondRunRefundCalled": false,
+        "secondRunIdempotencySkipped": true,
+        "finalRefundStatus": "REFUNDED",
+        "finalPaymentStatus": "REFUNDED",
+        "reversalEntries": 1,
+        "ledgerBalanceIntact": true,
+        "refundCompletedAuditExists": true,
+        "refundOutboxStatus": "PUBLISHED"
+      }
+    }
+  ],
+  "summary": {
+    "totalTests": 5,
+    "passed": 5,
+    "failed": 0,
+    "allPassed": true
+  },
+  "orchestratorGate": {
+    "description": "Refund flow (P0-04) mirrors the Wave-4 4c capture pattern: refund route writes Refund + reversal Dr/Cr + AuditLog + Outbox event inside ONE txn (atomic); publisher calls refundRazorpayPayment() OUTSIDE any txn (TRANSACTION_RETRY_INVARIANT preserved); idempotency check (Refund.status === REFUNDED) prevents duplicate external refund on retry.",
+    "provenBy": "5a-E1 (refund returns REFUND_PENDING) + 5a-E2 (atomic writes — Refund + reversal Dr/Cr + AuditLog + Outbox + IdempotencyKey) + 5a-E3 (idempotency preserved — same key → same Refund) + 5a-E4 (concurrent refunds → exactly 1 Refund) + 5a-E5 (publisher retry → no duplicate refund)"
+  },
+  "governance": {
+    "realPaymentsEnabled": false,
+    "productionTouched": false,
+    "note": "Wave-5 Sub-Wave 5a evidence: P0-04 refund flow verified. realPayments=false (demo mode — refundRazorpayPayment returns mock success). No production traffic touched. No existing CLOSED Wave-3/4 evidence affected."
+  }
+}

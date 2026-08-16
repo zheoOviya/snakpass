@@ -29,6 +29,8 @@ import { join } from 'path'
 // In demo mode (realPayments=false) captureRazorpayPayment() returns mock
 // success immediately — no real Razorpay API calls are made.
 import { captureRazorpayPayment } from '../../src/lib/razorpay'
+// Wave-5 Sub-Wave 5a — refund handler import (mirrors 4c capture pattern).
+import { refundRazorpayPayment } from '../../src/lib/razorpay'
 
 // Transport configuration:
 // - HTTP mode: publisher POSTs events to CONSUMER_URL/api/test/consume-event
@@ -88,10 +90,14 @@ const EVENT_TYPE_TO_SOCKET: Record<string, string> = {
 }
 
 // Wave-4 4c Phase 2 — command event types that are NOT transport handoffs.
-// These events trigger a business operation (e.g., capture) rather than a
-// realtime fanout. They are dispatched to dedicated handlers and never reach
-// the EVENT_TYPE_TO_SOCKET lookup (which would throw "Unknown event type").
-const COMMAND_EVENT_TYPES: Set<string> = new Set(['PAYMENT_CAPTURE_REQUESTED'])
+// These events trigger a business operation (e.g., capture, refund) rather
+// than a realtime fanout. They are dispatched to dedicated handlers and never
+// reach the EVENT_TYPE_TO_SOCKET lookup (which would throw "Unknown event type").
+// Wave-5 Sub-Wave 5a: PAYMENT_REFUND_REQUESTED added (mirrors 4c capture pattern).
+const COMMAND_EVENT_TYPES: Set<string> = new Set([
+  'PAYMENT_CAPTURE_REQUESTED',
+  'PAYMENT_REFUND_REQUESTED',
+])
 
 interface LogEntry {
   timestamp: string
@@ -104,6 +110,7 @@ interface LogEntry {
   error?: string
   paymentId?: string
   orderId?: string
+  refundId?: string
   count?: number
 }
 
@@ -374,6 +381,356 @@ async function processPaymentCaptureRequested(event: {
   })
 }
 
+// ----------------------------------------------------------------------------
+// Wave-5 Sub-Wave 5a — PAYMENT_REFUND_REQUESTED handler
+// ----------------------------------------------------------------------------
+// Command-event handler: consumes a PAYMENT_REFUND_REQUESTED outbox row and
+// performs the actual Razorpay refund (safely OUTSIDE any transaction body).
+//
+// Mirrors `processPaymentCaptureRequested()` (Wave-4 4c Phase 2) exactly:
+//   1. Parse payload (written by refund route's enqueueOutboxEvent call).
+//      aggregateId = refund.id (per the refund route's enqueueOutboxEvent
+//      ({ aggregateType: 'Refund', aggregateId: refund.id, ... })).
+//   2. Read Refund row by id.
+//   3. Idempotency: if Refund.status === 'REFUNDED', mark outbox PUBLISHED
+//      and exit (no duplicate external refund).
+//   4. If Refund.status === 'FAILED', mark outbox PUBLISHED (terminal state).
+//   5. If Refund.status !== 'REFUND_PENDING', throw (outbox retry/backoff drives).
+//   6. Call refundRazorpayPayment() OUTSIDE any txn (Wave-4 4c safety property).
+//   7. On refund-call failure / declined: increment Refund.version + set
+//      failureReason, leave status REFUND_PENDING, throw (publisher catch
+//      handles retry/backoff/FAILED lifecycle).
+//   8. On success: NEW db.$transaction() atomically commits:
+//        (a) Refund REFUND_PENDING → REFUNDED + refundedAt + gatewayRefundId
+//            (race-safe conditional updateMany WHERE status='REFUND_PENDING').
+//        (b) If full refund AND Payment.status==='CAPTURED': transition Payment
+//            CAPTURED → REFUNDED (race-safe conditional updateMany).
+//        (c) AuditLog (PAYMENT_REFUNDED) if either Refund or Payment was updated.
+//        (d) Outbox.status=PUBLISHED (always — refund command effect achieved).
+//
+// The success txn does NOT include refundRazorpayPayment() — that call already
+// happened above (outside the txn). This is the Wave-4 4c safety improvement:
+// a P2034 retry would re-run only the DB writes, NOT the refund HTTP call
+// (no double-refund risk).
+// ----------------------------------------------------------------------------
+
+interface RefundRequestedPayload {
+  refundId: string
+  paymentId: string
+  orderId: string
+  gatewayPaymentId: string | null
+  amount: number
+  currency: string
+  fullRefund: boolean
+}
+
+async function processPaymentRefundRequested(event: {
+  id: string
+  eventId: string
+  aggregateId: string
+  payload: string
+  attempts: number
+}): Promise<void> {
+  // Parse payload (written by refund route's enqueueOutboxEvent call)
+  let payload: RefundRequestedPayload
+  try {
+    payload = JSON.parse(event.payload) as RefundRequestedPayload
+  } catch {
+    // Malformed payload — non-retryable; mark outbox PUBLISHED to stop retries.
+    await db.outbox.update({
+      where: { id: event.id },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        claimedAt: null,
+        claimUntil: null,
+        workerId: null,
+        lastError: 'malformed-payload-marked-published',
+      },
+    })
+    await log({
+      level: 'error',
+      message: 'refund-payload-malformed',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_REFUND_REQUESTED',
+    })
+    return
+  }
+
+  // 1. Read the Refund (aggregateId = refundId per the refund route's
+  //    enqueueOutboxEvent({ aggregateType: 'Refund', aggregateId: refund.id, ... }))
+  const refund = await db.refund.findUnique({
+    where: { id: event.aggregateId },
+    select: {
+      id: true,
+      paymentId: true,
+      amount: true,
+      currency: true,
+      status: true,
+      version: true,
+    },
+  })
+
+  if (!refund) {
+    // Refund row missing — non-retryable; mark outbox PUBLISHED to stop
+    // retrying. (By design this is impossible: the refund route writes Refund
+    // + Outbox in the SAME txn, so an outbox row can't exist without a Refund.)
+    await db.outbox.update({
+      where: { id: event.id },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        claimedAt: null,
+        claimUntil: null,
+        workerId: null,
+        lastError: `refund-not-found:aggregateId=${event.aggregateId}`,
+      },
+    })
+    await log({
+      level: 'error',
+      message: 'refund-not-found',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_REFUND_REQUESTED',
+      refundId: event.aggregateId,
+    })
+    return
+  }
+
+  // 2. Idempotency: if already REFUNDED (e.g., a webhook raced ahead and
+  //    processed the refund first, or a prior publisher invocation refunded
+  //    but failed to mark the outbox PUBLISHED), the refund command has
+  //    already succeeded. Mark the outbox event PUBLISHED and exit.
+  if (refund.status === 'REFUNDED') {
+    await db.outbox.update({
+      where: { id: event.id },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        claimedAt: null,
+        claimUntil: null,
+        workerId: null,
+      },
+    })
+    await log({
+      level: 'info',
+      message: 'refund-already-refunded-idempotent',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_REFUND_REQUESTED',
+      refundId: refund.id,
+      paymentId: refund.paymentId,
+    })
+    return
+  }
+
+  // 3. Terminal FAILED state: refund exhausted retries earlier and was marked
+  //    FAILED. Mark outbox PUBLISHED to stop further retry attempts (manual
+  //    intervention would have created a NEW Refund with a new idempotency key).
+  if (refund.status === 'FAILED') {
+    await db.outbox.update({
+      where: { id: event.id },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        claimedAt: null,
+        claimUntil: null,
+        workerId: null,
+        lastError: 'refund-terminal-failed-marked-published',
+      },
+    })
+    await log({
+      level: 'warn',
+      message: 'refund-terminal-failed',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_REFUND_REQUESTED',
+      refundId: refund.id,
+      paymentId: refund.paymentId,
+    })
+    return
+  }
+
+  // 4. If Refund is in a non-pending state (shouldn't happen since REFUNDED
+  //    and FAILED are handled above, but defensive), do NOT attempt refund.
+  //    Throw so the publisher's existing retry path handles it.
+  if (refund.status !== 'REFUND_PENDING') {
+    throw new Error(
+      `Refund ${refund.id} status is ${refund.status} (expected REFUND_PENDING) — refund skipped`,
+    )
+  }
+
+  // 5. Resolve the Razorpay payment ID. Prefer the payload's gatewayPaymentId
+  //    (written by the refund route from Payment.gatewayPaymentId). Fall back
+  //    to reading Payment.gatewayPaymentId. If neither is set (impossible for a
+  //    CAPTURED payment, but defensive), throw.
+  let gatewayPaymentId = payload.gatewayPaymentId
+  if (!gatewayPaymentId) {
+    const payment = await db.payment.findUnique({
+      where: { id: refund.paymentId },
+      select: { gatewayPaymentId: true, status: true },
+    })
+    if (!payment) {
+      throw new Error(`Payment ${refund.paymentId} not found for refund ${refund.id}`)
+    }
+    gatewayPaymentId = payment.gatewayPaymentId
+  }
+  if (!gatewayPaymentId) {
+    throw new Error(
+      `Cannot refund: Payment ${refund.paymentId} has no gatewayPaymentId (refund ${refund.id})`,
+    )
+  }
+
+  // 6. Call refundRazorpayPayment() OUTSIDE any transaction body.
+  //    This is the Wave-4 4c / Wave-5 5a safety improvement: if the
+  //    success-path txn retries (P2034 conflict), this call is NOT re-executed.
+  //    In demo mode (realPayments=false), this returns mock success immediately.
+  let refundResult
+  try {
+    refundResult = await refundRazorpayPayment(
+      gatewayPaymentId,
+      refund.amount,
+      refund.currency,
+    )
+  } catch (refundError) {
+    // Refund call failed (network error, gateway 5xx, etc.) — record the
+    // failure on the Refund row, then rethrow so the publisher's existing
+    // retry/backoff/FAILED logic drives the outbox event's lifecycle.
+    // Refund.status is left as REFUND_PENDING (refund may succeed on retry).
+    const errorMsg = (refundError as Error).message || 'unknown-refund-error'
+    await db.refund.update({
+      where: { id: refund.id },
+      data: {
+        version: { increment: 1 },
+        failureReason: `Refund failed: ${errorMsg}`,
+      },
+    })
+    await log({
+      level: 'warn',
+      message: 'refund-call-failed',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_REFUND_REQUESTED',
+      refundId: refund.id,
+      paymentId: refund.paymentId,
+      attempt: event.attempts + 1,
+      error: errorMsg,
+    })
+    throw refundError
+  }
+
+  // If the gateway returned refunded=false (decline), treat as failure.
+  if (!refundResult.refunded) {
+    await db.refund.update({
+      where: { id: refund.id },
+      data: {
+        version: { increment: 1 },
+        failureReason: 'Gateway declined refund (refunded=false)',
+      },
+    })
+    await log({
+      level: 'warn',
+      message: 'refund-declined-by-gateway',
+      eventId: event.eventId,
+      eventType: 'PAYMENT_REFUND_REQUESTED',
+      refundId: refund.id,
+      paymentId: refund.paymentId,
+      attempt: event.attempts + 1,
+    })
+    throw new Error('Gateway declined refund (refunded=false)')
+  }
+
+  // 7. Refund succeeded — open a NEW transaction and atomically:
+  //    (a) Update Refund status REFUND_PENDING → REFUNDED + refundedAt +
+  //        gatewayRefundId (race-safe conditional updateMany).
+  //    (b) If full refund AND Payment.status==='CAPTURED': transition Payment
+  //        CAPTURED → REFUNDED (race-safe conditional updateMany).
+  //    (c) AuditLog (PAYMENT_REFUNDED) if either Refund or Payment was updated.
+  //    (d) Outbox.status=PUBLISHED (always — refund command effect achieved).
+  //    All commit in the SAME txn — no half-states.
+  //
+  //    NOTE: this txn does NOT include refundRazorpayPayment() — that call
+  //    already happened above (outside the txn). This is the Wave-4 4c safety
+  //    improvement: a P2034 retry would re-run only the DB writes, NOT the
+  //    refund HTTP call (no double-refund risk).
+  await db.$transaction(async (tx) => {
+    // Race-safe: only update if Refund.status is still REFUND_PENDING.
+    // If a concurrent path (e.g., webhook) already marked REFUNDED, count===0
+    // — we still mark the outbox PUBLISHED (refund command effectively done)
+    // but skip writing a duplicate AuditLog.
+    const refundUpdated = await tx.refund.updateMany({
+      where: {
+        id: refund.id,
+        status: 'REFUND_PENDING',
+      },
+      data: {
+        status: 'REFUNDED',
+        refundedAt: new Date(),
+        gatewayRefundId: refundResult.gatewayRefundId,
+        version: { increment: 1 },
+      },
+    })
+
+    // Only transition Payment → REFUNDED for a FULL refund (partial refunds
+    // leave Payment as CAPTURED — the payment is partially refunded but
+    // still considered "captured" for fulfillment purposes). Race-safe
+    // conditional updateMany WHERE status='CAPTURED'.
+    let paymentUpdated = { count: 0 }
+    if (payload.fullRefund) {
+      paymentUpdated = await tx.payment.updateMany({
+        where: {
+          id: refund.paymentId,
+          status: 'CAPTURED',
+        },
+        data: {
+          status: 'REFUNDED',
+          version: { increment: 1 },
+        },
+      })
+    }
+
+    if (refundUpdated.count > 0 || paymentUpdated.count > 0) {
+      // AuditLog — PAYMENT_REFUNDED (publisher-driven).
+      await tx.auditLog.create({
+        data: {
+          actorId: null,
+          actorRole: 'SYSTEM',
+          action: 'PAYMENT_REFUNDED',
+          metadata: JSON.stringify({
+            refundId: refund.id,
+            paymentId: refund.paymentId,
+            orderId: payload.orderId,
+            gatewayRefundId: refundResult.gatewayRefundId,
+            amount: refund.amount,
+            fullRefund: payload.fullRefund,
+            source: 'outbox-publisher',
+            outboxEventId: event.eventId,
+          }),
+        },
+      })
+    }
+
+    // Mark outbox event PUBLISHED (whether or not we updated Refund/Payment —
+    // the refund command's business effect has been achieved either way).
+    await tx.outbox.update({
+      where: { id: event.id },
+      data: {
+        status: 'PUBLISHED',
+        publishedAt: new Date(),
+        claimedAt: null,
+        claimUntil: null,
+        workerId: null,
+      },
+    })
+  })
+
+  await log({
+    level: 'info',
+    message: 'refund-completed',
+    eventId: event.eventId,
+    eventType: 'PAYMENT_REFUND_REQUESTED',
+    refundId: refund.id,
+    paymentId: refund.paymentId,
+    orderId: payload.orderId,
+  })
+}
+
 async function log(entry: Omit<LogEntry, 'timestamp'>): Promise<void> {
   const full: LogEntry = { ...entry, timestamp: new Date().toISOString() }
   const line = JSON.stringify(full)
@@ -450,16 +807,24 @@ async function publishPendingEvents(): Promise<{
   // or FAILED (max retries). PUBLISHED is NOT set on failure.
   for (const event of claimedEvents) {
     try {
-      // Wave-4 4c Phase 2: PAYMENT_CAPTURE_REQUESTED is a "command event" —
-      // it triggers a business operation (capture payment) rather than a
-      // transport handoff. The handler fully owns its own outbox state
-      // transitions (PUBLISHED on success, PENDING+attempts on failure via
-      // thrown error → publisher's existing catch block handles retry/backoff).
-      // It must NOT fall through to the EVENT_TYPE_TO_SOCKET lookup below
-      // (which would throw "Unknown event type" since command events are
-      // intentionally not in that map).
+      // Wave-4 4c Phase 2 / Wave-5 5a: command events trigger a business
+      // operation (capture / refund payment) rather than a transport handoff.
+      // The handler fully owns its own outbox state transitions (PUBLISHED on
+      // success, PENDING+attempts on failure via thrown error → publisher's
+      // existing catch block handles retry/backoff). It must NOT fall through
+      // to the EVENT_TYPE_TO_SOCKET lookup below (which would throw "Unknown
+      // event type" since command events are intentionally not in that map).
       if (COMMAND_EVENT_TYPES.has(event.eventType)) {
-        await processPaymentCaptureRequested(event)
+        if (event.eventType === 'PAYMENT_CAPTURE_REQUESTED') {
+          await processPaymentCaptureRequested(event)
+        } else if (event.eventType === 'PAYMENT_REFUND_REQUESTED') {
+          await processPaymentRefundRequested(event)
+        } else {
+          // Defensive: should be unreachable (COMMAND_EVENT_TYPES membership is
+          // checked above). Throw so the catch block schedules a retry / marks
+          // FAILED if the condition persists.
+          throw new Error(`No handler registered for command event type: ${event.eventType}`)
+        }
         result.published++
         continue
       }
