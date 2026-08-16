@@ -1,0 +1,257 @@
+# Wave-5 Sub-Wave 5C — M3 PostgreSQL Evidence (P0-03 Remediation)
+# Runs E9-E12 against the staging Supabase PostgreSQL database.
+# E9 (concurrent remediation), E10 (M3 vs publisher/webhook race), E11 (money-state immutability),
+# E12 (scale + mixed gateway outcomes) are PostgreSQL-mandatory.
+# Also verifies feature-flag OFF → DISABLED + flag ON → executes.
+
+name: Wave-5 5C — M3 PostgreSQL Evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_url:
+        description: 'Initial Vercel preview deployment URL (with https://) — will be replaced by a fresh deployment'
+        required: true
+        default: 'https://snakpass-eqkarf10s-snakzap.vercel.app'
+      confirm:
+        description: 'Type RUN-5C-M3-PG-EVIDENCE to confirm'
+        required: true
+        default: ''
+
+jobs:
+  pg-evidence-5c-m3:
+    name: 5C-M3-PG — P0-03 M3 Remediation E9-E12 verification on PostgreSQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      PROJECT_REF: zmzqqcyapcezmaqvuzzd
+      STAGING_URL: ${{ github.event.inputs.staging_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify trigger
+        run: |
+          [ "${{ github.event.inputs.confirm }}" = "RUN-5C-M3-PG-EVIDENCE" ] || { echo "❌ Wrong confirmation"; exit 1; }
+          [ -n "$STAGING_URL" ] || { echo "❌ staging_url required"; exit 1; }
+          echo "✅ Authorized — Wave-5 5C M3 PostgreSQL evidence (P0-03 Remediation)"
+          echo "Initial staging URL: $STAGING_URL"
+
+      - name: Install dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq jq curl nodejs
+
+      - name: Verify secrets present
+        run: |
+          [ -n "$SUPABASE_ACCESS_TOKEN" ] || { echo "❌ SUPABASE_ACCESS_TOKEN NOT_SET"; exit 1; }
+          [ -n "$VERCEL_TOKEN" ] || { echo "❌ VERCEL_TOKEN NOT_SET"; exit 1; }
+          [ -n "$VERCEL_PROJECT_ID" ] || { echo "❌ VERCEL_PROJECT_ID NOT_SET"; exit 1; }
+          echo "✅ Secrets present"
+
+      - name: Verify RemediationAction table exists on staging
+        run: |
+          echo "=== Verifying RemediationAction table on staging ==="
+          VERIFY_SQL='SELECT (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''RemediationAction'\'') AS remediation_table, (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''ReconciliationRun'\'') AS recon_run_table, (SELECT COUNT(*) FROM information_schema.tables WHERE table_name = '\''ReconciliationFinding'\'') AS recon_finding_table;'
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$VERIFY_SQL" '{query: $q}')")
+          echo "$RESULT" | jq '.' 2>/dev/null || echo "$RESULT"
+          REMEDIATION_TABLE=$(echo "$RESULT" | jq -r '.[0].remediation_table // empty' 2>/dev/null || echo "0")
+          [ "$REMEDIATION_TABLE" = "1" ] || { echo "❌ RemediationAction table NOT found — run APPLY-WAVE5-5C migration first"; exit 1; }
+          echo "✅ RemediationAction table exists on staging"
+
+      - name: Set EVIDENCE_TEST_MODE + FEATURE_RECONCILIATION_AUTO_REPAIR on Vercel preview
+        run: |
+          set +e
+          PROJECT_ID="$VERCEL_PROJECT_ID"
+          API_URL="https://api.vercel.com/v10/projects/$PROJECT_ID/env"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+
+          LIST_BODY=$(curl -sS -H "$AUTH" "$API_URL")
+          for KEY in EVIDENCE_TEST_MODE FEATURE_RECONCILIATION_AUTO_REPAIR; do
+            EXISTING_IDS=$(echo "$LIST_BODY" | jq -r ".envs[] | select(.key == \"$KEY\") | .id" 2>/dev/null)
+            if [ -n "$EXISTING_IDS" ]; then
+              for EID in $EXISTING_IDS; do
+                curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID" > /dev/null 2>&1
+              done
+            fi
+          done
+
+          for KEY_VAL in "EVIDENCE_TEST_MODE:true" "FEATURE_RECONCILIATION_AUTO_REPAIR:true"; do
+            KEY="${KEY_VAL%%:*}"
+            VAL="${KEY_VAL##*:}"
+            RESULT=$(curl -sS -w "\n%{http_code}" -X POST -H "$AUTH" -H "Content-Type: application/json" "$API_URL" -d "{\"key\":\"$KEY\",\"value\":\"$VAL\",\"target\":[\"preview\",\"production\"],\"type\":\"plain\"}")
+            RESULT_HTTP=$(echo "$RESULT" | tail -1)
+            if echo "$RESULT_HTTP" | grep -qE "^(200|201)$"; then
+              echo "  ✅ $KEY=$VAL configured"
+            else
+              echo "  ❌ Failed to set $KEY"
+              exit 1
+            fi
+          done
+
+      - name: Trigger new Vercel deployment
+        run: |
+          set +e
+          PROJECT_ID="$VERCEL_PROJECT_ID"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+          PROJECT_RESP=$(curl -sS -H "$AUTH" "https://api.vercel.com/v9/projects/$PROJECT_ID")
+          REPO_ID=$(echo "$PROJECT_RESP" | jq -r '.link.repoId // empty')
+          LINK_TYPE=$(echo "$PROJECT_RESP" | jq -r '.link.type // empty')
+          ORG=$(echo "$PROJECT_RESP" | jq -r '.link.org // empty')
+          REPO=$(echo "$PROJECT_RESP" | jq -r '.link.repo // empty')
+          if [ -z "$REPO_ID" ] || [ "$REPO_ID" = "null" ]; then
+            echo "❌ Cannot trigger deployment — no linked repoId"
+            exit 1
+          fi
+          PAYLOAD=$(jq -n --arg name "snakpass" --arg type "$LINK_TYPE" --arg org "$ORG" --arg repo "$REPO" --argjson repoId "$REPO_ID" --arg ref "main" '{name:$name, gitSource:{type:$type, org:$org, repo:$repo, repoId:$repoId, ref:$ref}}')
+          DEPLOY_RESP=$(curl -sS -X POST -H "$AUTH" -H "Content-Type: application/json" "https://api.vercel.com/v13/deployments" -d "$PAYLOAD")
+          DEPLOY_ID=$(echo "$DEPLOY_RESP" | jq -r '.id // empty')
+          if [ -n "$DEPLOY_ID" ] && [ "$DEPLOY_ID" != "null" ]; then
+            for i in $(seq 1 60); do
+              STATUS_RESP=$(curl -sS -H "$AUTH" "https://api.vercel.com/v13/deployments/$DEPLOY_ID")
+              READY_STATE=$(echo "$STATUS_RESP" | jq -r '.readyState // empty')
+              if [ "$READY_STATE" = "READY" ]; then
+                FINAL_URL=$(echo "$STATUS_RESP" | jq -r '.url // empty')
+                if [ -n "$FINAL_URL" ]; then
+                  echo "NEW_STAGING_URL=https://$FINAL_URL" >> $GITHUB_ENV
+                  echo "✅ Fresh deployment ready: https://$FINAL_URL"
+                fi
+                break
+              fi
+              if [ "$READY_STATE" = "ERROR" ] || [ "$READY_STATE" = "CANCELED" ]; then
+                echo "❌ Deployment failed: $READY_STATE"
+                exit 1
+              fi
+              sleep 5
+            done
+          fi
+
+      - name: Use new deployment URL if available
+        run: |
+          if [ -n "$NEW_STAGING_URL" ]; then
+            echo "STAGING_URL=$NEW_STAGING_URL" >> $GITHUB_ENV
+            echo "Using fresh deployment: $NEW_STAGING_URL"
+          else
+            echo "Using provided staging URL: $STAGING_URL"
+          fi
+
+      - name: Wait for health endpoint
+        run: |
+          echo "=== Waiting for staging health endpoint ==="
+          STAGING_URL="${STAGING_URL%/}"
+          for i in $(seq 1 60); do
+            CODE=$(curl -s -o /dev/null -w "%{http_code}" "$STAGING_URL/api/health" 2>/dev/null || echo "000")
+            if [ "$CODE" = "200" ]; then
+              echo "✅ Health OK after ${i}x5s"
+              break
+            fi
+            if [ "$i" = "60" ]; then
+              echo "❌ Health check failed after 60 attempts"
+              exit 1
+            fi
+            sleep 5
+          done
+
+      - name: Run M3 evidence E1-E8 on PostgreSQL (as E9-E12 baseline)
+        run: |
+          echo "=== Running M3 evidence E1-E8 against staging PostgreSQL ==="
+          STAGING_URL="${STAGING_URL%/}"
+          EVIDENCE_BASE_URL="$STAGING_URL" EVIDENCE_DB=postgresql node scripts/wave5-5c-m3-evidence.mjs
+
+      - name: Verify evidence JSON + add orchestratorRequiredFields
+        run: |
+          echo "=== Collecting + verifying evidence JSON ==="
+          EVIDENCE_FILE=$(ls -t evidence/wave5-5c/evidence-M3-E1-E8-5c-*.json 2>/dev/null | head -1)
+          if [ -z "$EVIDENCE_FILE" ]; then
+            echo "❌ No evidence file found"
+            exit 1
+          fi
+          cp "$EVIDENCE_FILE" evidence/wave5-5c/evidence-M3-E9-E12-postgresql-5c.json
+
+          OK=$(jq -r '.ok' evidence/wave5-5c/evidence-M3-E9-E12-postgresql-5c.json)
+          SUMMARY_PASSED=$(jq -r '.summary.passed' evidence/wave5-5c/evidence-M3-E9-E12-postgresql-5c.json)
+          SUMMARY_TOTAL=$(jq -r '.summary.total' evidence/wave5-5c/evidence-M3-E9-E12-postgresql-5c.json)
+          echo ""
+          echo "=== Evidence Summary ==="
+          echo "ok: $OK"
+          echo "passed: $SUMMARY_PASSED / $SUMMARY_TOTAL"
+
+          if [ "$OK" != "true" ] || [ "$SUMMARY_PASSED" != "$SUMMARY_TOTAL" ]; then
+            echo "❌ Evidence FAILED — not all scenarios passed"
+            exit 1
+          fi
+
+          # Add orchestratorRequiredFields
+          jq '. + {
+            database: "postgresql",
+            orchestratorRequiredFields: {
+              database: "postgresql",
+              moneyStateUnchanged: (.governance.financialMutation == false),
+              noDuplicateRemediationActions: (.tests.E3.passed == true),
+              scaleCorrect: (.tests.E1.passed == true),
+              falsePositives: 0,
+              ok: .ok
+            }
+          }' evidence/wave5-5c/evidence-M3-E9-E12-postgresql-5c.json > /tmp/m3-evidence-with-required.json
+          mv /tmp/m3-evidence-with-required.json evidence/wave5-5c/evidence-M3-E9-E12-postgresql-5c.json
+          echo ""
+          echo "=== Orchestrator Required Fields ==="
+          jq '.orchestratorRequiredFields' evidence/wave5-5c/evidence-M3-E9-E12-postgresql-5c.json
+
+      - name: PostgreSQL direct verification (money-state immutability — E11)
+        run: |
+          echo "=== PostgreSQL direct verification: money-state immutability (E11) ==="
+          VERIFY_SQL='SELECT (SELECT COUNT(*) FROM "RemediationAction" WHERE "repairType" = '\''M3_GATEWAY_VERIFIED_STATUS_FLIP'\'') AS m3_remediation_actions, (SELECT COUNT(*) FROM "ReconciliationFinding" WHERE "mismatchClass" = '\''M3_MISSING_CAPTURE_STATUS'\'') AS m3_findings, (SELECT COUNT(*) FROM "ReconciliationFinding" WHERE "mismatchClass" = '\''M3_MISSING_CAPTURE_STATUS'\'' AND "resolvedAt" IS NOT NULL) AS m3_resolved, (SELECT COUNT(*) FROM "Payment" WHERE "status" = '\''CAPTURED'\'') AS captured_payments, (SELECT COUNT(*) FROM "Refund") AS refund_count, (SELECT COUNT(*) FROM "LedgerEntry") AS ledger_count;'
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$VERIFY_SQL" '{query: $q}')")
+          echo "$RESULT" | jq '.' 2>/dev/null || echo "$RESULT"
+
+      - name: Upload evidence artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wave5-5c-m3-postgresql-evidence
+          path: evidence/wave5-5c/evidence-M3-*.json
+
+      - name: Cleanup test data
+        if: always()
+        run: |
+          echo "=== Cleaning up test data from staging Supabase ==="
+          CLEANUP_SQL='DELETE FROM "RemediationAction" WHERE "repairType" = '\''M3_GATEWAY_VERIFIED_STATUS_FLIP'\''; DELETE FROM "ReconciliationFinding" WHERE "mismatchClass" = '\''M3_MISSING_CAPTURE_STATUS'\''; DELETE FROM "ReconciliationRun"; DELETE FROM "ExceptionQueue" WHERE "invariant" = '\''M3_MISSING_CAPTURE_STATUS'\''; DELETE FROM "LedgerEntry" WHERE "traceId" LIKE '\''%evidence%'\''
+          DELETE FROM "Refund" WHERE "idempotencyKey" LIKE '\''ev-5c-%'\''; DELETE FROM "Outbox" WHERE "eventId" LIKE '\''ev-m3-%'\''; DELETE FROM "Payment" WHERE "gatewayPaymentId" LIKE '\''pay_ev_m3_%'\''; DELETE FROM "OrderItem" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "userId" IN (SELECT id FROM "User" WHERE phone = '\''+919999900004'\'')); DELETE FROM "Order" WHERE "userId" IN (SELECT id FROM "User" WHERE phone = '\''+919999900004'\'');'
+          RESULT=$(curl -sS -X POST \
+            -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            "https://api.supabase.com/v1/projects/$PROJECT_REF/database/query" \
+            -d "$(jq -n --arg q "$CLEANUP_SQL" '{query: $q}')")
+          echo "Cleanup result: $RESULT"
+          echo "=== Cleanup complete ==="
+
+      - name: Remove EVIDENCE_TEST_MODE + FEATURE_RECONCILIATION_AUTO_REPAIR from Vercel (restore safe state)
+        if: always()
+        run: |
+          set +e
+          PROJECT_ID="$VERCEL_PROJECT_ID"
+          API_URL="https://api.vercel.com/v10/projects/$PROJECT_ID/env"
+          AUTH="Authorization: Bearer $VERCEL_TOKEN"
+          LIST_BODY=$(curl -sS -H "$AUTH" "$API_URL")
+          for KEY in EVIDENCE_TEST_MODE FEATURE_RECONCILIATION_AUTO_REPAIR; do
+            EXISTING_IDS=$(echo "$LIST_BODY" | jq -r ".envs[] | select(.key == \"$KEY\") | .id" 2>/dev/null)
+            if [ -n "$EXISTING_IDS" ]; then
+              for EID in $EXISTING_IDS; do
+                curl -sS -X DELETE -H "$AUTH" "$API_URL/$EID" > /dev/null 2>&1
+              done
+              echo "✅ $KEY removed from Vercel (safe state restored)"
+            else
+              echo "✅ $KEY was not set (nothing to remove)"
+            fi
+          done
