@@ -43,10 +43,11 @@ export async function POST(req: Request) {
   const paymentId = url.searchParams.get('paymentId')
   const refundId = url.searchParams.get('refundId')
   const mode = url.searchParams.get('mode') ?? 'capture'
+  const simulateFail = url.searchParams.get('simulateFail') === 'true'
 
   // --- Refund mode (Wave-5 5a) ---
   if (mode === 'refund') {
-    return runRefundPublisher(refundId)
+    return runRefundPublisher(refundId, simulateFail)
   }
 
   // --- Capture mode (Wave-4 4c, default) ---
@@ -190,7 +191,7 @@ export async function POST(req: Request) {
 // Wave-5 Sub-Wave 5a — refund publisher simulator (mirrors capture simulator)
 // ----------------------------------------------------------------------------
 
-async function runRefundPublisher(refundId: string | null) {
+async function runRefundPublisher(refundId: string | null, simulateFail: boolean = false) {
   if (!refundId) {
     return apiError('VALIDATION_ERROR', 'refundId query param required when mode=refund', 400)
   }
@@ -276,7 +277,22 @@ async function runRefundPublisher(refundId: string | null) {
 
   // 4. Call refundRazorpayPayment() OUTSIDE any transaction body
   //    (Wave-5 5a safety improvement — mirrors Wave-4 4c capture pattern)
+  //    If simulateFail=true (E6 evidence), simulate a gateway failure.
   result.refundCalled = true
+
+  if (simulateFail) {
+    // Simulate gateway failure for E6 evidence testing
+    result.error = 'SIMULATED_FAILURE: gateway unavailable'
+    result.versionAfter = refund.version + 1
+    await db.refund.update({
+      where: { id: refund.id },
+      data: {
+        version: { increment: 1 },
+        failureReason: 'Refund failed: SIMULATED_FAILURE: gateway unavailable',
+      },
+    })
+    return NextResponse.json(result)
+  }
 
   let refundResult
   try {
