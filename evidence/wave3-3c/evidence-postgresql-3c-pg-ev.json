@@ -1,0 +1,147 @@
+{
+  "ok": true,
+  "runId": "3c-pg-ev-1786838444-4c",
+  "timestamp": "2026-08-16T00:00:57Z",
+  "wave": "3",
+  "subWave": "3c",
+  "evidenceType": "postgresql-concurrent-idempotency-requesthash",
+  "database": "postgresql",
+  "stagingUrl": "https://snakpass-bp02x0xuv-snakzap.vercel.app",
+  "test": "5 concurrent POST /api/orders with same Idempotency-Key + requestHashEnforcement=true",
+  "orchestratorRequiredFields": {
+    "database": "postgresql",
+    "concurrentRequests": 5,
+    "uniqueOrderIds": 1,
+    "orderCount": 1,
+    "orderItemCount": 1,
+    "outboxEventCount": 1,
+    "idempotencyRecordCount": 1,
+    "auditLogCount": 1,
+    "requestHashStored": true,
+    "noIdempotencyKeyReuseErrors": true
+  },
+  "invariant": {
+    "exactlyOneOrder": true,
+    "requestHashStored": true,
+    "no422Errors": true,
+    "description": "From 5 concurrent POST /api/orders requests with same idempotency key + requestHashEnforcement=true: exactly 1 Order, >=1 OrderItem, 1 outbox event, 1 idempotency record (with non-null requestHash), 1 audit log, all 5 responses 200 (no 422 IdempotencyKeyReuseError)"
+  },
+  "setup": {
+    "userId": "cmsuyluuj0000lc04lmjiw7k2",
+    "restaurantId": "rest-001",
+    "menuItemId": "menu-001",
+    "idempotencyKey": "ev-pg-concurrent-3c-1786838444-23276",
+    "concurrency": 5,
+    "requestHashEnforcement": true
+  },
+  "responseSummary": {
+    "successCount": 5,
+    "errorCount": 0,
+    "count422": 0,
+    "no422Errors": true,
+    "noIdempotencyKeyReuseErrors": true,
+    "uniqueOrderIdsInResponses": 1,
+    "winningOrderId": "cmsv1h4cg0001lb045nfmb9ar",
+    "responsesReturningWinningOrderId": 5,
+    "losingBehavior": [
+      {
+        "status": 200,
+        "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+        "errorCode": ""
+      },
+      {
+        "status": 200,
+        "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+        "errorCode": ""
+      },
+      {
+        "status": 200,
+        "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+        "errorCode": ""
+      },
+      {
+        "status": 200,
+        "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+        "errorCode": ""
+      },
+      {
+        "status": 200,
+        "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+        "errorCode": ""
+      }
+    ]
+  },
+  "databaseState": {
+    "orderCount": 1,
+    "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+    "orderStatus": "CONFIRMED",
+    "orderTotalAmount": "32000",
+    "orderItemsCount": 1,
+    "orderItemCount": 1,
+    "outboxEventCount": 1,
+    "idempotencyRecordCount": 1,
+    "idempotencyRequestHash": "af7c8055ea2f874a7d8fc14684eb62e1bfde71bea62f0387f2c9ca8b3ed7564e",
+    "requestHashStored": true,
+    "auditLogCount": 1,
+    "totalOrdersByUser": 3
+  },
+  "expected": {
+    "orderCount": 1,
+    "orderStatus": "CONFIRMED",
+    "orderItemCount": ">=1",
+    "outboxEventCount": 1,
+    "idempotencyRecordCount": 1,
+    "auditLogCount": 1,
+    "uniqueOrderIds": 1,
+    "totalOrdersByUser": 1,
+    "requestHashStored": true,
+    "count422": 0
+  },
+  "governance": {
+    "realPaymentsEnabled": false,
+    "productionRazorpayCredentialsUsed": false,
+    "webhookHandlerImplemented": false,
+    "subWave3cStarted": true,
+    "requestHashEnforcementEnabled": true,
+    "requestHashEnforcementScope": "Vercel preview+production env vars (set by this workflow)",
+    "productionTouched": false,
+    "note": "3c C1 evidence: 5 concurrent POST /api/orders with same Idempotency-Key + requestHashEnforcement=true (FEATURE_REQUEST_HASH_ENFORCEMENT=true on Vercel). Test run against staging Supabase PostgreSQL (project ref zmzqqcyapcezmaqvuzzd). realPayments=false (demo mode). No production traffic touched. Verifies C1 hash storage + no false-positive 422 IdempotencyKeyReuseError on concurrent same-body requests (P0-17 / P0-08)."
+  },
+  "concurrentResponses": [
+    {
+      "requestIndex": 1,
+      "status": 200,
+      "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 2,
+      "status": 200,
+      "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 3,
+      "status": 200,
+      "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 4,
+      "status": 200,
+      "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+      "errorCode": "",
+      "errorMessage": ""
+    },
+    {
+      "requestIndex": 5,
+      "status": 200,
+      "orderId": "cmsv1h4cg0001lb045nfmb9ar",
+      "errorCode": "",
+      "errorMessage": ""
+    }
+  ]
+}

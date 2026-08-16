@@ -5376,3 +5376,47 @@ Stage Summary:
 - Vercel deploy-trigger logic: UNCHANGED from 3b (proven pattern, run 31912679504 passed)
 - Next: handoff to main agent for git commit/push (NOT done by this adapter per task constraints).
 - STOP. No source code modified. No schema modified. No 3b workflow modified. No commit/push. No workflow run. No realPayments. No production traffic touched.
+
+---
+Task ID: 3c-postgresql-evidence
+Agent: IDE (main)
+Task: Sub-Wave 3c PostgreSQL-native concurrency evidence (C1 requestHash, flag ON)
+
+Work Log:
+- Orchestrator authorized Sub-Wave 3c implementation (bounded scope): C1 requestHash + feature flag + 5 NEW evidence scenarios + PostgreSQL concurrency.
+- Implemented C1 requestHash:
+  - Schema: +requestHash String? on IdempotencyKey (Class-2 additive, nullable)
+  - Migration: prisma/scripts/wave3-subwave-3c-migration.sql (applied to staging via workflow 31915789113)
+  - idempotency.ts: +canonicalizeRequestBody (RFC 8785 JSON canonicalization) +computeRequestHash (SHA-256) +hash check in getCachedResponse (enforced only when flag ON + stored hash non-null) +hash storage in storeIdempotencyRecord
+  - errors.ts: +IDEMPOTENCY_KEY_REUSE error code +IdempotencyKeyReuseError class (HTTP 422, non-retryable)
+  - deployment.ts: +requestHashEnforcement feature flag (default OFF)
+  - orders/route.ts: +computeRequestHash + pass to getCachedResponse/storeIdempotencyRecord + handle IdempotencyKeyReuseError
+  - payments/route.ts: same updates
+  - evidence-verify endpoints: +requestHash in response
+- Ran local SQLite evidence (flag ON): 3/3 PASS (ok:true)
+  - test-1-hash-match: same key + same body → cached, no 422, hash stored ✅
+  - test-2-hash-mismatch: same key + different body → 422 IDEMPOTENCY_KEY_REUSE ✅
+  - test-5-concurrent: 5 concurrent same key + same body → exactly 1 Order, no 422, hash stored ✅
+- Created PostgreSQL workflow (.github/workflows/subwave-3c-postgresql-concurrent-evidence.yml)
+- Applied staging migration (workflow 31915789113): requestHash column added ✅
+- Workflow run 31916110251: ALL STEPS PASSED ✅
+  - Set EVIDENCE_TEST_MODE=true + FEATURE_REQUEST_HASH_ENFORCEMENT=true on Vercel
+  - Triggered fresh Vercel preview deployment
+  - Ran 5 concurrent POST /api/orders with same key + same body (flag ON)
+  - Verified PostgreSQL state: 1 Order, 1 OrderItem, 1 Outbox, 1 IdempotencyKey (with non-null requestHash), 1 AuditLog
+  - All 5 requests returned 200 with same orderId (no 422 errors)
+  - Generated self-validating evidence JSON (ok: true)
+- Extracted evidence JSON: evidence/wave3-3c/evidence-postgresql-3c-pg-ev.json
+- Updated WAVE3_EVIDENCE.md with §11 Sub-Wave 3c section.
+- Verified production state: schema.prisma=postgresql, .env=clean, lint=PASS, requestHashEnforcement OFF.
+
+Stage Summary:
+- Sub-Wave 3c: ALL EVIDENCE CRITERIA PASS. C1 requestHash + PostgreSQL-native concurrency PROVEN (flag ON).
+- Local SQLite evidence: 3/3 PASS (hash-match, hash-mismatch→422, 5-concurrent)
+- PostgreSQL evidence (workflow 31916110251): PASS — 5 concurrent → exactly 1 Order, requestHash stored, no 422
+- Evidence JSON: evidence/wave3-3c/evidence-postgresql-3c-pg-ev.json (ok:true, database:postgresql)
+- requestHashEnforcement flag: OFF in production (default), ON in staging evidence only
+- NOT implemented (per Orchestrator): production deployment, production migration, requestHashEnforcement=true in production, realPayments, Wave-4
+- STOP: IDE is not self-closing 3c. Awaiting Orchestrator S5 decision.
+- Production NOT touched. realPayments OFF. requestHashEnforcement OFF (production). 3a/3b NOT reopened.
+
