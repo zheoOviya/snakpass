@@ -8346,3 +8346,45 @@ Execute the Orchestrator-authorized 5C Consolidated Closure Review (Directive ID
 - NO code modified. NO schema changed. NO evidence run. NO production touched.
 - Next governance checkpoint: Orchestrator decision on 5C formal closure + next workstream (CLASS B/D/E, gateway key, production readiness, or Wave-6).
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5c-class-c-consolidated-close — Wave-5 5C CLASS-C Consolidated Closure
+
+Timestamp: 2026-08-17 (Orchestrator S5-5C-CLASS-C-CONSOLIDATED-CLOSE-01 directive executed)
+
+Agent: main (IDE)
+
+### Directive
+- **Directive ID:** `S5-5C-CLASS-C-CONSOLIDATED-CLOSE-01`
+- **Decision:** Formally close 5C CLASS-C remediation scope (M16 + M3 + M9 + M10 — all S5 PASS / CLOSED).
+- **Scope:** Documentation/governance closure only — no implementation, no schema changes, no new evidence, no production changes.
+
+### Pre-conditions verified
+1. ✅ Git working tree clean (after restoring external modifications).
+2. ✅ HEAD = `472765f` (Consolidated Closure Review).
+3. ✅ Consolidated review document exists.
+4. ✅ All 4 CLASS-C S5 PASS / CLOSED references present in WAVE5_EVIDENCE.md.
+5. ✅ All 8 evidence artifacts preserved.
+
+### Work Log
+- Verified all preconditions.
+- Documentation closure edits (documentation-only — no code/schema/evidence changes):
+  - `WAVE5_EVIDENCE.md`:
+    - Header status → "5C CLASS-C CONSOLIDATED CLOSED".
+    - Added closure lines for M3, M9, M10 S5 closures + CLASS-C consolidated closure.
+    - §6 → "Canonical Governance State (Authoritative — 5C CLASS-C CONSOLIDATED CLOSED)" + all 5 Orchestrator directives listed.
+    - §7 → "5C CLASS-C CONSOLIDATED CLOSED" + consolidated closure blockquote.
+  - Appended this worklog entry.
+- Lint passes clean (documentation-only).
+
+### Stage Summary
+- **Wave-5 Sub-Wave 5C — CLASS-C CONSOLIDATED CLOSED.**
+- Directive ID: `S5-5C-CLASS-C-CONSOLIDATED-CLOSE-01`.
+- All 4 CLASS-C remediation gates (M16, M3, M9, M10) formally closed.
+- CLASS B/D/E remain LOCKED.
+- Gateway idempotency-key gap remains DEFERRED.
+- `reconciliationAutoRepair` OFF. Production NOT AUTHORIZED.
+- Wave-6 / Wave-7 LOCKED.
+- NO code modified. NO schema changed. NO evidence run. NO production touched.
+- IDE is STOPPING after commit + push.

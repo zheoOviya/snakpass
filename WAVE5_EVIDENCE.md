@@ -1,12 +1,16 @@
 # Wave-5 Evidence Document
 
-**Status:** ✅ Wave-5 5A + 5B CLOSED. Sub-Wave 5C PARTIALLY CLOSED (M16 only — S5 PASS / CLOSED; M3/M9/M10 + CLASS B/D/E remain LOCKED). Remediation is narrowly scoped + feature-flagged OFF.
+**Status:** ✅ Wave-5 5A + 5B CLOSED. Sub-Wave 5C CLASS-C CONSOLIDATED CLOSED (M16 + M3 + M9 + M10 — all S5 PASS / CLOSED). CLASS B/D/E remain LOCKED. Gateway idempotency-key gap DEFERRED. Remediation is narrowly scoped + feature-flagged OFF.
 **Created:** 2026-08-16
 **Sub-Wave 5a Implementation:** 2026-08-16 (IDE — task ID `wave5a-p0-04-refund`)
 **Sub-Wave 5a S5 Closure:** 2026-08-16 (Orchestrator Decision — 5A S5 PASS / CLOSED)
 **Sub-Wave 5b S5 Closure:** 2026-08-16 (Orchestrator Decision — 5B S5 PASS / CLOSED; Directive ID `S5-5B-P0-03-CLOSE`)
 **Sub-Wave 5C M16 S5 Closure:** 2026-08-16 (Orchestrator Decision — M16 S5 PASS / CLOSED; Directive ID `S5-5C-M16-P0-03-CLOSE`)
-**Authorization:** Orchestrator Decision — Wave-5 AUTHORIZED (P0-04 Refund + P0-03 Reconciliation). 5A + 5B CLOSED. 5C M16 CLOSED. 5C M3/M9/M10 + CLASS B/D/E remain LOCKED.
+**Sub-Wave 5C M3 S5 Closure:** 2026-08-17 (Orchestrator Decision — M3 S5 PASS / CLOSED; Directive ID `S5-5C-M3-P0-03-CLOSE`)
+**Sub-Wave 5C M9 S5 Closure:** 2026-08-17 (Orchestrator Decision — M9 S5 PASS / CLOSED; Directive ID `S5-5C-M9-P0-03-CLOSE`)
+**Sub-Wave 5C M10 S5 Closure:** 2026-08-17 (Orchestrator Decision — M10 S5 PASS / CLOSED; Directive ID `S5-5C-M10-P0-03-CLOSE`)
+**Sub-Wave 5C CLASS-C Consolidated Closure:** 2026-08-17 (Orchestrator Decision — 5C CLASS-C CONSOLIDATED CLOSED; Directive ID `S5-5C-CLASS-C-CONSOLIDATED-CLOSE-01`)
+**Authorization:** Orchestrator Decision — Wave-5 AUTHORIZED (P0-04 Refund + P0-03 Reconciliation). 5A + 5B CLOSED. 5C CLASS-C CONSOLIDATED CLOSED (M16 + M3 + M9 + M10). CLASS B/D/E remain LOCKED. Gateway idempotency-key gap DEFERRED.
 
 > **Governance rule:** This document is NOT pre-filled with fabricated evidence. Each row reflects actual evidence artifacts committed to the repo and (for PostgreSQL) actual GitHub Actions runs against the staging Supabase database.
 
@@ -348,13 +352,16 @@ Per-scenario results (PostgreSQL, staging Supabase):
 
 ---
 
-## 6. Canonical Governance State (Authoritative — 5C M16 + M3 S5 PASS / CLOSED)
+## 6. Canonical Governance State (Authoritative — 5C CLASS-C CONSOLIDATED CLOSED)
 
 > **Orchestrator Directives:**
 > - `S5-5C-M16-P0-03-CLOSE` (2026-08-16): M16 (operational outbox-lag remediation) S5 PASS / CLOSED.
 > - `S5-5C-M3-P0-03-CLOSE` (2026-08-17): M3 (gateway-verified status remediation — CAPTURE_PENDING → CAPTURED) S5 PASS / CLOSED.
+> - `S5-5C-M9-P0-03-CLOSE` (2026-08-17): M9 (stuck CAPTURE_PENDING status-flip — NO re-enqueue) S5 PASS / CLOSED.
+> - `S5-5C-M10-P0-03-CLOSE` (2026-08-17): M10 (stuck REFUND_PENDING status-flip — NO re-enqueue, 5A Option A) S5 PASS / CLOSED.
+> - `S5-5C-CLASS-C-CONSOLIDATED-CLOSE-01` (2026-08-17): 5C CLASS-C scope formally CONSOLIDATED CLOSED.
 >
-> Both closures apply ONLY to their respective remediation scopes. They do NOT authorize M9/M10, CLASS B/D/E remediation, production deployment, or feature-flag activation. 5C is PARTIALLY CLOSED (M16 + M3 only).
+> All 4 CLASS-C remediation gates are CLOSED. CLASS B/D/E remain LOCKED. Gateway idempotency-key gap remains DEFERRED. Production remains NOT AUTHORIZED.
 
 ```text
 Wave-0        ✅ CLOSED
@@ -432,7 +439,9 @@ Wave-7                   🔒 LOCKED (P0-07 Pickup Attribution)
 
 ## 7. Stop Point
 
-Sub-Wave 5C — M16 + M3 + M9 + M10 are all **S5 PASS / CLOSED**. All 4 CLASS-C remediation gates are closed. 5C is PARTIALLY CLOSED (M16 + M3 + M9 + M10 only — CLASS B/D/E remain LOCKED). The IDE is STOPPING.
+Sub-Wave 5C — CLASS-C CONSOLIDATED CLOSED (M16 + M3 + M9 + M10 — all S5 PASS / CLOSED). The IDE is STOPPING.
+
+> **5C CLASS-C Consolidated Closure (Orchestrator Directive `S5-5C-CLASS-C-CONSOLIDATED-CLOSE-01`):** All 4 CLASS-C remediation gates are formally closed. CLASS B/D/E remain LOCKED. Gateway idempotency-key gap remains DEFERRED. Production remains NOT AUTHORIZED. Wave-6 / Wave-7 remain LOCKED.
 
 > **Closure scope:**
 > - M16: operational remediation (publisher trigger for outbox lag).
