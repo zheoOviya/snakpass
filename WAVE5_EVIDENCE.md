@@ -383,7 +383,7 @@ Wave-5
               ├─ E6 scale           ✅ (1000 payments, 2331ms < 30s SLA, falsePositives=0)
               └─ Detection-only contract CLOSED
 
-  5C          🟡 PARTIALLY CLOSED (M16 + M3 — both S5 PASS / CLOSED)
+  5C          🟡 PARTIALLY CLOSED (M16 + M3 + M9 — all S5 PASS / CLOSED)
               ├─ Gate Review          ✅ COMPLETE (Directive WAVE5-5C-P0-03-REMEDIATION-GATE)
               │
               ├─ M16 (Operational — outbox lag)
@@ -399,7 +399,13 @@ Wave-5
               │    ├─ PostgreSQL E9-E12 ✅ 8/8 PASS (moneyStateUnchanged=true, noDuplicateRemediationActions=true, falsePositives=0)
               │    └─ S5               ✅ PASS / CLOSED (Directive S5-5C-M3-P0-03-CLOSE)
               │
-              ├─ M9                   🔒 HOLD — separate authorization required
+              ├─ M9 (Stuck CAPTURE_PENDING — status-flip only, NO re-enqueue)
+              │    ├─ Gate Review       ✅ (Directive WAVE5-5C-M9-READ-PLAN-FIRST-01)
+              │    ├─ Implementation   ✅ (Directive WAVE5-5C-M9-IMPLEMENT-01)
+              │    ├─ SQLite E1-E8     ✅ 8/8 PASS
+              │    ├─ PostgreSQL E9-E12 ✅ 8/8 PASS (moneyStateUnchanged=true, Outbox unchanged — SI-11 confirmed)
+              │    └─ S5               ✅ PASS / CLOSED (Directive S5-5C-M9-P0-03-CLOSE)
+              │
               ├─ M10                  🔒 HOLD — separate authorization required
               ├─ M2/M7/M13            🔒 HOLD (CLASS B — ledger synthesis HIGH RISK)
               ├─ M11/M12/M14          🔒 HOLD (CLASS D — quarantine + manual review)
@@ -420,20 +426,29 @@ Wave-7                   🔒 LOCKED (P0-07 Pickup Attribution)
 
 ## 7. Stop Point
 
-Sub-Wave 5C — M16 + M3 are both **S5 PASS / CLOSED**. 5C is PARTIALLY CLOSED (M16 + M3 only — M9/M10 + CLASS B/D/E remain LOCKED). The IDE is STOPPING.
+Sub-Wave 5C — M16 + M3 + M9 are all **S5 PASS / CLOSED**. 5C is PARTIALLY CLOSED (M16 + M3 + M9 only — M10 + CLASS B/D/E remain LOCKED). The IDE is STOPPING.
 
-> **Closure scope:** M16 is closed as an **operational remediation** (publisher trigger). M3 is closed as a **gateway-verified status remediation** (CAPTURE_PENDING → CAPTURED via `fetchRazorpayPaymentStatus()`). Neither closure authorizes M9/M10, CLASS B/D/E remediation, production deployment, or feature-flag activation.
+> **Closure scope:** M16 is closed as an **operational remediation** (publisher trigger). M3 is closed as a **gateway-verified status remediation** (CAPTURE_PENDING → CAPTURED via `fetchRazorpayPaymentStatus()`). M9 is closed as a **stuck-CAPTURE_PENDING status-flip remediation** (same pattern as M3, but with NO outbox re-enqueue — the retry/re-enqueue path remains PROHIBITED). None of these closures authorize M10, CLASS B/D/E remediation, production deployment, or feature-flag activation.
 
-**Not authorized (even after M16 + M3 closure):**
-- ❌ M9 / M10 implementation (CLASS C — stuck-state/retry semantics — separate authorization required).
+**M9 closure boundary (critical distinction):**
+- Gateway status = `captured` → CAPTURE_PENDING → CAPTURED ✅
+- Gateway status ≠ `captured` → ESCALATE ✅
+- Outbox re-enqueue → PROHIBITED 🚫
+- Razorpay capture API → PROHIBITED 🚫
+- Refund / Ledger mutation → PROHIBITED 🚫
+
+M9's evidence proves **status-flip safety**, NOT capture-retry safety. The gateway idempotency-key gap remains outside this closure.
+
+**Not authorized (even after M16 + M3 + M9 closure):**
+- ❌ M10 implementation (CLASS C — stuck REFUND_PENDING — separate authorization required).
 - ❌ M2 / M7 / M13 remediation (CLASS B — ledger synthesis HIGH RISK — separate authorization required).
 - ❌ M11 / M12 / M14 remediation (CLASS D — quarantine + manual review — always escalated, never auto-repaired).
 - ❌ M1 / M4 / M5 / M6 / M8 / M15 / M17 remediation (CLASS E — never auto-repaired — accounting/forensic review only).
-- ❌ 5C full closure (5C is PARTIALLY CLOSED — M16 + M3 only).
+- ❌ 5C full closure (5C is PARTIALLY CLOSED — M16 + M3 + M9 only).
 - ❌ Production deployment / feature-flag activation (`reconciliationAutoRepair` remains OFF).
 - ❌ Wave-6 / Wave-7.
 
-**Next governance checkpoint:** Orchestrator directive on M9 (READ/PLAN-FIRST Gate Review recommended) OR M10 OR CLASS B/D/E OR 5C full closure OR Wave-6 (P0-06 State Separation) OR Wave-7 (P0-07 Pickup Attribution). The IDE will not begin any of these until a separate explicit Orchestrator directive is issued.
+**Next governance checkpoint:** Orchestrator directive on M10 (READ/PLAN-FIRST Gate Review recommended) OR CLASS B/D/E OR 5C full closure OR Wave-6 (P0-06 State Separation) OR Wave-7 (P0-07 Pickup Attribution). The IDE will not begin any of these until a separate explicit Orchestrator directive is issued.
 
 ---
 

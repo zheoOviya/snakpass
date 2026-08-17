@@ -1,13 +1,13 @@
-# Wave-5 Sub-Wave 5C — M9 Stuck CAPTURE_PENDING: READ/PLAN-FIRST Gate Review
+# Wave-5 Sub-Wave 5C — M9 Stuck CAPTURE_PENDING: S5 PASS / CLOSED
 
-**Document type:** Gate Review (READ/PLAN-FIRST — NO implementation authorization).
-**Directive ID:** `WAVE5-5C-M9-READ-PLAN-FIRST-01`
+**Document type:** Gate Review (READ/PLAN-FIRST → IMPLEMENTATION → PostgreSQL EVIDENCE → S5 PASS / CLOSED).
+**Directive IDs:** `WAVE5-5C-M9-READ-PLAN-FIRST-01` (Gate Review) → `WAVE5-5C-M9-IMPLEMENT-01` (Implementation) → `WAVE5-5C-M9-PG-EVIDENCE-GATE-01` (PostgreSQL Evidence) → `S5-5C-M9-P0-03-CLOSE` (Closure).
 **Author:** IDE (read-only synthesis from repository + M16/M3 closure evidence).
-**Orchestrator directive:** Sub-Wave 5C — M9 READ/PLAN-FIRST AUTHORIZED. M9 implementation 🔒 NOT YET AUTHORIZED. M10 remains on HOLD.
+**Orchestrator directive:** Sub-Wave 5C — M9 is S5 PASS / CLOSED (Directive ID: `S5-5C-M9-P0-03-CLOSE`, 2026-08-17). M10 remains on HOLD. 5C is PARTIALLY CLOSED (M16 + M3 + M9 only).
 **Created:** 2026-08-17
 **Scope:** M9 — Stuck CAPTURE_PENDING (Payment.status='CAPTURE_PENDING' older than 30 min + outbox not PENDING/CLAIMED).
 
-> **Governance rule:** This document is a READ-ONLY planning artifact. It does NOT authorize implementation, schema change, migration, evidence workflow, or any financial mutation. The IDE has NOT written any M9 code. M9 implementation requires a separate Orchestrator directive after this Gate Review is reviewed.
+> **M9 Closure (Orchestrator Directive `S5-5C-M9-P0-03-CLOSE`):** M9 (gateway-verified CAPTURE_PENDING → CAPTURED status remediation with NO outbox re-enqueue and NO capture/refund API invocation) is S5 PASS / CLOSED. The closure is based on SQLite E1-E8 (8/8 PASS) + PostgreSQL E9-E12 (8/8 PASS) + `moneyStateUnchanged=true` + `noDuplicateRemediationActions=true` + `financialMutation=false` + `falsePositives=0` + Outbox unchanged (SI-11 confirmed). M9 is closed specifically as a **status-flip remediation** — NOT as a capture-retry mechanism. The prohibited retry/re-enqueue path remains prohibited. The gateway idempotency-key gap remains outside this closure.
 
 > **Orchestrator constraint honored:** M16 closure proved operational remediation safety. M3 closure proved gateway-verified status-flip safety. M9 has **stuck-state/retry semantics** that are fundamentally more complex than M3 — the retry path (re-enqueue outbox for capture) creates a risk of **duplicate capture at the gateway**, which M3 does not have. M3/M16 safety does NOT transfer to M9.
 

@@ -7923,3 +7923,55 @@ Per-scenario results (PostgreSQL):
 - Production NOT AUTHORIZED. Wave-6/7 LOCKED.
 - M9 = EVIDENCE-COMPLETE (SQLite + PostgreSQL). S5 closure = ORCHESTRATOR DECISION PENDING.
 - IDE is STOPPING after commit + push. Awaiting Orchestrator S5 PASS / CLOSED decision on M9.
+
+---
+
+## Task ID: 5c-m9-s5-closure — Wave-5 Sub-Wave 5C M9 S5 PASS / CLOSED
+
+Timestamp: 2026-08-17 (Orchestrator S5 PASS / CLOSED directive executed)
+
+Agent: main (IDE)
+
+### Directive
+- **Directive ID:** `S5-5C-M9-P0-03-CLOSE`
+- **Decision:** `S5 PASS / CLOSED` (M9 only — status-flip path, NO re-enqueue)
+- **Scope:** M9 (stuck CAPTURE_PENDING — gateway-verified CAPTURE_PENDING → CAPTURED)
+- **Closure basis:** SQLite E1-E8 (8/8 PASS) + PostgreSQL E9-E12 (8/8 PASS) + `moneyStateUnchanged=true` + `noDuplicateRemediationActions=true` + `financialMutation=false` + `falsePositives=0` + Outbox unchanged (SI-11 confirmed)
+
+### Pre-closure verification (ALL checks PASS)
+1. ✅ Git working tree clean.
+2. ✅ HEAD = `8d37258` (M9 PostgreSQL evidence).
+3. ✅ M9 SQLite evidence preserved (commit `48c01c9`).
+4. ✅ M9 PostgreSQL evidence preserved (commit `8d37258`).
+5. ✅ orchestratorRequiredFields: all true.
+6. ✅ reconciliationAutoRepair OFF.
+7. ✅ EVIDENCE_TEST_MODE not set.
+8. ✅ M10 NOT implemented.
+9. ✅ CLOSED-wave code untouched.
+
+### Closure scope (critical distinction)
+M9 is closed as a **gateway-verified CAPTURE_PENDING → CAPTURED status remediation** with:
+- NO outbox re-enqueue (SI-11 — PROHIBITED)
+- NO captureRazorpayPayment() call (SI-12 — PROHIBITED)
+- NO refund/ledger mutation (PROHIBITED)
+
+M9's evidence proves **status-flip safety**, NOT capture-retry safety. The gateway idempotency-key gap remains outside this closure. The prohibited retry/re-enqueue path remains prohibited.
+
+### Work Log
+- Verified all pre-closure checks → ALL PASS.
+- Documentation closure edits:
+  - `WAVE5_5C_M9_GATE_REVIEW.md`: title → "S5 PASS / CLOSED". Document type → full sequence. M9 Closure blockquote with scope limitation.
+  - `WAVE5_EVIDENCE.md` §6: governance state updated — M9 added as S5 PASS / CLOSED. §7: stop point updated — M9 closure boundary documented.
+- Appended this worklog entry.
+- Lint passes clean (documentation-only).
+
+### Stage Summary
+- **Wave-5 Sub-Wave 5C — M9: S5 PASS / CLOSED.**
+- Directive ID: `S5-5C-M9-P0-03-CLOSE`.
+- Closure scope: M9 status-flip remediation ONLY (NO re-enqueue, NO capture API, NO outbox mutation).
+- 5C is PARTIALLY CLOSED (M16 + M3 + M9 only — M10 + CLASS B/D/E remain LOCKED).
+- All evidence artifacts preserved (not regenerated).
+- `reconciliationAutoRepair` OFF. Production NOT AUTHORIZED.
+- Wave-6 / Wave-7 LOCKED.
+- Next governance checkpoint: Orchestrator directive on M10 (READ/PLAN-FIRST Gate Review recommended).
+- IDE is STOPPING after commit + push.
