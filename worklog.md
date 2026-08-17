@@ -7975,3 +7975,83 @@ M9's evidence proves **status-flip safety**, NOT capture-retry safety. The gatew
 - Wave-6 / Wave-7 LOCKED.
 - Next governance checkpoint: Orchestrator directive on M10 (READ/PLAN-FIRST Gate Review recommended).
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5c-m10-gate-review — Wave-5 5C M10 Stuck REFUND_PENDING: READ/PLAN-FIRST Gate Review
+
+Timestamp: 2026-08-17 (Orchestrator WAVE5-5C-M10-READ-PLAN-FIRST-01 directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized M10 READ/PLAN-FIRST Gate Review. Read-only planning — no implementation, no code changes, no schema changes, no evidence execution.
+
+### Governance boundaries honored
+- ✅ READ/PLAN-FIRST ONLY — no implementation, no code changes, no schema changes, no migrations.
+- ✅ No financial mutation. No Razorpay calls. No outbox enqueue. No refund mutation.
+- ✅ No feature-flag changes. No production deployment. No evidence execution.
+- ✅ No M9/M3/M16 changes. No CLOSED wave modification.
+- ✅ Wave-6 / Wave-7 remain LOCKED.
+
+### Work Log
+- Verified all 9 preconditions (git clean, HEAD=488d23a, M16/M3/M9 closure docs preserved, evidence unchanged, flag OFF, EVIDENCE_TEST_MODE absent, M10 not implemented, CLOSED waves untouched).
+- Read M10 detector implementation (`detectM10StuckRefundPending`):
+  - Triggers on: Refund REFUND_PENDING + createdAt < now-30min + outbox NOT PENDING/CLAIMED (FAILED/PUBLISHED/MISSING).
+  - entityId = Refund.id (NOT Payment.id like M3/M9).
+  - Severity: HIGH.
+- Read M10 classification from 5C Gate Review: CLASS C (requires external Razorpay verification).
+- Analyzed M10 sub-cases (mirrors M9):
+  - M10a: outbox=PUBLISHED + Refund REFUND_PENDING → publisher success-txn crashed → gateway may have refunded → flip to REFUNDED (SAFE — same as M3/M9 pattern).
+  - M10b: outbox=FAILED → re-enqueue = potential DUPLICATE REFUND (DANGEROUS — same as M9).
+  - M10c: outbox=MISSING → impossible by atomicity → escalate (CLASS D).
+- Read publisher refund handler success path:
+  - Flips Refund REFUND_PENDING → REFUNDED (conditional updateMany WHERE status=REFUND_PENDING).
+  - Flips Payment CAPTURED → REFUNDED (if full refund, conditional updateMany WHERE status=CAPTURED).
+  - Creates AuditLog (PAYMENT_REFUNDED). Marks Outbox PUBLISHED.
+  - NO new LedgerEntry rows (5A Option A: reversal entries become canonical).
+- Read 5A Option A ledger semantics:
+  - Reversal Dr CONSUMER_REVENUE + Cr GATEWAY_RECEIVABLE written at REFUND_PENDING time (atomic with Refund creation).
+  - When Refund flips to REFUNDED, the reversal entries become canonical (NO new entries — proven in 5A-E6).
+  - When Refund is permanently FAILED, the reservation must be manually resolved (M8 finding — CLASS E).
+- Analyzed gateway verification capability:
+  - `fetchRazorpayPaymentStatus()` fetches PAYMENT status — insufficient for M10 (partial refunds don't change Payment.status).
+  - M10 needs a NEW function: `fetchRazorpayRefundStatus(refundId)` calling `instance.refunds.fetch(refundId)`.
+  - Razorpay refund statuses: `pending` / `processed` / `failed`. Only `processed` permits the flip.
+- Race analysis (R1-R8): ALL SAFE for status-flip path. ⚠️ DANGEROUS for re-enqueue (R2 — same as M9).
+- Financial-state impact: M10 mutates Refund.status + Payment.status (full refund only) + RemediationAction + AuditLog. Does NOT mutate LedgerEntry, Outbox, WebhookEvent, IdempotencyKey.
+- 5A Option A interaction: ✅ SAFE — no ledger mutation. Reversal entries become canonical on REFUNDED (same as publisher success path — proven in 5A-E6).
+- Produced `WAVE5_5C_M10_GATE_REVIEW.md` — 14 sections (A-N):
+  - A. Executive Summary (CONDITIONAL GO — status-flip only, NO re-enqueue, new gateway function needed).
+  - B. Detector Semantics (triggering condition + M9 comparison).
+  - C. State Machine (REFUND_PENDING → REFUNDED/FAILED).
+  - D. Existing Recovery Paths (publisher, webhook deferred, M9 different entity).
+  - E. Gateway Verification Capability (fetchRazorpayRefundStatus needed — fetchRazorpayPaymentStatus insufficient).
+  - F. Race Analysis (R1-R8 — all safe for status-flip, dangerous for re-enqueue).
+  - G. 5A Option A Interaction (SAFE — no ledger mutation, reversal entries become canonical).
+  - H. Financial-State Impact (Refund + Payment mutation, NO ledger/outbox mutation).
+  - I. Transaction Boundary (gateway fetch outside txn, re-enqueue PROHIBITED).
+  - J. Safety Invariants (M10-SI-1 through M10-SI-16 — including SI-11 NO outbox enqueue, SI-15 full refund → Payment flip, SI-16 new gateway function needed).
+  - K. Evidence Requirements (M10-E1 through M10-E12).
+  - L. Failure/Escalation Semantics (processed → flip; pending/failed/unknown → escalate).
+  - M. Implementation Boundary (status-flip ONLY; re-enqueue NOT authorized; new fetchRazorpayRefundStatus needed).
+  - N. Recommendation: CONDITIONAL GO (with critical constraints).
+
+### Key decisions documented
+- **Classification: CLASS C → CONDITIONAL GO** (with critical constraints).
+- **Safe path:** gateway says `processed` → flip Refund to REFUNDED + (if full refund) Payment to REFUNDED. NO ledger mutation (5A Option A: reversal entries become canonical — proven in 5A-E6).
+- **DANGEROUS path:** re-enqueue for refund retry — PROHIBITED (same as M9 — refundRazorpayPayment() not idempotent at gateway).
+- **New dependency:** `fetchRazorpayRefundStatus(refundId)` — new READ-ONLY gateway function needed. `fetchRazorpayPaymentStatus()` is insufficient (partial refunds don't change Payment.status).
+- **5A Option A interaction:** ✅ SAFE — no ledger mutation. The existing reversal Dr/Cr becomes canonical on REFUNDED (same as publisher success path — proven in 5A-E6 on PostgreSQL).
+- **16 safety invariants (M10-SI-1 through M10-SI-16):** including SI-11 (NO outbox enqueue), SI-15 (full refund → Payment flip), SI-16 (new gateway function needed).
+- **Key difference from M9:** M10 mutates TWO tables (Refund + Payment), interacts with 5A Option A ledger semantics, and needs a new gateway function. But the core safety pattern (conditional updateMany + idempotency + gateway fetch outside txn + escalate on ambiguity) is the same.
+
+### Stage Summary
+- **M10 READ/PLAN-FIRST Gate Review: ✅ COMPLETE.**
+- `WAVE5_5C_M10_GATE_REVIEW.md` produced (14 sections, CLASS C, CONDITIONAL GO with critical constraints).
+- **Recommendation: CONDITIONAL GO** — M10 status-flip path is safe (mirrors publisher success path — proven in 5A-E6). Re-enqueue path NOT safe (same as M9 — PROHIBITED). New `fetchRazorpayRefundStatus()` needed.
+- NO code modified. NO schema changed. NO evidence run. NO production touched.
+- Wave-3/4/5A/5B/5C-M16/M3/M9 CLOSED — immutable.
+- `reconciliationAutoRepair` OFF. Wave-6/7 LOCKED. Production NOT AUTHORIZED.
+- Next governance checkpoint: Orchestrator decision on M10 implementation authorization (separate directive required).
+- IDE is STOPPING after commit + push.
