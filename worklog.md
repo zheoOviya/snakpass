@@ -8301,3 +8301,48 @@ M10's evidence proves **refund status-flip safety**, NOT refund-retry safety. Th
 - Wave-6 / Wave-7 LOCKED.
 - Next governance checkpoint: Orchestrator's **5C Consolidated Closure / Wave-5 Governance Review**.
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5c-consolidated-closure-review — Wave-5 5C Consolidated Closure Review
+
+Timestamp: 2026-08-17 (Orchestrator WAVE5-5C-CONSOLIDATED-CLOSURE-REVIEW-01 directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized 5C Consolidated Closure Review (Directive ID: `WAVE5-5C-CONSOLIDATED-CLOSURE-REVIEW-01`). READ/REVIEW-ONLY — no implementation, no code changes, no schema changes, no evidence execution.
+
+### Governance boundaries honored
+- ✅ READ/REVIEW-ONLY — no implementation, no code changes, no schema changes, no migrations.
+- ✅ No financial mutation. No Razorpay calls. No outbox enqueue.
+- ✅ No feature-flag changes. No production deployment. No evidence execution.
+- ✅ No Wave-6 / Wave-7. No CLOSED wave modification.
+- ✅ CLASS B/D/E remain LOCKED. Gateway idempotency-key gap remains DEFERRED.
+
+### Work Log
+- Verified all 12 preconditions (git clean, HEAD=a6cbbba, 4 CLASS-C closure docs preserved, 8 evidence artifacts preserved, 18 S5 PASS/CLOSED references in WAVE5_EVIDENCE.md, reconciliationAutoRepair OFF, EVIDENCE_TEST_MODE not set, CLASS B/D/E handlers NOT implemented (0 found), gateway idempotency-key gap documented as deferred (5 references), CLOSED wave code untouched, exactly 4 remediation handlers present, production NOT authorized).
+- Produced `WAVE5_5C_CONSOLIDATED_CLOSURE_REVIEW.md` — 6 sections:
+  - §1 Verification Summary (ALL 12 checks PASS).
+  - §2 Closed Remediation Gates (M16, M3, M9, M10 — all 4 S5 PASS / CLOSED) + closure boundaries table.
+  - §3 Open Items (CLASS B HOLD, CLASS D HOLD, CLASS E NO-AUTO-REPAIR, gateway idempotency-key gap DEFERRED).
+  - §4 Governance Questions (3 questions answered: Q1 YES closed, Q2 NO gap not solved, Q3 NO production not authorized).
+  - §5 Recommendation: 5C CLASS-C remediation is CONSOLIDATED-CLOSED. Proposed decision tree for next governance.
+  - §6 Stop Point.
+
+### Key decisions documented
+- **Q1 (Are 4 CLASS-C cases sufficiently closed?): YES.** All 4 have implementation + SQLite 8/8 + PostgreSQL 8/8 + S5 PASS/CLOSED + preserved evidence.
+- **Q2 (Is gateway retry/idempotency-key gap solved?): NO.** M9/M10 closures PROHIBIT the re-enqueue path. The gap requires a pre-generated idempotency key — separate workstream.
+- **Q3 (Does this grant production authorization?): NO.** `reconciliationAutoRepair` OFF, `realPayments` OFF, production NOT AUTHORIZED. Multiple hard blockers remain (DR drill, rollback drill, P0-06, P0-07, production infrastructure).
+- **Recommendation:** 5C CLASS-C scope is consolidated-closed. CLASS B/D/E remain correctly LOCKED. Gateway idempotency-key gap remains correctly DEFERRED. Production remains correctly NOT AUTHORIZED.
+
+### Stage Summary
+- **5C Consolidated Closure Review: ✅ COMPLETE.**
+- All 4 CLASS-C remediation gates (M16, M3, M9, M10) verified as S5 PASS / CLOSED with preserved evidence.
+- CLASS B/D/E verified as NOT implemented (0 handlers found) — correctly LOCKED.
+- Gateway idempotency-key gap verified as DEFERRED (5 references in TRANSACTION_RETRY_INVARIANT.md).
+- `reconciliationAutoRepair` OFF. `EVIDENCE_TEST_MODE` not set. Production NOT AUTHORIZED.
+- Wave-6 / Wave-7 LOCKED.
+- NO code modified. NO schema changed. NO evidence run. NO production touched.
+- Next governance checkpoint: Orchestrator decision on 5C formal closure + next workstream (CLASS B/D/E, gateway key, production readiness, or Wave-6).
+- IDE is STOPPING after commit + push.
