@@ -7597,3 +7597,77 @@ Per-scenario results (PostgreSQL):
 - Production NOT AUTHORIZED. Wave-6/7 LOCKED.
 - M3 = EVIDENCE-COMPLETE (SQLite + PostgreSQL). S5 closure = ORCHESTRATOR DECISION PENDING.
 - IDE is STOPPING after commit + push. Awaiting Orchestrator S5 PASS / CLOSED decision on M3.
+
+---
+
+## Task ID: 5c-m3-s5-closure — Wave-5 Sub-Wave 5C M3 S5 PASS / CLOSED
+
+Timestamp: 2026-08-17 (Orchestrator S5 PASS / CLOSED directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator's `S5 PASS / CLOSED` directive for Sub-Wave 5C — M3 (Directive ID: `S5-5C-M3-P0-03-CLOSE`). Documentation-only closure — no code/schema/evidence changes. M3 closure applies ONLY to the gateway-verified status remediation scope (CAPTURE_PENDING → CAPTURED via `fetchRazorpayPaymentStatus()`). M9/M10 + CLASS B/D/E remain LOCKED. 5C is PARTIALLY CLOSED (M16 + M3 only).
+
+### Directive
+- **Directive ID:** `S5-5C-M3-P0-03-CLOSE`
+- **Decision:** `S5 PASS / CLOSED` (M3 only)
+- **Scope:** Sub-Wave 5C — M3 (gateway-verified status remediation — CAPTURE_PENDING → CAPTURED)
+- **Closure basis:** SQLite E1-E8 (8/8 PASS) + PostgreSQL E9-E12 (8/8 PASS) + `moneyStateUnchanged=true` + `noDuplicateRemediationActions=true` + `financialMutation=false` + `falsePositives=0`
+
+### Pre-closure verification (ALL 11 checks PASS)
+1. ✅ Git working tree clean.
+2. ✅ Local HEAD == remote HEAD (`ecf84fb`).
+3. ✅ M3 SQLite evidence artifact exists + unchanged (commit `06cf709`).
+4. ✅ SQLite result = 8/8 PASS.
+5. ✅ M3 PostgreSQL evidence artifact exists + unchanged (commit `ecf84fb`).
+6. ✅ PostgreSQL result = 8/8 PASS.
+7. ✅ orchestratorRequiredFields: database=postgresql, moneyStateUnchanged=true, noDuplicateRemediationActions=true, scaleCorrect=true, falsePositives=0, ok=true.
+8. ✅ reconciliationAutoRepair OFF by default.
+9. ✅ EVIDENCE_TEST_MODE not set (removed from Vercel after evidence).
+10. ✅ M9/M10 implementation does NOT exist.
+11. ✅ CLOSED-wave code (capture route, refund route, webhook handler, outbox publisher) untouched.
+
+### Closure scope (critical distinction)
+M3 is closed as a **gateway-verified status remediation** (CAPTURE_PENDING → CAPTURED via `fetchRazorpayPaymentStatus()`). The following remain explicitly unauthorized:
+- ❌ M9 / M10 implementation (CLASS C — stuck-state/retry semantics — separate authorization required).
+- ❌ M2 / M7 / M13 remediation (CLASS B — ledger synthesis HIGH RISK — separate authorization required).
+- ❌ M11 / M12 / M14 remediation (CLASS D — quarantine + manual review — always escalated, never auto-repaired).
+- ❌ M1 / M4 / M5 / M6 / M8 / M15 / M17 remediation (CLASS E — never auto-repaired — accounting/forensic review only).
+- ❌ 5C full closure (5C is PARTIALLY CLOSED — M16 + M3 only).
+- ❌ Production deployment / feature-flag activation (`reconciliationAutoRepair` remains OFF).
+- ❌ Wave-6 / Wave-7.
+
+### Work Log
+- Fetched origin/main → local HEAD was diverged → `git reset --hard origin/main` to restore full Wave-5 history.
+- Verified git working tree clean + local HEAD == remote HEAD (`ecf84fb`).
+- Ran all 11 pre-closure verification checks → ALL PASS.
+- Documentation closure edits (documentation-only — no code/schema/evidence changes):
+  - `WAVE5_5C_M3_GATE_REVIEW.md`:
+    - Title → "M3 S5 PASS / CLOSED".
+    - Document type → "READ/PLAN-FIRST → IMPLEMENTATION → PostgreSQL EVIDENCE → S5 PASS / CLOSED".
+    - Directive IDs → full sequence: `WAVE5-5C-M3-READ-PLAN-FIRST-01` → `WAVE5-5C-M3-IMPLEMENT-01` → `WAVE5-5C-M3-PG-EVIDENCE-GATE-01` → `S5-5C-M3-P0-03-CLOSE`.
+    - M3 Closure blockquote → full closure narrative with evidence basis + scope limitation.
+  - `WAVE5_EVIDENCE.md`:
+    - §6 → "Canonical Governance State (Authoritative — 5C M16 + M3 S5 PASS / CLOSED)" + both closure directives + full 5C section with M16 CLOSED + M3 CLOSED + M9/M10 HOLD + CLASS B/D/E HOLD + reconciliationAutoRepair OFF.
+    - §7 → "M16 + M3 are both S5 PASS / CLOSED" + closure scope + not-authorized list + next governance checkpoint (M9 READ/PLAN-FIRST recommended).
+- Appended this `5c-m3-s5-closure` worklog entry.
+
+### Evidence preservation
+- ✅ `evidence/wave5-5c/evidence-M3-E1-E8-sqlite-5c.json` — unchanged (commit `06cf709`).
+- ✅ `evidence/wave5-5c/evidence-M3-E9-E12-postgresql-5c.json` — unchanged (commit `ecf84fb`).
+- ✅ Did NOT regenerate, rewrite, or alter evidence artifacts.
+
+### Stage Summary
+- **Wave-5 Sub-Wave 5C — M3: S5 PASS / CLOSED.**
+- Directive ID: `S5-5C-M3-P0-03-CLOSE`.
+- Closure scope: M3 gateway-verified status remediation ONLY (CAPTURE_PENDING → CAPTURED).
+- 5C is PARTIALLY CLOSED (M16 + M3 only — M9/M10 + CLASS B/D/E remain LOCKED).
+- All evidence artifacts preserved (not regenerated).
+- Documentation-only closure commit (no code/schema/evidence changes).
+- `reconciliationAutoRepair` flag remains OFF in production.
+- Production NOT AUTHORIZED. `realPayments` OFF. `webhookHandler` OFF. `requestHashEnforcement` OFF.
+- Wave-6 / Wave-7 LOCKED.
+- Wave-3/4/5A/5B/5C-M16 CLOSED — immutable.
+- Next governance checkpoint: Orchestrator directive on M9 (READ/PLAN-FIRST Gate Review recommended) OR M10 OR CLASS B/D/E OR 5C full closure OR Wave-6/Wave-7. IDE will not begin any until separate explicit directive.
+- IDE is STOPPING after commit + push.

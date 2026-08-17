@@ -1,13 +1,13 @@
-# Wave-5 Sub-Wave 5C — M3 Missing Capture Status: READ/PLAN-FIRST Gate Review
+# Wave-5 Sub-Wave 5C — M3 Missing Capture Status: S5 PASS / CLOSED
 
-**Document type:** Gate Review (READ/PLAN-FIRST — NO implementation authorization).
-**Directive ID:** `WAVE5-5C-M3-READ-PLAN-FIRST-01`
+**Document type:** Gate Review (READ/PLAN-FIRST → IMPLEMENTATION → PostgreSQL EVIDENCE → S5 PASS / CLOSED).
+**Directive IDs:** `WAVE5-5C-M3-READ-PLAN-FIRST-01` (Gate Review) → `WAVE5-5C-M3-IMPLEMENT-01` (Implementation) → `WAVE5-5C-M3-PG-EVIDENCE-GATE-01` (PostgreSQL Evidence) → `S5-5C-M3-P0-03-CLOSE` (Closure).
 **Author:** IDE (read-only synthesis from repository + M16 closure evidence).
-**Orchestrator directive:** Sub-Wave 5C — M3 READ/PLAN-FIRST AUTHORIZED. M3 implementation 🔒 NOT YET AUTHORIZED. M9/M10 remain on HOLD. 5C financial mutation 🔒 NOT AUTHORIZED.
+**Orchestrator directive:** Sub-Wave 5C — M3 is S5 PASS / CLOSED (Directive ID: `S5-5C-M3-P0-03-CLOSE`, 2026-08-17). M9/M10 + CLASS B/D/E remain LOCKED. 5C is PARTIALLY CLOSED (M16 + M3 only).
 **Created:** 2026-08-16
 **Scope:** M3 — Missing Capture Status (Payment has capture ledger pair but status still CAPTURE_PENDING past publisher retry window).
 
-> **Governance rule:** This document is a READ-ONLY planning artifact. It does NOT authorize implementation, schema change, migration, evidence workflow, remediation worker, or any financial mutation. The IDE has NOT written any M3 code. M3 implementation requires a separate Orchestrator directive after this Gate Review is reviewed.
+> **M3 Closure (Orchestrator Directive `S5-5C-M3-P0-03-CLOSE`):** M3 (gateway-verified status remediation — CAPTURE_PENDING → CAPTURED) is S5 PASS / CLOSED. The closure is based on SQLite E1-E8 (8/8 PASS) + PostgreSQL E9-E12 (8/8 PASS) + `moneyStateUnchanged=true` + `noDuplicateRemediationActions=true` + `financialMutation=false` + `falsePositives=0`. M3 closure applies ONLY to the gateway-verified status-flip remediation scope. It does NOT authorize M9/M10 (CLASS C — stuck-state/retry semantics), CLASS B (ledger synthesis), CLASS D (quarantine), or CLASS E (never auto-repaired). The `reconciliationAutoRepair` flag remains OFF in production. See `WAVE5_EVIDENCE.md` §6 for the full canonical governance state.
 
 > **Orchestrator constraint honored:** M16 closure proved **operational remediation safety** (outbox lag — no financial mutation). M3 is a **gateway-verified status mutation** — a fundamentally different safety boundary. M16's safety does NOT transfer to M3. M3 requires its own evidence package + its own Orchestrator authorization.
 

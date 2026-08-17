@@ -348,9 +348,13 @@ Per-scenario results (PostgreSQL, staging Supabase):
 
 ---
 
-## 6. Canonical Governance State (Authoritative — 5C M16 S5 PASS / CLOSED)
+## 6. Canonical Governance State (Authoritative — 5C M16 + M3 S5 PASS / CLOSED)
 
-> **Orchestrator Directive `S5-5C-M16-P0-03-CLOSE` (2026-08-16):** Sub-Wave 5C — M16 (outbox lag — operational, non-financial remediation) is S5 PASS / CLOSED. The closure applies ONLY to M16. It does NOT authorize M3/M9/M10, CLASS B/D/E remediation, production deployment, or feature-flag activation. 5C is PARTIALLY CLOSED (M16 only).
+> **Orchestrator Directives:**
+> - `S5-5C-M16-P0-03-CLOSE` (2026-08-16): M16 (operational outbox-lag remediation) S5 PASS / CLOSED.
+> - `S5-5C-M3-P0-03-CLOSE` (2026-08-17): M3 (gateway-verified status remediation — CAPTURE_PENDING → CAPTURED) S5 PASS / CLOSED.
+>
+> Both closures apply ONLY to their respective remediation scopes. They do NOT authorize M9/M10, CLASS B/D/E remediation, production deployment, or feature-flag activation. 5C is PARTIALLY CLOSED (M16 + M3 only).
 
 ```text
 Wave-0        ✅ CLOSED
@@ -379,13 +383,22 @@ Wave-5
               ├─ E6 scale           ✅ (1000 payments, 2331ms < 30s SLA, falsePositives=0)
               └─ Detection-only contract CLOSED
 
-  5C          🟡 PARTIALLY CLOSED (M16 only — S5 PASS / CLOSED)
+  5C          🟡 PARTIALLY CLOSED (M16 + M3 — both S5 PASS / CLOSED)
               ├─ Gate Review          ✅ COMPLETE (Directive WAVE5-5C-P0-03-REMEDIATION-GATE)
-              ├─ M16 Implementation   ✅ COMPLETE (Directive WAVE5-5C-P0-03-IMPLEMENT-M16-FIRST)
-              ├─ M16 SQLite E1-E8     ✅ 8/8 PASS (moneyStateUnchanged=true, financialMutation=false)
-              ├─ M16 PostgreSQL E9-E12 ✅ 8/8 PASS (noDuplicateRemediationActions=true, falsePositives=0)
-              ├─ M16 S5               ✅ PASS / CLOSED (Directive S5-5C-M16-P0-03-CLOSE)
-              ├─ M3                   🔒 HOLD — separate authorization required
+              │
+              ├─ M16 (Operational — outbox lag)
+              │    ├─ Implementation   ✅ (Directive WAVE5-5C-P0-03-IMPLEMENT-M16-FIRST)
+              │    ├─ SQLite E1-E8     ✅ 8/8 PASS
+              │    ├─ PostgreSQL E9-E12 ✅ 8/8 PASS
+              │    └─ S5               ✅ PASS / CLOSED (Directive S5-5C-M16-P0-03-CLOSE)
+              │
+              ├─ M3 (Gateway-verified status remediation — CAPTURE_PENDING → CAPTURED)
+              │    ├─ Gate Review       ✅ (Directive WAVE5-5C-M3-READ-PLAN-FIRST-01)
+              │    ├─ Implementation   ✅ (Directive WAVE5-5C-M3-IMPLEMENT-01)
+              │    ├─ SQLite E1-E8     ✅ 8/8 PASS
+              │    ├─ PostgreSQL E9-E12 ✅ 8/8 PASS (moneyStateUnchanged=true, noDuplicateRemediationActions=true, falsePositives=0)
+              │    └─ S5               ✅ PASS / CLOSED (Directive S5-5C-M3-P0-03-CLOSE)
+              │
               ├─ M9                   🔒 HOLD — separate authorization required
               ├─ M10                  🔒 HOLD — separate authorization required
               ├─ M2/M7/M13            🔒 HOLD (CLASS B — ledger synthesis HIGH RISK)
@@ -407,39 +420,20 @@ Wave-7                   🔒 LOCKED (P0-07 Pickup Attribution)
 
 ## 7. Stop Point
 
-Sub-Wave 5C — M16 is **S5 PASS / CLOSED** (Orchestrator Directive `S5-5C-M16-P0-03-CLOSE`). 5C is PARTIALLY CLOSED (M16 only — M3/M9/M10 + CLASS B/D/E remain LOCKED). The IDE is STOPPING.
+Sub-Wave 5C — M16 + M3 are both **S5 PASS / CLOSED**. 5C is PARTIALLY CLOSED (M16 + M3 only — M9/M10 + CLASS B/D/E remain LOCKED). The IDE is STOPPING.
 
-> **M16 closure scope (Orchestrator directive):** M16 closure applies ONLY to the operational outbox-lag remediation scope. M16 is closed as an **operational remediation**, NOT as a financial-state repair mechanism. The IDE does NOT self-authorize M3/M9/M10, CLASS B/D/E remediation, production deployment, or feature-flag activation. The `reconciliationAutoRepair` flag remains OFF in production.
+> **Closure scope:** M16 is closed as an **operational remediation** (publisher trigger). M3 is closed as a **gateway-verified status remediation** (CAPTURE_PENDING → CAPTURED via `fetchRazorpayPaymentStatus()`). Neither closure authorizes M9/M10, CLASS B/D/E remediation, production deployment, or feature-flag activation.
 
-**M16 evidence record (preserved — NOT regenerated):**
-- M16 implementation is COMPLETE (operational remediation: re-validation → idempotent RemediationAction → publisher trigger → post-repair verification).
-- SQLite evidence E1-E8 all PASS (8/8), including no money-state mutation.
-- PostgreSQL evidence E9-E12 all PASS (8/8) on staging Supabase, including the PostgreSQL-mandatory checks:
-  - `moneyStateUnchanged=true` (zero money-state row diffs on PostgreSQL).
-  - `noDuplicateRemediationActions=true` (unique constraint dedup under real PostgreSQL row-level locking).
-  - `financialMutation=false`.
-  - `falsePositives=0`.
-  - `reconciliationAutoRepair` flag respected: DISABLED when OFF, executes when ON.
-- M16 is **CLOSED** — S5 PASS / CLOSED per Orchestrator Directive `S5-5C-M16-P0-03-CLOSE`.
-- `EVIDENCE_TEST_MODE` + `FEATURE_RECONCILIATION_AUTO_REPAIR` removed from Vercel after evidence run (safe state restored).
-- Test data cleaned up from staging Supabase.
-- Wave-3/4/5A CLOSED invariants untouched (M16 is read-only w.r.t. money-state tables — E4/E11 prove 0 mutation).
-
-**M16 operational boundary (remains in force):**
-- M16 does NOT mutate Payment, Refund, LedgerEntry, WebhookEvent, IdempotencyKey, AuditLog.
-- M16 does NOT directly mutate Outbox rows (it triggers the publisher via HTTP, which is an operational action).
-- M16 does NOT call Razorpay, capture payments, issue refunds, or repair financial state.
-
-**Not authorized (even after M16 closure):**
-- ❌ M3 / M9 / M10 implementation (CLASS C — gateway-verified status mutation — separate authorization required).
+**Not authorized (even after M16 + M3 closure):**
+- ❌ M9 / M10 implementation (CLASS C — stuck-state/retry semantics — separate authorization required).
 - ❌ M2 / M7 / M13 remediation (CLASS B — ledger synthesis HIGH RISK — separate authorization required).
 - ❌ M11 / M12 / M14 remediation (CLASS D — quarantine + manual review — always escalated, never auto-repaired).
 - ❌ M1 / M4 / M5 / M6 / M8 / M15 / M17 remediation (CLASS E — never auto-repaired — accounting/forensic review only).
-- ❌ 5C full closure (5C is PARTIALLY CLOSED — M16 only).
+- ❌ 5C full closure (5C is PARTIALLY CLOSED — M16 + M3 only).
 - ❌ Production deployment / feature-flag activation (`reconciliationAutoRepair` remains OFF).
 - ❌ Wave-6 / Wave-7.
 
-**Next governance checkpoint:** Orchestrator directive on M3/M9/M10 (individually authorized) OR CLASS B/D/E (separate authorization boundary) OR 5C full closure (when all authorized classes are closed) OR Wave-6 (P0-06 State Separation) OR Wave-7 (P0-07 Pickup Attribution). The IDE will not begin any of these until a separate explicit Orchestrator directive is issued.
+**Next governance checkpoint:** Orchestrator directive on M9 (READ/PLAN-FIRST Gate Review recommended) OR M10 OR CLASS B/D/E OR 5C full closure OR Wave-6 (P0-06 State Separation) OR Wave-7 (P0-07 Pickup Attribution). The IDE will not begin any of these until a separate explicit Orchestrator directive is issued.
 
 ---
 
