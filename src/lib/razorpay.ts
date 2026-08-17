@@ -104,14 +104,23 @@ export function verifyRazorpaySignature(
 /**
  * Capture a Razorpay payment.
  * In demo mode, returns a simulated capture response.
+ *
+ * Gateway idempotency key (Wave-5 Gateway Idempotency workstream):
+ * When `idempotencyKey` is provided, it is passed as the `X-Idempotency-Key`
+ * header to the Razorpay API. Razorpay deduplicates on retry — calling
+ * capture with the same key + same payment returns the cached response
+ * instead of charging again. This protects against publisher retry after
+ * a crash between the gateway call + the success-txn commit.
  */
 export async function captureRazorpayPayment(
   razorpayPaymentId: string,
   amount: number,
   currency: string = 'INR',
+  idempotencyKey?: string,
 ): Promise<RazorpayCaptureResponse> {
   if (!isFeatureEnabled('realPayments')) {
     // Demo mode: simulate successful capture
+    // The idempotencyKey is accepted but not sent to a real gateway.
     return {
       captured: true,
       gatewayPaymentId: razorpayPaymentId,
@@ -120,7 +129,13 @@ export async function captureRazorpayPayment(
   }
 
   const instance = getRazorpayInstance()!
-  const capture = await instance.payments.capture(razorpayPaymentId, amount, currency)
+  // Pass the idempotency key as a header if provided.
+  // Razorpay's API supports X-Idempotency-Key on certain endpoints.
+  // The key is read from the outbox payload by the publisher.
+  const options = idempotencyKey
+    ? { headers: { 'X-Idempotency-Key': idempotencyKey } }
+    : undefined
+  const capture = await instance.payments.capture(razorpayPaymentId, amount, currency, options)
 
   return {
     captured: capture.captured === true,
@@ -367,15 +382,21 @@ export interface RazorpayRefundResponse {
  * @param razorpayPaymentId - The Razorpay payment ID (pay_*)
  * @param amount - Refund amount in paise (must be > 0; for full refund, equals Payment.amount)
  * @param currency - ISO 4217 currency code (default INR)
+ * @param idempotencyKey - Optional pre-generated gateway idempotency key (Wave-5 Gateway Idempotency workstream).
+ *   When provided, passed as `idempotency_key` in the refund request body. Razorpay
+ *   deduplicates on retry — calling refund with the same key + same payment returns
+ *   the cached response instead of refunding again.
  * @returns RazorpayRefundResponse — refunded=true on success
  */
 export async function refundRazorpayPayment(
   razorpayPaymentId: string,
   amount: number,
   currency: string = 'INR',
+  idempotencyKey?: string,
 ): Promise<RazorpayRefundResponse> {
   if (!isFeatureEnabled('realPayments')) {
     // Demo mode: simulate successful refund
+    // The idempotencyKey is accepted but not sent to a real gateway.
     return {
       refunded: true,
       gatewayRefundId: `rpf_demo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -385,7 +406,13 @@ export async function refundRazorpayPayment(
   }
 
   const instance = getRazorpayInstance()!
-  const refund = await instance.payments.refund(razorpayPaymentId, { amount, currency })
+  // Pass the idempotency key in the refund request body if provided.
+  // Razorpay's refund API supports `idempotency_key` per their docs.
+  const refundParams: Record<string, unknown> = { amount, currency }
+  if (idempotencyKey) {
+    refundParams.idempotency_key = idempotencyKey
+  }
+  const refund = await instance.payments.refund(razorpayPaymentId, refundParams)
 
   // Razorpay refund statuses: 'pending' | 'processed' | 'failed'.
   // 'pending' means the refund request is accepted and queued for processing

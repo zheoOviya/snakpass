@@ -83,7 +83,7 @@ export async function GET(req: Request) {
   // 4. AuditLog (PAYMENT_CAPTURED for this order)
   const auditLog = await db.auditLog.findFirst({
     where: {
-      action: 'PAYMENT_CAPTURED',
+      action: { in: ['PAYMENT_CAPTURED', 'PAYMENT_CAPTURE_PENDING'] },
       metadata: { contains: orderId },
     },
     select: { id: true, action: true, createdAt: true },
@@ -97,7 +97,7 @@ export async function GET(req: Request) {
         aggregateType: 'Payment',
         aggregateId: payment.id,
       },
-      select: { id: true, eventId: true, status: true, eventType: true, createdAt: true },
+      select: { id: true, eventId: true, status: true, eventType: true, createdAt: true, payload: true },
     })
   }
 
@@ -333,6 +333,7 @@ export async function GET(req: Request) {
     outboxExists: !!outbox,
     outboxId: outbox?.id ?? null,
     outboxStatus: outbox?.status ?? null,
+    outboxPayload: outbox?.payload ?? null,
     idempotencyRecordExists: !!idempotencyRecord,
     idempotencyRecordId: idempotencyRecord?.id ?? null,
     idempotencyResourceId: idempotencyRecord?.resourceId ?? null,
