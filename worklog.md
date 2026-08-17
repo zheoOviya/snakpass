@@ -8150,3 +8150,95 @@ Per-scenario results:
 - M10 = EVIDENCE-COMPLETE (SQLite only). PostgreSQL E9-E12 NOT authorized.
 - S5 closure NOT authorized.
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5c-m10-pg-evidence — Wave-5 5C M10 PostgreSQL Evidence Gate (E9-E12)
+
+Timestamp: 2026-08-17 (Orchestrator WAVE5-5C-M10-PG-EVIDENCE-GATE-01 directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized M10 PostgreSQL Evidence Gate:
+1. Verify preconditions.
+2. Create + push M10 PostgreSQL evidence workflow.
+3. Trigger workflow → set EVIDENCE_TEST_MODE + FEATURE_RECONCILIATION_AUTO_REPAIR → fresh Vercel deployment → run M10 evidence on PostgreSQL → collect evidence JSON → cleanup → remove env vars.
+4. Capture + verify evidence JSON + orchestratorRequiredFields.
+5. Verify flag cleanup.
+6. Commit evidence + worklog + push.
+7. STOP for Orchestrator S5 decision (do NOT self-close M10).
+
+### Governance boundaries honored
+- ✅ PostgreSQL evidence only — no M10 closure, no other implementation.
+- ✅ No production deployment. No production feature-flag activation.
+- ✅ EVIDENCE_TEST_MODE + FEATURE_RECONCILIATION_AUTO_REPAIR removed from Vercel after run.
+- ✅ Test data cleaned up from staging Supabase.
+- ✅ Wave-3/4/5A/5B/5C-M16/M3/M9 CLOSED invariants untouched.
+
+### Preconditions verified (ALL PASS)
+1. ✅ Git working tree clean.
+2. ✅ HEAD = `ab0aa04` (M10 implementation).
+3. ✅ M10 SQLite evidence preserved (8/8 PASS).
+4. ✅ reconciliationAutoRepair OFF.
+5. ✅ EVIDENCE_TEST_MODE not active.
+6. ✅ M3/M9/M16 closed implementations untouched.
+7. ✅ CLOSED wave code untouched.
+
+### PostgreSQL Evidence Results (ALL 8/8 PASS)
+- Run ID: `5c-m10-1786932461379-136aae78` (from evidence JSON)
+- Evidence file: `evidence/wave5-5c/evidence-M10-E9-E12-postgresql-5c.json`
+- `ok`: true
+- `database`: postgresql
+- `summary`: {passed: 8, total: 8}
+- `governance`: {realPaymentsEnabled: false, productionTouched: false, financialMutation: false, externalGatewayCall: false, automaticRepair: false}
+
+Per-scenario results (PostgreSQL):
+- ✅ **E1** Full refund — gateway confirmed processed → Refund REFUNDED + Payment REFUNDED.
+- ✅ **E2** Re-validation prevents stale repair — no M10 finding for REFUNDED refund.
+- ✅ **E3** Idempotent retry — 1 RemediationAction, second SKIPPED (unique constraint dedup on PostgreSQL).
+- ✅ **E4** No money-state mutation — Ledger + Outbox rows unchanged (5A Option A + SI-11 confirmed on PostgreSQL).
+- ✅ **E5** Gateway `pending` → ESCALATED. Refund stays REFUND_PENDING.
+- ✅ **E6** Gateway `unknown` → ESCALATED. Refund stays REFUND_PENDING.
+- ✅ **E7** Flag respected — not DISABLED when ON.
+- ✅ **E8** Post-repair verification — finding resolved, action SUCCEEDED, Refund + Payment REFUNDED.
+
+### Orchestrator required fields (verified)
+```json
+{
+  "database": "postgresql",
+  "moneyStateUnchanged": true,
+  "noDuplicateRemediationActions": true,
+  "scaleCorrect": true,
+  "falsePositives": 0,
+  "ok": true
+}
+```
+
+### PostgreSQL direct verification (E11 — includes LedgerEntry + Outbox count)
+- `RemediationAction` (M10_GATEWAY_VERIFIED_REFUND_STATUS_FLIP): 7
+- `ReconciliationFinding` (M10_STUCK_REFUND_PENDING): 7
+- `ReconciliationFinding` (M10 resolved): 5
+- `Refund` (REFUNDED): 7
+- `Payment` (REFUNDED): 6 (full refunds)
+- `Refund` (total): 9 (untouched by M10 beyond the status flip)
+- `LedgerEntry`: 2100 (untouched by M10 — 5A Option A: no new ledger entries)
+- `Outbox`: 57 (untouched by M10 — SI-11: NO outbox mutation)
+
+### Flag cleanup verification
+- ✅ `EVIDENCE_TEST_MODE` removed from Vercel.
+- ✅ `FEATURE_RECONCILIATION_AUTO_REPAIR` removed from Vercel.
+
+### Stage Summary
+- **M10 PostgreSQL Evidence: PASS (8/8 on PostgreSQL).**
+- All orchestratorRequiredFields met: `moneyStateUnchanged=true`, `noDuplicateRemediationActions=true`, `scaleCorrect=true`, `falsePositives=0`, `ok=true`.
+- **LedgerEntry unchanged** — confirms 5A Option A (SI-10: NO ledger mutation, reversal entries become canonical).
+- **Outbox unchanged** — confirms SI-11 (NO outbox enqueue/re-enqueue).
+- M10 remediation is gateway-verified refund status mutation — ZERO unauthorized money-state mutation on PostgreSQL.
+- Only `processed` gateway status → status flip. All other statuses → escalate.
+- Feature flag respected: DISABLED when OFF, executes when ON.
+- EVIDENCE_TEST_MODE + FEATURE_RECONCILIATION_AUTO_REPAIR removed from Vercel after run.
+- Test data cleaned up from staging Supabase.
+- Wave-3/4/5A/5B/5C-M16/M3/M9 CLOSED invariants untouched.
+- M10 = EVIDENCE-COMPLETE (SQLite + PostgreSQL). S5 closure = ORCHESTRATOR DECISION PENDING.
+- IDE is STOPPING after commit + push. Awaiting Orchestrator S5 PASS / CLOSED decision on M10.
