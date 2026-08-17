@@ -7745,3 +7745,88 @@ Execute the Orchestrator-authorized M9 READ/PLAN-FIRST Gate Review (Directive ID
 - M10 remains on HOLD.
 - Next governance checkpoint: Orchestrator decision on M9 implementation authorization (separate directive required).
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5c-m9-implementation — Wave-5 5C M9 Stuck CAPTURE_PENDING Remediation Implementation
+
+Timestamp: 2026-08-17 (Orchestrator WAVE5-5C-M9-IMPLEMENT-01 directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized M9 implementation (Directive ID: `WAVE5-5C-M9-IMPLEMENT-01`):
+- Implement M9 status-flip path ONLY (CAPTURE_PENDING → CAPTURED via gateway-verified `captured`).
+- NO outbox re-enqueue. NO captureRazorpayPayment() call. NO outbox mutation.
+- SQLite evidence E1-E8.
+- Commit + push.
+- STOP — do NOT self-close M9; do NOT run PostgreSQL evidence.
+
+### Governance boundaries honored
+- ✅ M9 status-flip path ONLY — NO re-enqueue, NO capture API call, NO outbox mutation.
+- ✅ M9 remediation ONLY mutates Payment.status (CAPTURE_PENDING → CAPTURED).
+- ✅ Gateway fetch OUTSIDE txn body (TRANSACTION_RETRY_INVARIANT — SI-5).
+- ✅ ONLY `captured` gateway status → flip. All other statuses → escalate (SI-3, SI-13).
+- ✅ Conditional updateMany (WHERE status=CAPTURE_PENDING — SI-4).
+- ✅ RemediationAction audit + AuditLog entry (SI-6, SI-7).
+- ✅ NO LedgerEntry mutation (SI-10). NO Outbox mutation (SI-11). NO capture/refund call (SI-12).
+- ✅ NO modification of M16/M3 closed remediation logic or CLOSED Wave-3/4/5A code.
+- ✅ `reconciliationAutoRepair` flag OFF by default (SI-9).
+- ✅ NO PostgreSQL evidence run. NO production deployment. NO feature-flag activation.
+- ✅ Wave-6/7 NOT started. M10 NOT implemented.
+
+### Implementation
+1. **`src/lib/reconciliation.ts`** — Added M9 remediation handler (~300 lines):
+   - `remediateM9StuckCapturePending(findingId)`: mirrors M3 pattern exactly.
+     - Feature flag check (SI-9) → DISABLED if OFF.
+     - Re-validate (SI-1) → re-read Payment.status; if not CAPTURE_PENDING → SKIPPED (stale).
+       - This also deduplicates with M3 (SI-14): if M3 already flipped to CAPTURED, M9 skips.
+     - Create RemediationAction (SI-2) → idempotent via unique constraint.
+     - [OUTSIDE txn] Call `fetchRazorpayPaymentStatus()` (SI-5, SI-12).
+     - If gateway says `captured` → proceed to conditional updateMany.
+       If gateway says anything else → escalate (SI-3, SI-13) + return ESCALATED.
+       If gateway call throws → abort + return FAILED (SI-3).
+     - [INSIDE txn] Conditional `Payment.updateMany WHERE status=CAPTURE_PENDING → CAPTURED` (SI-4)
+       + RemediationAction update + AuditLog (SI-7) + ReconciliationFinding resolution.
+     - [OUTSIDE txn] Post-repair verification (SI-8).
+   - `processM9Remediations()` — batch processes all unresolved M9 findings.
+   - `revalidateM9Finding()` — re-reads Payment.status to confirm still CAPTURE_PENDING.
+
+2. **Evidence endpoints** (3 new routes):
+   - `m9-evidence-setup/route.ts` — scenarios: m9-captured, m9-authorized, m9-gateway-error, m9-stale, clean.
+   - `m9-evidence-run/route.ts` — actions: detect, remediate-one, remediate-all, list-m9-findings.
+   - `m9-evidence-verify/route.ts` — returns M9 findings + RemediationActions + money-state snapshot.
+
+3. **Evidence runner** (`scripts/wave5-5c-m9-evidence.mjs`) + wrapper (`scripts/run-5c-m9-evidence.sh`).
+
+4. Installed `razorpay` npm package (was missing from node_modules after repository reset).
+
+### SQLite Evidence Results (ALL 8/8 PASS)
+- Run ID: `5c-m9-1786927842983-29a89e55`
+- Artifact: `evidence/wave5-5c/evidence-M9-E1-E8-sqlite-5c.json`
+- `ok`: true
+- `summary`: {passed: 8, total: 8}
+
+Per-scenario results:
+- ✅ **E1** M9 detection + gateway-confirmed status flip — Payment CAPTURE_PENDING → CAPTURED. RemediationAction created.
+- ✅ **E2** Re-validation prevents stale repair — no M9 finding for CAPTURED payment (detector skipped).
+- ✅ **E3** Idempotent retry — 1 RemediationAction, second run SKIPPED.
+- ✅ **E4** No money-state mutation — Refund/Ledger/Outbox rows unchanged.
+- ✅ **E5** Gateway `authorized` → ESCALATED. Payment stays CAPTURE_PENDING.
+- ✅ **E6** Gateway `unknown` → ESCALATED. Payment stays CAPTURE_PENDING.
+- ✅ **E7** Flag respected — not DISABLED when ON.
+- ✅ **E8** Post-repair verification — finding resolved, action SUCCEEDED, Payment CAPTURED.
+
+### Stage Summary
+- **Wave-5 5C M9 (Stuck CAPTURE_PENDING Remediation) — IMPLEMENTED + SQLite evidence E1-E8 PASS (8/8).**
+- M9 status-flip path implemented (mirrors M3 — proven safe pattern).
+- NO re-enqueue path (prohibited — captureRazorpayPayment() not idempotent at gateway).
+- NO outbox mutation. NO capture/refund call. NO LedgerEntry mutation.
+- 14 safety invariants (M9-SI-1 through M9-SI-14) satisfied.
+- `reconciliationAutoRepair` flag OFF by default.
+- PostgreSQL evidence NOT run. NO production deployment.
+- M10 NOT implemented. CLASS B/D/E NOT remediated.
+- Wave-6/7 LOCKED. Production NOT AUTHORIZED.
+- M9 = EVIDENCE-COMPLETE (SQLite only). PostgreSQL E9-E12 NOT authorized.
+- S5 closure NOT authorized.
+- IDE is STOPPING after commit + push.
