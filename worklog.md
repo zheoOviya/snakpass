@@ -7671,3 +7671,77 @@ M3 is closed as a **gateway-verified status remediation** (CAPTURE_PENDING → C
 - Wave-3/4/5A/5B/5C-M16 CLOSED — immutable.
 - Next governance checkpoint: Orchestrator directive on M9 (READ/PLAN-FIRST Gate Review recommended) OR M10 OR CLASS B/D/E OR 5C full closure OR Wave-6/Wave-7. IDE will not begin any until separate explicit directive.
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5c-m9-gate-review — Wave-5 5C M9 Stuck CAPTURE_PENDING: READ/PLAN-FIRST Gate Review
+
+Timestamp: 2026-08-17 (Orchestrator WAVE5-5C-M9-READ-PLAN-FIRST-01 directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized M9 READ/PLAN-FIRST Gate Review (Directive ID: `WAVE5-5C-M9-READ-PLAN-FIRST-01`). Read-only planning — no implementation, no code changes, no schema changes, no evidence execution.
+
+### Governance boundaries honored
+- ✅ READ/PLAN-FIRST ONLY — no implementation, no code changes, no schema changes, no migrations.
+- ✅ No financial mutation. No Razorpay calls. No outbox enqueue. No status repair.
+- ✅ No feature-flag changes. No production deployment. No evidence execution.
+- ✅ No M10 implementation. No M16/M3 modification. No CLOSED wave modification.
+- ✅ Wave-6 / Wave-7 remain LOCKED.
+
+### Work Log
+- Read M9 detector implementation (`detectM9StuckCapturePending`):
+  - Triggers on: Payment CAPTURE_PENDING + createdAt < now-30min + outbox NOT PENDING/CLAIMED (FAILED/PUBLISHED/MISSING).
+  - Does NOT check hasCapturePair (unlike M3).
+  - Severity: HIGH.
+- Read M9 classification from 5C Gate Review: CLASS C (requires external Razorpay verification).
+- Analyzed M9 vs M3 overlap:
+  - M9a (outbox=PUBLISHED + hasCapturePair=true) → M3 ALSO fires → M9 remediation would be REDUNDANT with M3.
+  - M9b (outbox=PUBLISHED + hasCapturePair=FALSE) → M9 fires uniquely, but ledger is missing → M2 territory.
+  - M9c (outbox=FAILED) → publisher exhausted retries → gateway may or may not have captured.
+  - M9d (outbox=MISSING) → impossible by atomicity → escalate.
+- Read Payment state machine + all paths that transition CAPTURE_PENDING:
+  - Publisher capture handler (success → CAPTURED; failure → retry/FAILED).
+  - Webhook handler (payment.captured → CAPTURED; payment.failed → FAILED).
+- Read Razorpay integration: `fetchRazorpayPaymentStatus()` (READ-ONLY, already exists from M3). `captureRazorpayPayment()` (MUTATION — NOT idempotent at gateway).
+- Read TRANSACTION_RETRY_INVARIANT: external calls OUTSIDE txn body. `captureRazorpayPayment()` does NOT use a pre-generated idempotency key (§8.2 item 4 — deferred).
+- Race analysis (R1-R8): ALL SAFE for status-flip path. ⚠️ DANGEROUS for re-enqueue path (R2 — publisher retry race can cause duplicate capture at gateway).
+- Financial safety analysis: M9 can mutate Payment.status (status-flip) + Outbox (re-enqueue). Re-enqueue triggers publisher capture retry → potential DOUBLE-CHARGE.
+- Key finding: The **re-enqueue path** (gateway says NOT captured → re-enqueue outbox for capture retry) is **NOT safe** without a pre-generated idempotency key for `captureRazorpayPayment()`. This key is currently deferred (TRANSACTION_RETRY_INVARIANT.md §8.2 item 4).
+- Produced `WAVE5_5C_M9_GATE_REVIEW.md` — 14 sections (A-N):
+  - A. Executive Summary (CONDITIONAL GO — status-flip only, NO re-enqueue).
+  - B. Detector Semantics (triggering condition + M3 overlap).
+  - C. State Machine (CAPTURE_PENDING → CAPTURED/FAILED).
+  - D. Existing Recovery Paths (publisher, webhook, M3).
+  - E. External Dependencies (fetchRazorpayPaymentStatus + captureRazorpayPayment + outbox re-enqueue).
+  - F. Race Analysis (R1-R8 — all safe for status-flip, DANGEROUS for re-enqueue).
+  - G. Idempotency Analysis (status-flip idempotent; re-enqueue NOT idempotent — double-charge risk).
+  - H. Transaction Boundary (gateway fetch outside txn; re-enqueue inside txn but downstream capture is the risk).
+  - I. Financial-State Impact (Payment.status + Outbox mutation; Outbox re-enqueue = financial side-effect).
+  - J. Safety Invariants (M9-SI-1 through M9-SI-14 — including SI-11: NO outbox enqueue).
+  - K. Evidence Requirements (M9-E1 through M9-E12).
+  - L. Failure/Escalation Semantics (captured → flip; not-captured → ESCALATE, NOT re-enqueue).
+  - M. Implementation Boundary (status-flip ONLY; re-enqueue NOT authorized).
+  - N. Recommendation: CONDITIONAL GO (with critical constraints).
+
+### Key decisions documented
+- **Classification: CLASS C → CONDITIONAL GO** (with critical constraints).
+- **Safe path:** gateway says `captured` → flip to CAPTURED (identical to M3, already proven safe).
+- **DANGEROUS path:** gateway says `NOT captured` → re-enqueue outbox for capture retry → potential DOUBLE-CHARGE at gateway.
+- **Critical constraint:** The re-enqueue path is **NOT authorized** in the initial M9 implementation. It requires a pre-generated idempotency key for `captureRazorpayPayment()` (TRANSACTION_RETRY_INVARIANT.md §8.2 item 4 — currently deferred).
+- **M3 overlap:** M9a sub-case is redundant with M3 (both fire for the same Payment). M9's re-validation (SI-1) naturally deduplicates with M3 (if M3 already flipped to CAPTURED, M9's re-validation skips).
+- **14 safety invariants (M9-SI-1 through M9-SI-14):** including SI-11 (NO outbox enqueue) + SI-14 (dedup with M3).
+- **Operational meaning:** M9 catches stuck CAPTURE_PENDING where gateway DID capture (publisher success-txn crashed). It does NOT handle the retry sub-case (gateway did NOT capture — escalated to ExceptionQueue for manual review).
+
+### Stage Summary
+- **M9 READ/PLAN-FIRST Gate Review: ✅ COMPLETE.**
+- `WAVE5_5C_M9_GATE_REVIEW.md` produced (14 sections, CLASS C, CONDITIONAL GO with critical constraints).
+- **Recommendation: CONDITIONAL GO** — M9 status-flip path is safe (identical to M3, proven). Re-enqueue path is NOT safe (double-charge risk) — NOT authorized.
+- **Key finding:** `captureRazorpayPayment()` is NOT idempotent at the gateway without a pre-generated idempotency key. This is the fundamental safety gap that prevents the re-enqueue path from being authorized. The key is deferred per TRANSACTION_RETRY_INVARIANT.md §8.2 item 4.
+- NO code modified. NO schema changed. NO evidence run. NO production touched.
+- Wave-3/4/5A/5B/5C-M16/5C-M3 CLOSED — immutable.
+- `reconciliationAutoRepair` OFF. Wave-6/7 LOCKED. Production NOT AUTHORIZED.
+- M10 remains on HOLD.
+- Next governance checkpoint: Orchestrator decision on M9 implementation authorization (separate directive required).
+- IDE is STOPPING after commit + push.
