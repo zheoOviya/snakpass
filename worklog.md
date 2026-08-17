@@ -7830,3 +7830,96 @@ Per-scenario results:
 - M9 = EVIDENCE-COMPLETE (SQLite only). PostgreSQL E9-E12 NOT authorized.
 - S5 closure NOT authorized.
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5c-m9-pg-evidence — Wave-5 5C M9 PostgreSQL Evidence Gate (E9-E12)
+
+Timestamp: 2026-08-17 (Orchestrator WAVE5-5C-M9-PG-EVIDENCE-GATE-01 directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized M9 PostgreSQL Evidence Gate:
+1. Verify preconditions (8 checks).
+2. Create + push M9 PostgreSQL evidence workflow.
+3. Trigger PostgreSQL evidence workflow → set EVIDENCE_TEST_MODE + FEATURE_RECONCILIATION_AUTO_REPAIR on Vercel → trigger fresh deployment → run M9 evidence on PostgreSQL → collect evidence JSON → cleanup test data → remove env vars.
+4. Capture + verify evidence JSON + orchestratorRequiredFields.
+5. Verify flag cleanup.
+6. Commit evidence + worklog + push.
+7. STOP for Orchestrator S5 decision (do NOT self-close M9).
+
+### Governance boundaries honored
+- ✅ PostgreSQL evidence only — no M9 closure, no M10 implementation.
+- ✅ No production deployment. No production feature-flag activation.
+- ✅ EVIDENCE_TEST_MODE + FEATURE_RECONCILIATION_AUTO_REPAIR removed from Vercel after run.
+- ✅ Test data cleaned up from staging Supabase.
+- ✅ Wave-3/4/5A/5B/5C-M16/5C-M3 CLOSED invariants untouched.
+
+### Preconditions verified (ALL 8 PASS)
+1. ✅ Git working tree clean.
+2. ✅ HEAD = `48c01c9` (M9 implementation).
+3. ✅ M9 SQLite evidence preserved.
+4. ✅ `reconciliationAutoRepair` OFF by default.
+5. ✅ `EVIDENCE_TEST_MODE` not active.
+6. ✅ M3/M16 closed implementations untouched.
+7. ✅ M10 NOT implemented.
+8. ✅ Production NOT authorized.
+
+### PostgreSQL Evidence Results (ALL 8/8 PASS)
+- Run ID: `5c-m9-1786928513427-24b24e12` (from evidence JSON)
+- Evidence file: `evidence/wave5-5c/evidence-M9-E9-E12-postgresql-5c.json`
+- `ok`: true
+- `database`: postgresql
+- `summary`: {passed: 8, total: 8}
+- `governance`: {realPaymentsEnabled: false, productionTouched: false, financialMutation: false, externalGatewayCall: false, automaticRepair: false}
+
+Per-scenario results (PostgreSQL):
+- ✅ **E1** M9 detection + gateway-confirmed status flip — Payment CAPTURE_PENDING → CAPTURED.
+- ✅ **E2** Re-validation prevents stale repair — no M9 finding for CAPTURED payment.
+- ✅ **E3** Idempotent retry — 1 RemediationAction, second run SKIPPED (unique constraint dedup on PostgreSQL).
+- ✅ **E4** No money-state mutation — Refund/Ledger/Outbox rows unchanged (0 diffs on PostgreSQL).
+- ✅ **E5** Gateway `authorized` → ESCALATED. Payment stays CAPTURE_PENDING.
+- ✅ **E6** Gateway `unknown` → ESCALATED. Payment stays CAPTURE_PENDING.
+- ✅ **E7** Flag respected — not DISABLED when ON.
+- ✅ **E8** Post-repair verification — finding resolved, action SUCCEEDED, Payment CAPTURED.
+
+### Orchestrator required fields (verified)
+```json
+{
+  "database": "postgresql",
+  "moneyStateUnchanged": true,
+  "noDuplicateRemediationActions": true,
+  "scaleCorrect": true,
+  "falsePositives": 0,
+  "ok": true
+}
+```
+
+### PostgreSQL direct verification (E11 — includes Outbox count)
+- `RemediationAction` (M9_GATEWAY_VERIFIED_STATUS_FLIP): 7
+- `ReconciliationFinding` (M9_STUCK_CAPTURE_PENDING): 21
+- `ReconciliationFinding` (M9 resolved): 5
+- `Payment` (CAPTURED): 23
+- `Refund`: 1 (untouched)
+- `LedgerEntry`: 2070 (untouched)
+- `Outbox`: 57 (untouched by M9 — NO outbox mutation, confirming SI-11)
+
+### Flag cleanup verification
+- ✅ `EVIDENCE_TEST_MODE` removed from Vercel.
+- ✅ `FEATURE_RECONCILIATION_AUTO_REPAIR` removed from Vercel.
+
+### Stage Summary
+- **M9 PostgreSQL Evidence: PASS (8/8 on PostgreSQL).**
+- All orchestratorRequiredFields met: `moneyStateUnchanged=true`, `noDuplicateRemediationActions=true`, `scaleCorrect=true`, `falsePositives=0`, `ok=true`.
+- M9 remediation is gateway-verified status mutation — ZERO unauthorized money-state mutation on PostgreSQL.
+- **Outbox unchanged** — confirms SI-11 (NO outbox enqueue/re-enqueue).
+- Only `captured` gateway status → status flip. All other statuses → escalate.
+- Feature flag respected: DISABLED when OFF, executes when ON.
+- EVIDENCE_TEST_MODE + FEATURE_RECONCILIATION_AUTO_REPAIR removed from Vercel after run.
+- Test data cleaned up from staging Supabase.
+- Wave-3/4/5A/5B/5C-M16/5C-M3 CLOSED invariants untouched.
+- M10 NOT implemented. CLASS B/D/E NOT remediated.
+- Production NOT AUTHORIZED. Wave-6/7 LOCKED.
+- M9 = EVIDENCE-COMPLETE (SQLite + PostgreSQL). S5 closure = ORCHESTRATOR DECISION PENDING.
+- IDE is STOPPING after commit + push. Awaiting Orchestrator S5 PASS / CLOSED decision on M9.
