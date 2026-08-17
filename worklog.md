@@ -8242,3 +8242,62 @@ Per-scenario results (PostgreSQL):
 - Wave-3/4/5A/5B/5C-M16/M3/M9 CLOSED invariants untouched.
 - M10 = EVIDENCE-COMPLETE (SQLite + PostgreSQL). S5 closure = ORCHESTRATOR DECISION PENDING.
 - IDE is STOPPING after commit + push. Awaiting Orchestrator S5 PASS / CLOSED decision on M10.
+
+---
+
+## Task ID: 5c-m10-s5-closure — Wave-5 Sub-Wave 5C M10 S5 PASS / CLOSED
+
+Timestamp: 2026-08-17 (Orchestrator S5 PASS / CLOSED directive executed)
+
+Agent: main (IDE)
+
+### Directive
+- **Directive ID:** `S5-5C-M10-P0-03-CLOSE`
+- **Decision:** `S5 PASS / CLOSED` (M10 only — status-flip path, NO re-enqueue)
+- **Scope:** M10 (stuck REFUND_PENDING — gateway-verified refund status remediation)
+- **Closure basis:** SQLite E1-E8 (8/8 PASS) + PostgreSQL E9-E12 (8/8 PASS) + `moneyStateUnchanged=true` + `noDuplicateRemediationActions=true` + `financialMutation=false` + `falsePositives=0` + LedgerEntry unchanged (5A Option A confirmed) + Outbox unchanged (SI-11 confirmed)
+
+### Pre-closure verification (ALL 12 checks PASS)
+1. ✅ HEAD = `33589ed` (M10 PostgreSQL evidence).
+2. ✅ Working tree clean.
+3. ✅ M10 SQLite evidence preserved (commit `ab0aa04`).
+4. ✅ SQLite = 8/8 PASS.
+5. ✅ M10 PostgreSQL evidence preserved (commit `33589ed`).
+6. ✅ PostgreSQL = 8/8 PASS.
+7. ✅ orchestratorRequiredFields: all true (moneyStateUnchanged, noDuplicateRemediationActions, scaleCorrect, falsePositives=0, ok).
+8. ✅ EVIDENCE_TEST_MODE not set.
+9. ✅ FEATURE_RECONCILIATION_AUTO_REPAIR OFF.
+10. ✅ CLOSED-wave code untouched (capture route, refund route, webhook handler, publisher).
+11. ✅ M10 handler has NO refundRazorpayPayment/outbox/ledger mutation calls.
+12. ✅ All 4 CLASS-C remediation handlers (M16/M3/M9/M10) present.
+
+### Closure scope (critical distinction)
+M10 is closed as a **gateway-verified refund status-flip remediation** (REFUND_PENDING → REFUNDED via `fetchRazorpayRefundStatus()` + Payment CAPTURED → REFUNDED for full refund). 5A Option A: reversal ledger entries become canonical — NO new LedgerEntry rows created.
+
+PROHIBITED:
+- ❌ refundRazorpayPayment() call
+- ❌ Outbox re-enqueue
+- ❌ LedgerEntry mutation (5A Option A: reversal entries already exist, become canonical)
+- ❌ Outbox mutation
+
+M10's evidence proves **refund status-flip safety**, NOT refund-retry safety. The gateway idempotency-key gap remains outside this closure.
+
+### Work Log
+- Verified all 12 pre-closure checks → ALL PASS.
+- Documentation closure edits (documentation-only — no code/schema/evidence changes):
+  - `WAVE5_5C_M10_GATE_REVIEW.md`: title → "S5 PASS / CLOSED". Document type → full sequence. M10 Closure blockquote with scope limitation.
+  - `WAVE5_EVIDENCE.md` §6: governance state updated — M10 added as S5 PASS / CLOSED. All 4 CLASS-C gates (M16+M3+M9+M10) now CLOSED.
+  - `WAVE5_EVIDENCE.md` §7: stop point updated — M10 closure boundary documented + all 4 CLASS-C closures + next governance checkpoint (5C Consolidated Closure / Wave-5 Governance Review).
+- Appended this worklog entry.
+- Lint passes clean (documentation-only).
+
+### Stage Summary
+- **Wave-5 Sub-Wave 5C — M10: S5 PASS / CLOSED.**
+- Directive ID: `S5-5C-M10-P0-03-CLOSE`.
+- Closure scope: M10 gateway-verified refund status-flip remediation ONLY (NO re-enqueue, NO refund API call, NO ledger/outbox mutation).
+- 5C is PARTIALLY CLOSED — all 4 CLASS-C remediation gates (M16 + M3 + M9 + M10) now CLOSED. CLASS B/D/E remain LOCKED.
+- All evidence artifacts preserved (not regenerated).
+- `reconciliationAutoRepair` OFF. Production NOT AUTHORIZED.
+- Wave-6 / Wave-7 LOCKED.
+- Next governance checkpoint: Orchestrator's **5C Consolidated Closure / Wave-5 Governance Review**.
+- IDE is STOPPING after commit + push.

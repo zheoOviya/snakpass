@@ -383,7 +383,7 @@ Wave-5
               ├─ E6 scale           ✅ (1000 payments, 2331ms < 30s SLA, falsePositives=0)
               └─ Detection-only contract CLOSED
 
-  5C          🟡 PARTIALLY CLOSED (M16 + M3 + M9 — all S5 PASS / CLOSED)
+  5C          🟡 PARTIALLY CLOSED (M16 + M3 + M9 + M10 — all S5 PASS / CLOSED)
               ├─ Gate Review          ✅ COMPLETE (Directive WAVE5-5C-P0-03-REMEDIATION-GATE)
               │
               ├─ M16 (Operational — outbox lag)
@@ -406,7 +406,13 @@ Wave-5
               │    ├─ PostgreSQL E9-E12 ✅ 8/8 PASS (moneyStateUnchanged=true, Outbox unchanged — SI-11 confirmed)
               │    └─ S5               ✅ PASS / CLOSED (Directive S5-5C-M9-P0-03-CLOSE)
               │
-              ├─ M10                  🔒 HOLD — separate authorization required
+              ├─ M10 (Stuck REFUND_PENDING — status-flip only, NO re-enqueue)
+              │    ├─ Gate Review       ✅ (Directive WAVE5-5C-M10-READ-PLAN-FIRST-01)
+              │    ├─ Implementation   ✅ (Directive WAVE5-5C-M10-IMPLEMENT-01)
+              │    ├─ SQLite E1-E8     ✅ 8/8 PASS
+              │    ├─ PostgreSQL E9-E12 ✅ 8/8 PASS (moneyStateUnchanged=true, LedgerEntry + Outbox unchanged — 5A Option A + SI-11 confirmed)
+              │    └─ S5               ✅ PASS / CLOSED (Directive S5-5C-M10-P0-03-CLOSE)
+              │
               ├─ M2/M7/M13            🔒 HOLD (CLASS B — ledger synthesis HIGH RISK)
               ├─ M11/M12/M14          🔒 HOLD (CLASS D — quarantine + manual review)
               └─ M1/M4/M5/M6/M8/M15/M17 🔒 NO AUTO-REPAIR (CLASS E — accounting/forensic)
@@ -426,29 +432,35 @@ Wave-7                   🔒 LOCKED (P0-07 Pickup Attribution)
 
 ## 7. Stop Point
 
-Sub-Wave 5C — M16 + M3 + M9 are all **S5 PASS / CLOSED**. 5C is PARTIALLY CLOSED (M16 + M3 + M9 only — M10 + CLASS B/D/E remain LOCKED). The IDE is STOPPING.
+Sub-Wave 5C — M16 + M3 + M9 + M10 are all **S5 PASS / CLOSED**. All 4 CLASS-C remediation gates are closed. 5C is PARTIALLY CLOSED (M16 + M3 + M9 + M10 only — CLASS B/D/E remain LOCKED). The IDE is STOPPING.
 
-> **Closure scope:** M16 is closed as an **operational remediation** (publisher trigger). M3 is closed as a **gateway-verified status remediation** (CAPTURE_PENDING → CAPTURED via `fetchRazorpayPaymentStatus()`). M9 is closed as a **stuck-CAPTURE_PENDING status-flip remediation** (same pattern as M3, but with NO outbox re-enqueue — the retry/re-enqueue path remains PROHIBITED). None of these closures authorize M10, CLASS B/D/E remediation, production deployment, or feature-flag activation.
+> **Closure scope:**
+> - M16: operational remediation (publisher trigger for outbox lag).
+> - M3: gateway-verified Payment status remediation (CAPTURE_PENDING → CAPTURED via `fetchRazorpayPaymentStatus()`).
+> - M9: stuck-CAPTURE_PENDING status-flip remediation (same pattern as M3, NO outbox re-enqueue).
+> - M10: gateway-verified Refund status remediation (REFUND_PENDING → REFUNDED via `fetchRazorpayRefundStatus()` + Payment CAPTURED → REFUNDED for full refund. 5A Option A: reversal entries become canonical — NO new LedgerEntry rows).
+>
+> None of these closures authorize CLASS B/D/E remediation, production deployment, or feature-flag activation.
 
-**M9 closure boundary (critical distinction):**
-- Gateway status = `captured` → CAPTURE_PENDING → CAPTURED ✅
-- Gateway status ≠ `captured` → ESCALATE ✅
+**M10 closure boundary (critical distinction):**
+- Gateway refund status = `processed` → Refund REFUND_PENDING → REFUNDED ✅
+- Full refund → Payment CAPTURED → REFUNDED ✅
+- Gateway status ≠ `processed` → ESCALATE ✅
 - Outbox re-enqueue → PROHIBITED 🚫
-- Razorpay capture API → PROHIBITED 🚫
-- Refund / Ledger mutation → PROHIBITED 🚫
+- Razorpay refund API call → PROHIBITED 🚫
+- LedgerEntry mutation → PROHIBITED 🚫 (5A Option A: reversal entries become canonical)
 
-M9's evidence proves **status-flip safety**, NOT capture-retry safety. The gateway idempotency-key gap remains outside this closure.
+M10's evidence proves **refund status-flip safety**, NOT refund-retry safety. The gateway idempotency-key gap remains outside this closure.
 
-**Not authorized (even after M16 + M3 + M9 closure):**
-- ❌ M10 implementation (CLASS C — stuck REFUND_PENDING — separate authorization required).
+**Not authorized (even after all 4 CLASS-C closures):**
 - ❌ M2 / M7 / M13 remediation (CLASS B — ledger synthesis HIGH RISK — separate authorization required).
 - ❌ M11 / M12 / M14 remediation (CLASS D — quarantine + manual review — always escalated, never auto-repaired).
 - ❌ M1 / M4 / M5 / M6 / M8 / M15 / M17 remediation (CLASS E — never auto-repaired — accounting/forensic review only).
-- ❌ 5C full closure (5C is PARTIALLY CLOSED — M16 + M3 + M9 only).
+- ❌ 5C full closure (5C is PARTIALLY CLOSED — M16 + M3 + M9 + M10 only).
 - ❌ Production deployment / feature-flag activation (`reconciliationAutoRepair` remains OFF).
 - ❌ Wave-6 / Wave-7.
 
-**Next governance checkpoint:** Orchestrator directive on M10 (READ/PLAN-FIRST Gate Review recommended) OR CLASS B/D/E OR 5C full closure OR Wave-6 (P0-06 State Separation) OR Wave-7 (P0-07 Pickup Attribution). The IDE will not begin any of these until a separate explicit Orchestrator directive is issued.
+**Next governance checkpoint:** Orchestrator's **5C Consolidated Closure / Wave-5 Governance Review** — to decide whether remaining classes should be remediated, whether the deferred gateway-idempotency-key gap should be a separate workstream, whether production authorization can proceed, and whether Wave-6 has any governance prerequisite fulfilled.
 
 ---
 

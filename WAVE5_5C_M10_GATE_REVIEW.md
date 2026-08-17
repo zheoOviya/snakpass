@@ -1,13 +1,13 @@
-# Wave-5 Sub-Wave 5C — M10 Stuck REFUND_PENDING: READ/PLAN-FIRST Gate Review
+# Wave-5 Sub-Wave 5C — M10 Stuck REFUND_PENDING: S5 PASS / CLOSED
 
-**Document type:** Gate Review (READ/PLAN-FIRST — NO implementation authorization).
-**Directive ID:** `WAVE5-5C-M10-READ-PLAN-FIRST-01`
+**Document type:** Gate Review (READ/PLAN-FIRST → IMPLEMENTATION → PostgreSQL EVIDENCE → S5 PASS / CLOSED).
+**Directive IDs:** `WAVE5-5C-M10-READ-PLAN-FIRST-01` (Gate Review) → `WAVE5-5C-M10-IMPLEMENT-01` (Implementation) → `WAVE5-5C-M10-PG-EVIDENCE-GATE-01` (PostgreSQL Evidence) → `S5-5C-M10-P0-03-CLOSE` (Closure).
 **Author:** IDE (read-only synthesis from repository + M16/M3/M9 closure evidence).
-**Orchestrator directive:** Sub-Wave 5C — M10 READ/PLAN-FIRST AUTHORIZED. M10 implementation 🔒 NOT YET AUTHORIZED.
+**Orchestrator directive:** Sub-Wave 5C — M10 is S5 PASS / CLOSED (Directive ID: `S5-5C-M10-P0-03-CLOSE`, 2026-08-17). All 4 CLASS-C remediation gates (M16, M3, M9, M10) are now CLOSED. Other classes remain LOCKED.
 **Created:** 2026-08-17
 **Scope:** M10 — Stuck REFUND_PENDING (Refund.status='REFUND_PENDING' older than 30 min + outbox not PENDING/CLAIMED).
 
-> **Governance rule:** This document is a READ-ONLY planning artifact. It does NOT authorize implementation, schema change, migration, evidence workflow, or any financial mutation. The IDE has NOT written any M10 code. M10 implementation requires a separate Orchestrator directive after this Gate Review is reviewed.
+> **M10 Closure (Orchestrator Directive `S5-5C-M10-P0-03-CLOSE`):** M10 (gateway-verified refund status remediation — REFUND_PENDING → REFUNDED via `fetchRazorpayRefundStatus()` with NO outbox re-enqueue and NO refund API invocation) is S5 PASS / CLOSED. The closure is based on SQLite E1-E8 (8/8 PASS) + PostgreSQL E9-E12 (8/8 PASS) + `moneyStateUnchanged=true` + `noDuplicateRemediationActions=true` + `financialMutation=false` + `falsePositives=0` + LedgerEntry unchanged (5A Option A confirmed) + Outbox unchanged (SI-11 confirmed). M10 is closed specifically as a **gateway-verified refund status-flip remediation** — NOT as a refund-retry mechanism. The prohibited retry/re-enqueue path remains prohibited. The gateway idempotency-key gap remains outside this closure.
 
 > **Orchestrator constraint honored:** M10 involves REFUND_PENDING + 5A Option A ledger semantics — fundamentally more complex than M3/M9 (which are Payment-only status flips). M10 may interact with refund accounting, Payment.status transitions (for full refunds), and the 5A pending ledger reservation. M3/M9 safety does NOT transfer to M10.
 
