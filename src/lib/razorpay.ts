@@ -244,6 +244,101 @@ export async function fetchRazorpayPaymentStatus(
 }
 
 // ----------------------------------------------------------------------------
+// P0-03 Wave-5 Sub-Wave 5C — Razorpay refund status fetch (READ-ONLY)
+// ----------------------------------------------------------------------------
+// fetchRazorpayRefundStatus() is a READ-ONLY gateway query used by the M10
+// remediation handler to verify whether a refund actually occurred at the
+// gateway before flipping Refund.status from REFUND_PENDING to REFUNDED.
+//
+// SAFETY CONTRACT (Orchestrator hard boundary for 5C-M10):
+//   - This function is FETCH ONLY. It MUST NOT initiate, retry, or mutate
+//     any refund at the gateway.
+//   - It MUST be called OUTSIDE any withTransaction() body (TRANSACTION_RETRY_INVARIANT).
+//   - In demo mode (realPayments=false), it returns a mock status for evidence testing.
+//   - In real mode (realPayments=true), it calls instance.refunds.fetch(refundId).
+//
+// The returned status is used by the M10 handler to decide:
+//   'processed' → proceed with Refund.status flip (REFUND_PENDING → REFUNDED)
+//   'pending'    → DO NOT flip (refund not yet confirmed — escalate)
+//   'failed'     → DO NOT flip (refund failed — escalate)
+//   error/timeout → DO NOT flip (ambiguous — abort + retry later)
+
+export type RazorpayRefundStatus =
+  | 'processed'
+  | 'pending'
+  | 'failed'
+  | 'unknown'
+
+export interface RazorpayRefundStatusResponse {
+  status: RazorpayRefundStatus
+  refundId: string
+  amount: number // paise
+  currency: string
+  raw?: unknown // raw response for audit (real mode only)
+}
+
+/**
+ * Fetch the current status of a Razorpay refund.
+ *
+ * This is a READ-ONLY gateway query. It does NOT initiate, retry, or mutate
+ * any refund at the gateway. It MUST be called OUTSIDE any withTransaction()
+ * body (TRANSACTION_RETRY_INVARIANT — mirrors fetchRazorpayPaymentStatus pattern).
+ *
+ * In demo mode (realPayments=false): returns a mock status based on the
+ * EVIDENCE_GATEWAY_REFUND_STATUS env var (default: 'processed').
+ *
+ * In real mode (realPayments=true): calls instance.refunds.fetch(refundId)
+ * + maps the Razorpay refund status to our internal type.
+ *
+ * @param refundId - The Razorpay refund ID (rpf_*) OR the internal Refund.gatewayRefundId
+ * @returns RazorpayRefundStatusResponse — the authoritative gateway truth for the refund
+ */
+export async function fetchRazorpayRefundStatus(
+  refundId: string,
+): Promise<RazorpayRefundStatusResponse> {
+  if (!isFeatureEnabled('realPayments')) {
+    // Demo mode: return mock status for evidence testing.
+    const mockStatus = (process.env.EVIDENCE_GATEWAY_REFUND_STATUS as RazorpayRefundStatus) ?? 'processed'
+    return {
+      status: mockStatus,
+      refundId,
+      amount: 0,
+      currency: 'INR',
+    }
+  }
+
+  const instance = getRazorpayInstance()!
+  const refund = await instance.refunds.fetch(refundId)
+
+  // Map Razorpay refund status to our internal type.
+  // Razorpay refund statuses: 'pending' | 'processed' | 'failed'.
+  const razorpayStatus = refund.status ?? 'unknown'
+  let status: RazorpayRefundStatus
+  switch (razorpayStatus) {
+    case 'processed':
+      status = 'processed'
+      break
+    case 'pending':
+      status = 'pending'
+      break
+    case 'failed':
+      status = 'failed'
+      break
+    default:
+      status = 'unknown'
+      break
+  }
+
+  return {
+    status,
+    refundId,
+    amount: refund.amount ?? 0,
+    currency: refund.currency ?? 'INR',
+    raw: refund,
+  }
+}
+
+// ----------------------------------------------------------------------------
 // P0-04 Wave-5 Sub-Wave 5a — Razorpay refund (mirrors 4c capture pattern)
 // ----------------------------------------------------------------------------
 

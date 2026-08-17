@@ -8055,3 +8055,98 @@ Execute the Orchestrator-authorized M10 READ/PLAN-FIRST Gate Review. Read-only p
 - `reconciliationAutoRepair` OFF. Wave-6/7 LOCKED. Production NOT AUTHORIZED.
 - Next governance checkpoint: Orchestrator decision on M10 implementation authorization (separate directive required).
 - IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: 5c-m10-implementation — Wave-5 5C M10 Stuck REFUND_PENDING Remediation Implementation
+
+Timestamp: 2026-08-17 (Orchestrator WAVE5-5C-M10-IMPLEMENT-01 directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized M10 implementation (Directive ID: `WAVE5-5C-M10-IMPLEMENT-01`):
+- Add `fetchRazorpayRefundStatus()` to razorpay.ts (READ-ONLY, new gateway function).
+- Implement `remediateM10StuckRefundPending()` + `processM10Remediations()` in reconciliation.ts.
+- Implement M10 evidence harness (setup/run/verify endpoints).
+- Write + run SQLite evidence E1-E8.
+- Commit + push.
+- STOP — do NOT self-close M10; do NOT run PostgreSQL evidence.
+
+### Governance boundaries honored
+- ✅ M10 status-flip path ONLY — NO re-enqueue, NO refundRazorpayPayment() call, NO outbox mutation.
+- ✅ M10 remediation ONLY mutates Refund.status (REFUND_PENDING → REFUNDED) + Payment.status (CAPTURED → REFUNDED for full refund only).
+- ✅ NO LedgerEntry mutation (SI-10 — 5A Option A: reversal entries become canonical, NO new entries).
+- ✅ NO Outbox mutation (SI-11).
+- ✅ Gateway fetch OUTSIDE txn body (TRANSACTION_RETRY_INVARIANT — SI-5).
+- ✅ ONLY `processed` gateway status → flip. All other statuses → escalate (SI-3, SI-13).
+- ✅ Conditional updateMany (race-safe — SI-4, SI-15).
+- ✅ RemediationAction audit + AuditLog entry (SI-6, SI-7).
+- ✅ NO modification of M9/M3/M16 closed remediation logic or CLOSED Wave-3/4/5A code.
+- ✅ `reconciliationAutoRepair` flag OFF by default (SI-9).
+- ✅ NO PostgreSQL evidence run. NO production deployment.
+- ✅ Wave-6/7 NOT started.
+
+### Implementation
+1. **`src/lib/razorpay.ts`** — Added `fetchRazorpayRefundStatus(refundId)`:
+   - READ-ONLY gateway query (calls `instance.refunds.fetch(refundId)` in real mode).
+   - Demo mode: returns mock status controlled by `EVIDENCE_GATEWAY_REFUND_STATUS` env var.
+   - Maps Razorpay refund statuses: `processed`/`pending`/`failed` → internal type.
+   - MUST be called OUTSIDE any txn body (TRANSACTION_RETRY_INVARIANT).
+   - Does NOT initiate, retry, or mutate any refund at the gateway.
+
+2. **`src/lib/reconciliation.ts`** — Added M10 remediation handler (~350 lines):
+   - `remediateM10StuckRefundPending(findingId)`: mirrors M3/M9 pattern, adapted for Refund.
+     - Feature flag check (SI-9) → DISABLED if OFF.
+     - Re-validate (SI-1) → re-read Refund.status; if not REFUND_PENDING → SKIPPED.
+       - Deduplicates with publisher (SI-14): if publisher already flipped, M10 skips.
+     - Determine fullRefund (Refund.amount === Payment.amount) for SI-15.
+     - Create RemediationAction (SI-2) → idempotent via unique constraint.
+     - [OUTSIDE txn] Call `fetchRazorpayRefundStatus()` (SI-5, SI-12, SI-16).
+     - If gateway says `processed` → proceed.
+       If gateway says anything else → escalate (SI-3, SI-13) + return ESCALATED.
+     - [INSIDE txn] Conditional `Refund.updateMany WHERE status=REFUND_PENDING → REFUNDED` (SI-4)
+       + (if full refund) `Payment.updateMany WHERE status=CAPTURED → REFUNDED` (SI-15)
+       + RemediationAction update + AuditLog (SI-7) + ReconciliationFinding resolution.
+       - **NO LedgerEntry mutation** (SI-10 — 5A Option A: reversal entries become canonical).
+       - **NO Outbox mutation** (SI-11).
+     - [OUTSIDE txn] Post-repair verification (SI-8) — re-read Refund + Payment status.
+   - `processM10Remediations()` — batch processes all unresolved M10 findings.
+   - `revalidateM10Finding()` — re-reads Refund.status + determines fullRefund.
+
+3. **Evidence endpoints** (3 new routes):
+   - `m10-evidence-setup/route.ts` — scenarios: m10-processed-full, m10-processed-partial, m10-pending, m10-gateway-error, m10-stale, clean. Includes 5A Option A reversal ledger entries.
+   - `m10-evidence-run/route.ts` — actions: detect, remediate-one, remediate-all, list-m10-findings.
+   - `m10-evidence-verify/route.ts` — returns M10 findings + RemediationActions + money-state snapshot (includes Refund rows with amount + paymentId).
+
+4. **Evidence runner** (`scripts/wave5-5c-m10-evidence.mjs`) + wrapper (`scripts/run-5c-m10-evidence.sh`).
+
+### SQLite Evidence Results (ALL 8/8 PASS)
+- Run ID: `5c-m10-1786931596625-2d5fc552`
+- Artifact: `evidence/wave5-5c/evidence-M10-E1-E8-sqlite-5c.json`
+- `ok`: true
+- `summary`: {passed: 8, total: 8}
+
+Per-scenario results:
+- ✅ **E1** Full refund — gateway confirmed processed → Refund REFUND_PENDING → REFUNDED + Payment CAPTURED → REFUNDED. RemediationAction created.
+- ✅ **E2** Re-validation prevents stale repair — no M10 finding for REFUNDED refund (detector skipped).
+- ✅ **E3** Idempotent retry — 1 RemediationAction, second run SKIPPED.
+- ✅ **E4** No money-state mutation — Ledger + Outbox rows unchanged (5A Option A: NO new ledger entries; SI-11: NO outbox mutation).
+- ✅ **E5** Gateway `pending` → ESCALATED. Refund stays REFUND_PENDING.
+- ✅ **E6** Gateway `unknown` → ESCALATED. Refund stays REFUND_PENDING.
+- ✅ **E7** Flag respected — not DISABLED when ON.
+- ✅ **E8** Post-repair verification — finding resolved, action SUCCEEDED, Refund REFUNDED, Payment REFUNDED.
+
+### Stage Summary
+- **Wave-5 5C M10 (Stuck REFUND_PENDING Remediation) — IMPLEMENTED + SQLite evidence E1-E8 PASS (8/8).**
+- `fetchRazorpayRefundStatus()` added to razorpay.ts (READ-ONLY, new gateway function).
+- M10 remediation handler implemented with all 16 safety invariants (M10-SI-1 through M10-SI-16).
+- 5A Option A: reversal entries become canonical on REFUNDED — NO new LedgerEntry rows (proven in E4).
+- Full refund → Payment also flipped (SI-15). Partial refunds do NOT flip Payment.
+- NO outbox mutation. NO refundRazorpayPayment() call. NO re-enqueue.
+- NO modification of M9/M3/M16 closed remediation logic or CLOSED Wave-3/4/5A code.
+- `reconciliationAutoRepair` flag OFF by default.
+- PostgreSQL evidence NOT run. NO production deployment.
+- M10 = EVIDENCE-COMPLETE (SQLite only). PostgreSQL E9-E12 NOT authorized.
+- S5 closure NOT authorized.
+- IDE is STOPPING after commit + push.
