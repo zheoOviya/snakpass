@@ -8389,3 +8389,539 @@ Stage Summary:
 - **Firebase elimination audit:** Firebase is deeply embedded — 10 source files + 19 documentation files + `package.json`. The Supabase parallel-path is ALREADY implemented (`src/lib/supabase.ts`, `src/lib/supabase-admin.ts`, `src/app/api/auth/supabase/session/route.ts`) — but the Firebase paths are STILL live and wired in parallel. Elimination requires: (1) REMOVE `firebase`+`firebase-admin` from package.json, (2) REMOVE/REPLACE `src/lib/firebase.ts` + `src/lib/firebase-admin.ts` + `src/app/api/auth/firebase/*` routes, (3) REMOVE Firebase from `src/components/providers.tsx` + `src/app/page.tsx` + `src/middleware.ts` classify rule, (4) DOCUMENTATION update across 19 .md files, (5) REPLACE HB-11 in PRODUCTION_READINESS_GATE_REVIEW.md with Supabase Auth production configuration, (6) UPDATE `src/lib/otp-service.ts` stale comment.
 - **Supabase target-state audit:** Supabase Auth + Supabase JWT verification is FUNCTIONALLY IMPLEMENTED in 3 source files (`supabase.ts`, `supabase-admin.ts`, `api/auth/supabase/session/route.ts`) using `@supabase/supabase-js` + `jose`. Client-side `phone-otp-login.tsx` ALREADY uses Supabase as primary path (line 12: `sendSupabaseOtp`, `verifySupabaseOtp`, `isSupabaseConfigured`) with demo-mode fallback. Production Supabase project NOT provisioned (only staging `zmzqqcyapcezmaqvuzzd`). Required gaps to close: (1) provision production Supabase project, (2) remove Firebase deps from `package.json`, (3) remove Firebase source files + routes, (4) remove Firebase from middleware classify rule + providers + page.tsx, (5) update 19 documentation files, (6) update HB-11 in production readiness gate, (7) update otp-service.ts comment, (8) verify Supabase Auth phone OTP enabled in Supabase dashboard, (9) update admin-login.tsx stale Firebase email OTP reference.
 - **No files modified.** READ/REVIEW-ONLY audit per directive. `git status` unchanged.
+
+---
+Task ID: gi-audit
+Agent: Explore
+Task: Gateway idempotency forensic audit — Outbox/Payment/Refund/Publisher/Ledger current state (READ/REVIEW-ONLY)
+
+Work Log:
+- Read worklog tail (Wave-9 baseline inventory + Firebase elimination audit) for context.
+- Read 10 target files in parallel: `src/app/api/payments/route.ts` (303 lines), `src/app/api/payments/refund/route.ts` (276 lines), `src/lib/outbox.ts` (108 lines), `mini-services/outbox-publisher/index.ts` (985 lines), `src/lib/razorpay.ts` (463 lines), `prisma/schema.prisma` (Outbox model lines 294-326), `src/lib/reconciliation.ts` (2,579 lines — focus on M9/M10 handlers around 1720-1769 + 1980-1995 + 2380-2395), `docs/TRANSACTION_RETRY_INVARIANT.md` (571 lines — focus §8.2 lines 474-498 + §4.2 lines 215-243 + §8.3 lines 500-546), `src/lib/idempotency.ts` (223 lines), `src/lib/db.ts` (176 lines).
+- Cross-referenced the gateway idempotency-key gap with the Wave-5 5C closure review confirming it remains DEFERRED.
+- Confirmed NO `gatewayIdempotencyKey` field exists anywhere in `src/` or `prisma/schema.prisma` — only a comment reference in `src/lib/reconciliation.ts:1733` documenting the gap as deferred per TRANSACTION_RETRY_INVARIANT.md §8.2 item 4.
+- Verified the 4 `reEnqueueProhibited` occurrences in `src/lib/reconciliation.ts` (M9 + M10 handlers) and confirmed they are SAFETY GUARDS that must NOT be touched.
+- Verified the EXACT current capture/refund outbox payload structures + publisher call signatures + razorpay.ts function signatures — confirmed all of them are MISSING the gateway idempotency key.
+- No files modified. READ/REVIEW-ONLY audit per directive. `git status` unchanged.
+
+Stage Summary:
+- **CONFIRMED gap:** Gateway idempotency key is ABSENT end-to-end across the Wave-5 baseline:
+  - Capture route outbox payload (`route.ts:240-245`) — 4 fields only, NO `gatewayIdempotencyKey`.
+  - Refund route outbox payload (`refund/route.ts:217-225`) — 7 fields only, NO `gatewayIdempotencyKey`.
+  - Publisher capture handler (`outbox-publisher/index.ts:262-266`) — passes only `(gatewayPaymentId, amount, currency)` to `captureRazorpayPayment()`.
+  - Publisher refund handler (`outbox-publisher/index.ts:587-591`) — passes only `(gatewayPaymentId, amount, currency)` to `refundRazorpayPayment()`.
+  - `captureRazorpayPayment()` signature (`razorpay.ts:108-112`) — NO `idempotencyKey` param.
+  - `refundRazorpayPayment()` signature (`razorpay.ts:372-376`) — NO `idempotencyKey` param.
+  - `createRazorpayOrder()` signature (`razorpay.ts:49-52`) — NO `idempotencyKey` param; called INSIDE withTransaction at `route.ts:115` (deferred per §8.2 item 4).
+- **Additive rebuild plan (no schema change):** `gatewayIdempotencyKey` should be ADDED ADDITIVELY to:
+  (1) the outbox payload JSON object in both routes (routes generate `crypto.randomUUID()` BEFORE `withTransaction` — exactly the §8.2 item 4 / Option B pattern),
+  (2) the `CaptureRequestedPayload` / `RefundRequestedPayload` TypeScript interfaces in the publisher,
+  (3) the publisher's `captureRazorpayPayment()` / `refundRazorpayPayment()` call sites (new 4th positional arg OR options object),
+  (4) the `captureRazorpayPayment()` / `refundRazorpayPayment()` / `createRazorpayOrder()` function signatures in `razorpay.ts` (added `idempotencyKey` param + passed as `X-Idempotency-Key` header into the real Razorpay SDK calls when `realPayments=true`).
+- **Safety invariant:** `enqueueOutboxEvent()` payload is `unknown` and stored as `JSON.stringify(event.payload)` in `Outbox.payload` String column (`outbox.ts:66` + `schema.prisma:305`) — adding a field to the payload is NON-BREAKING and requires NO Prisma migration.
+- **M9/M10 `reEnqueueProhibited` MUST NOT be touched:** The 4 occurrences at `reconciliation.ts:1983, 1992, 2383, 2392` are SAFETY GUARDS preventing the M9/M10 remediation handlers from re-enqueuing capture/refund outbox events (because the gateway calls are not idempotent without a pre-generated key). Even after the gateway key is added, these guards should remain TRUE for the M9/M10 status-flip path — the gateway key closes the capture/refund retry hole, NOT the remediation re-enqueue hole.
+- **TRANSACTION_RETRY_INVARIANT §8.2 status:** Of the 5 deferred items — (1) code-review checklist, (2) lint rule, (3) outbox publisher for `PAYMENT_CAPTURE_REQUESTED` — DONE (Wave-4 4c), (4) pre-generated idempotency key for `createRazorpayOrder()` — DEFERRED (this audit's target), (5) CI gate. Item 3 is DONE; item 4 is the ADDITIVE work target. §8.3 explicitly states "the remaining enforcement mechanisms (lint rule, code-review checklist, CI gate, pre-generated idempotency key for `createRazorpayOrder()`) are still deferred — see §8.2."
+- **withTransaction retry codes confirmed:** P2002 / P1008 / P2024 / P2034 / P2036 (`db.ts:78-80`). This is the retry surface that makes any external HTTP call inside the body UNSAFE unless the gateway call is itself idempotent (Option B) or moved outside (Option C — already done for capture/refund via the publisher, NOT done for `createRazorpayOrder()`).
+- **NO files modified.** READ/REVIEW-ONLY forensic audit per directive.
+
+---
+
+## FORENSIC AUDIT REPORT — Gateway Idempotency Key Additive Rebuild (Wave-5 Baseline)
+
+Task ID: `gi-audit` | Scope: Outbox/Payment/Refund/Publisher/Ledger current state — READ/REVIEW-ONLY
+Baseline HEAD: `b22ebf4` @ `80e628d` (Wave-9 per worklog tail)
+
+---
+
+### A. Current capture route outbox event
+
+**Source:** `src/app/api/payments/route.ts:234-246`
+
+```ts
+// Outbox event — Wave-4 4c: PAYMENT_CAPTURE_REQUESTED (publisher calls captureRazorpayPayment).
+// The publisher emits PAYMENT_CAPTURED after capture confirms (no longer emitted here).
+await enqueueOutboxEvent(tx, {
+  eventType: 'PAYMENT_CAPTURE_REQUESTED',
+  aggregateType: 'Payment',
+  aggregateId: payment.id,
+  payload: {
+    paymentId: payment.id,
+    orderId: order.id,
+    gatewayPaymentId: body.razorpayPaymentId,
+    amount: order.totalAmount,
+  },
+})
+```
+
+- **eventType enqueued:** `PAYMENT_CAPTURE_REQUESTED` (line 237).
+- **payload fields:** `paymentId`, `orderId`, `gatewayPaymentId`, `amount` (4 fields, lines 241-244).
+- **Is there a `gatewayIdempotencyKey`?** **NO** — confirmed absent. Expected per task description.
+- **Where exactly would the key be generated + added to the payload?** The key must be generated BEFORE the `withTransaction(async (tx) => { ... })` body opens (per TRANSACTION_RETRY_INVARIANT §5 Option B pattern: "The idempotency key is generated **before** the transaction starts and is stored in the database inside the transaction."). Concretely:
+  - **Generation site:** between `route.ts:71` (after `evidenceFailAfterStep` is captured) and `route.ts:79` (where `withTransaction(async (tx) => {` opens) — i.e., immediately after `const session = await getSessionUser()` returns, around line 77. Pattern: `const gatewayIdempotencyKey = randomUUID()`.
+  - **Payload site:** add `gatewayIdempotencyKey,` to the `payload: { ... }` object at `route.ts:240-245` so it persists in the `Outbox.payload` JSON string. The publisher will later read it from the payload.
+  - (Optional but recommended by §8.2 item 4) **Payment row site:** consider also persisting the key on `Payment.gatewayIdempotencyKey` (would require a new schema column — additive but breaking the "no schema change" boundary. The minimum-viable path stores the key ONLY in the outbox payload JSON.)
+
+---
+
+### B. Current refund route outbox event
+
+**Source:** `src/app/api/payments/refund/route.ts:210-226`
+
+```ts
+// Outbox event — PAYMENT_REFUND_REQUESTED (publisher calls
+// refundRazorpayPayment). The publisher emits PAYMENT_REFUNDED after the
+// gateway confirms (not emitted here — same as 4c capture pattern).
+await enqueueOutboxEvent(tx, {
+  eventType: 'PAYMENT_REFUND_REQUESTED',
+  aggregateType: 'Refund',
+  aggregateId: refund.id,
+  payload: {
+    refundId: refund.id,
+    paymentId: payment.id,
+    orderId: payment.orderId,
+    gatewayPaymentId: payment.gatewayPaymentId,
+    amount: refundAmount,
+    currency: payment.currency,
+    fullRefund: refundAmount === payment.amount,
+  },
+})
+```
+
+- **eventType enqueued:** `PAYMENT_REFUND_REQUESTED` (line 214).
+- **payload fields:** `refundId`, `paymentId`, `orderId`, `gatewayPaymentId`, `amount`, `currency`, `fullRefund` (7 fields, lines 217-224).
+- **Is there a `gatewayIdempotencyKey`?** **NO** — confirmed absent. Expected per task description.
+- **Additive insertion site:** same Option B pattern as the capture route — generate `const gatewayIdempotencyKey = randomUUID()` before `withTransaction` opens at `refund/route.ts:69` (likely around line 67, after `getSessionUser()` returns), and add `gatewayIdempotencyKey,` to the payload at `refund/route.ts:217-225`.
+
+---
+
+### C. Current publisher capture handler
+
+**Source:** `mini-services/outbox-publisher/index.ts`
+
+**Payload interface (lines 139-144):**
+```ts
+interface CaptureRequestedPayload {
+  paymentId: string
+  orderId: string
+  gatewayPaymentId: string
+  amount: number
+}
+```
+
+**Payload read (lines 154-156):**
+```ts
+let payload: CaptureRequestedPayload
+try {
+  payload = JSON.parse(event.payload) as CaptureRequestedPayload
+```
+
+**Gateway call site (lines 259-266):**
+```ts
+// 4. Call captureRazorpayPayment() OUTSIDE any transaction body.
+const gatewayPaymentId = payment.gatewayPaymentId ?? payload.gatewayPaymentId
+let captureResult
+try {
+  captureResult = await captureRazorpayPayment(
+    gatewayPaymentId,
+    payment.amount,
+    payment.currency,
+  )
+```
+
+- **How does the publisher read the outbox payload?** It parses the `event.payload` JSON string with `JSON.parse` and casts it to `CaptureRequestedPayload` (line 156). The `event` argument is `{ id, eventId, aggregateId, payload: string, attempts }` per the handler signature (lines 146-152).
+- **What does it pass to `captureRazorpayPayment()`?** Exactly 3 args: `gatewayPaymentId`, `payment.amount`, `payment.currency` (lines 262-266). **No `idempotencyKey` arg — confirmed expected gap.**
+- **Where exactly would the key be read from payload + passed to the gateway function?**
+  1. Extend `CaptureRequestedPayload` interface (lines 139-144) to add `gatewayIdempotencyKey: string`.
+  2. Read `payload.gatewayIdempotencyKey` after the parse (around line 156).
+  3. Pass it as a 4th positional arg or options object at the `captureRazorpayPayment(...)` call site (lines 262-266), e.g., `captureRazorpayPayment(gatewayPaymentId, payment.amount, payment.currency, payload.gatewayIdempotencyKey)`.
+
+---
+
+### D. Current publisher refund handler
+
+**Source:** `mini-services/outbox-publisher/index.ts`
+
+**Payload interface (lines 417-425):**
+```ts
+interface RefundRequestedPayload {
+  refundId: string
+  paymentId: string
+  orderId: string
+  gatewayPaymentId: string | null
+  amount: number
+  currency: string
+  fullRefund: boolean
+}
+```
+
+**Payload read (lines 435-437):**
+```ts
+let payload: RefundRequestedPayload
+try {
+  payload = JSON.parse(event.payload) as RefundRequestedPayload
+```
+
+**Gateway call site (lines 585-591):**
+```ts
+let refundResult
+try {
+  refundResult = await refundRazorpayPayment(
+    gatewayPaymentId,
+    refund.amount,
+    refund.currency,
+  )
+```
+
+- **How does the publisher read the outbox payload?** Same pattern as capture — `JSON.parse(event.payload)` cast to `RefundRequestedPayload` (line 437).
+- **What does it pass to `refundRazorpayPayment()`?** Exactly 3 args: `gatewayPaymentId`, `refund.amount`, `refund.currency` (lines 587-591). **No `idempotencyKey` arg — confirmed expected gap.**
+- **Where exactly would the key be read from payload + passed to the gateway function?**
+  1. Extend `RefundRequestedPayload` interface (lines 417-425) to add `gatewayIdempotencyKey: string`.
+  2. Read `payload.gatewayIdempotencyKey` after parse (around line 437).
+  3. Pass it as a 4th arg at the call site (lines 587-591).
+
+---
+
+### E. Current razorpay.ts function signatures
+
+**Source:** `src/lib/razorpay.ts`
+
+**`createRazorpayOrder()` signature (lines 49-52):**
+```ts
+export async function createRazorpayOrder(
+  amount: number,
+  currency: string = 'INR',
+): Promise<RazorpayOrderResponse> {
+```
+- **Accepts `idempotencyKey` param?** **NO** — confirmed expected gap. This is the deferred §8.2 item 4 work.
+- **Real-mode body (lines 62-66):** calls `instance.orders.create({ amount, currency })` with NO `X-Idempotency-Key` header — confirmed orphan-order leak on retry per §4.2 lines 229-235.
+
+**`captureRazorpayPayment()` signature (lines 108-112):**
+```ts
+export async function captureRazorpayPayment(
+  razorpayPaymentId: string,
+  amount: number,
+  currency: string = 'INR',
+): Promise<RazorpayCaptureResponse> {
+```
+- **Accepts `idempotencyKey` param?** **NO** — confirmed expected gap (lost per task description).
+- **Real-mode body (line 123):** calls `instance.payments.capture(razorpayPaymentId, amount, currency)` with NO `X-Idempotency-Key` header.
+
+**`refundRazorpayPayment()` signature (lines 372-376):**
+```ts
+export async function refundRazorpayPayment(
+  razorpayPaymentId: string,
+  amount: number,
+  currency: string = 'INR',
+): Promise<RazorpayRefundResponse> {
+```
+- **Accepts `idempotencyKey` param?** **NO** — confirmed expected gap (lost per task description).
+- **Real-mode body (line 388):** calls `instance.payments.refund(razorpayPaymentId, { amount, currency })` with NO `X-Idempotency-Key` header.
+
+**Is `createRazorpayOrder()` called inside `withTransaction`?** **YES** — confirmed:
+- `route.ts:115` (`const razorpayOrder = await createRazorpayOrder(order.totalAmount, 'INR')`) is INSIDE the `withTransaction(async (tx) => { ... })` body that opens at `route.ts:79` and closes at `route.ts:275`.
+- This is the deferred §8.2 item 4 risk explicitly documented at `TRANSACTION_RETRY_INVARIANT.md:216-218`: "the moment `realPayments` is flipped to `true`, the current code becomes invariant-violating because both `createRazorpayOrder()` (line 110) and `captureRazorpayPayment()` (line 155) sit **inside** the `withTransaction()` body".
+- Note: `captureRazorpayPayment()` was MOVED OUT of the route via Wave-4 4c (now called only by the publisher at `outbox-publisher/index.ts:262`). `createRazorpayOrder()` was NOT moved — it remains inside the capture route's txn body. This is the residual invariant risk that §8.2 item 4 closes.
+
+---
+
+### F. Current Outbox payload structure
+
+**Source:** `prisma/schema.prisma:294-326`
+
+```prisma
+model Outbox {
+  id              String   @id @default(cuid())
+  eventId         String   @unique
+  eventType       String
+  aggregateType   String
+  aggregateId     String
+  payload         String   // JSON          ← line 305
+  status          String   @default("PENDING") // PENDING | CLAIMED | PUBLISHED | FAILED
+  attempts        Int      @default(0)
+  lastError       String?
+  createdAt       DateTime @default(now())
+  publishedAt     DateTime?
+  claimedAt       DateTime?
+  claimUntil      DateTime?
+  workerId        String?
+
+  @@index([status, createdAt])
+  @@index([aggregateType, aggregateId])
+}
+```
+
+**`enqueueOutboxEvent()` payload write (`src/lib/outbox.ts:60-69`):**
+```ts
+const row = await tx.outbox.create({
+  data: {
+    eventId,
+    eventType: event.eventType,
+    aggregateType: event.aggregateType,
+    aggregateId: event.aggregateId,
+    payload: JSON.stringify(event.payload),     // ← line 66
+    status: 'PENDING',
+  },
+  ...
+```
+
+- **What JSON fields are in the payload?** The `payload` column is `String // JSON` (line 305) — there is NO Prisma-typed schema for the JSON contents. The fields are entirely determined by whichever object the route passes as `event.payload` (typed `unknown` at `outbox.ts:41`).
+  - For capture events: 4 fields (`paymentId, orderId, gatewayPaymentId, amount`) per `route.ts:240-245`.
+  - For refund events: 7 fields (`refundId, paymentId, orderId, gatewayPaymentId, amount, currency, fullRefund`) per `refund/route.ts:217-225`.
+- **Where would `gatewayIdempotencyKey` be added?** It is added ADDITIVELY to the JSON object literal in the route — NO Prisma schema change is required. The `OutboxEventInput.payload` field is typed `unknown` (`outbox.ts:41`), so adding a field is type-safe at the enqueue boundary. The publisher's `JSON.parse(event.payload) as CaptureRequestedPayload` cast at `outbox-publisher/index.ts:156` and `:437` only needs the corresponding TypeScript interface (`CaptureRequestedPayload` / `RefundRequestedPayload`) updated to include `gatewayIdempotencyKey: string` — NO migration, NO schema change.
+
+---
+
+### G. M9/M10 `reEnqueueProhibited` — 4 occurrences (MUST NOT be touched)
+
+**Source:** `src/lib/reconciliation.ts` — confirmed exactly 4 occurrences via grep.
+
+**Occurrence 1 — M9 audit log (`reconciliation.ts:1983`):**
+```ts
+1981-          gatewayCaptured: gatewayResult.captured,
+1982-          escalated: true,
+1983:          reEnqueueProhibited: true,
+1984-        }),
+1985-      },
+1986-    }).catch(() => {})
+```
+
+**Occurrence 2 — M9 stateSnapshot in `reportInvariantViolation` (`reconciliation.ts:1992`):**
+```ts
+1990-      entityId: current.paymentId,
+1991-      description: `M9 remediation: gateway status is '${gatewayResult.status}' (not captured). Payment ${current.paymentId} should NOT be flipped to CAPTURED. Re-enqueue is NOT authorized. Escalating for manual review.`,
+1992:      stateSnapshot: { paymentId: current.paymentId, gatewayStatus: gatewayResult.status, findingId, reEnqueueProhibited: true },
+1993-      traceId,
+1994-    }).catch(() => null)
+```
+
+**Occurrence 3 — M10 audit log (`reconciliation.ts:2383`):**
+```ts
+2381-          gatewayStatus: gatewayResult.status,
+2382-          escalated: true,
+2383:          reEnqueueProhibited: true,
+2384-        }),
+2385-      },
+2386-    }).catch(() => {})
+```
+
+**Occurrence 4 — M10 stateSnapshot in `reportInvariantViolation` (`reconciliation.ts:2392`):**
+```ts
+2390-      entityId: current.paymentId,
+2391-      description: `M10 remediation: gateway refund status is '${gatewayResult.status}' (not processed). Refund ${current.refundId} should NOT be flipped to REFUNDED. Re-enqueue is NOT authorized. Escalating for manual review.`,
+2392:      stateSnapshot: { refundId: current.refundId, paymentId: current.paymentId, gatewayStatus: gatewayResult.status, findingId, reEnqueueProhibited: true },
+2393-      traceId,
+2394-    }).catch(() => null)
+```
+
+**Reasoning for the prohibition (M9 documented at `reconciliation.ts:1728-1746`):**
+```
+1728:// Orchestrator Directive WAVE5-5C-M9-IMPLEMENT-01:
+1729://   ONLY M9's gateway-verified status-flip path is authorized:
+1730://   CAPTURE_PENDING → CAPTURED when gateway says 'captured'.
+1731://   The re-enqueue path (gateway says NOT captured → re-enqueue outbox for
+1732://   capture retry) is PROHIBITED — captureRazorpayPayment() is NOT idempotent
+1733://   at the gateway without a pre-generated idempotency key (deferred per
+1734://   TRANSACTION_RETRY_INVARIANT.md §8.2 item 4).
+```
+
+**Confirm they must NOT be touched:** YES — these 4 `reEnqueueProhibited: true` flags are SAFETY GUARDS, not gaps. They prevent the M9/M10 remediation handlers from re-enqueuing capture/refund outbox events when the gateway status is ambiguous (not `captured` / not `processed`). Even AFTER the gateway idempotency key is added, these guards SHOULD remain TRUE for the M9/M10 status-flip remediation path — the gateway key closes the publisher-retry hole (idempotent re-execution by the publisher), NOT the reconciliation re-enqueue hole (re-attempt via a new outbox event). Touching them would expand the M9/M10 remediation scope beyond the Wave-5 5C Orchestrator authorization.
+
+---
+
+### H. TRANSACTION_RETRY_INVARIANT §8.2 — Deferred items status
+
+**Source:** `docs/TRANSACTION_RETRY_INVARIANT.md:474-498`
+
+```text
+### 8.2 Wave-3b / 3c scope (NOT started)
+
+The full enforcement mechanism is deferred to Wave-3b / 3c. At minimum
+it should include:
+
+1. **Code-review checklist item** — every PR touching
+   `src/app/api/payments/` or any route that calls
+   `captureRazorpayPayment()` / `createRazorpayOrder()` /
+   `enqueueOutboxEvent()` MUST cite this document and confirm the
+   external call placement.                                                ← DEFERRED
+2. **Lint rule** (eslint-plugin-local or a custom rule) that errors on
+   any `await` of an imported function whose name starts with
+   `capture` / `send` / `notify` / `publish` / `fetch` inside a
+   `withTransaction(async (tx) => { ... })` body — unless explicitly
+   allow-listed.                                                            ← DEFERRED
+3. **Outbox publisher for `PAYMENT_CAPTURE_REQUESTED`** — must exist
+   before `realPayments=true` is authorized. The capture call moves
+   from `route.ts` line 155 to the publisher.                              ← DONE (Wave-4 4c)
+4. **Pre-generated idempotency key flow** for `createRazorpayOrder()`
+   (Razorpay supports `X-Idempotency-Key` on `orders.create`) — to
+   eliminate orphan-order leaks on retry.                                  ← DEFERRED (THIS AUDIT'S TARGET)
+5. **CI gate** — a small script that grep-scans
+   `src/app/api/**/route.ts` for `captureRazorpayPayment(` /
+   `createRazorpayOrder(` calls inside `withTransaction(` blocks,
+   failing the build if found outside the publisher.                       ← DEFERRED
+```
+
+**§8.3 Resolution status (lines 500-546) confirms:**
+- Wave-4 4c S5 PASS / CLOSED (capture moved to publisher — item 3 done).
+- Wave-5 5a S5 PASS / CLOSED (refund moved to publisher — mirrors item 3).
+- Lines 539-541 explicit: "The remaining enforcement mechanisms (lint rule, code-review checklist, CI gate, **pre-generated idempotency key for `createRazorpayOrder()`**) are still deferred — see §8.2."
+
+**Item 4 — pre-generated idempotency key for `createRazorpayOrder()`** is the deferred work. The Wave-5 5C Consolidated Closure Review confirms this gap remains DEFERRED. The additive rebuild must implement:
+1. **Generation:** `const orderCreateKey = randomUUID()` BEFORE `withTransaction` in `route.ts` (Option B pattern per §5 lines 284-310).
+2. **Persistence:** Pass the key into `createRazorpayOrder(amount, currency, orderCreateKey)` — added as a 3rd positional arg.
+3. **SDK call:** In `razorpay.ts:63-66`, pass `{ 'X-Idempotency-Key': orderCreateKey }` as the 2nd arg to `instance.orders.create({ amount, currency }, { headers: { 'X-Idempotency-Key': orderCreateKey } })`.
+4. **Bonus (parallel to items 3+4):** Same Option B pattern for `captureRazorpayPayment()` and `refundRazorpayPayment()` — even though these are already called OUTSIDE the txn body (by the publisher), they remain re-executed by the publisher's own retry loop (1s/5s/30s/5min/15min backoff at `outbox-publisher/index.ts:49`). The gateway-side `X-Idempotency-Key` is the only defense against a publisher double-retry after a gateway success that the publisher failed to observe (network timeout after gateway accepted the call).
+
+**Items remaining deferred (NOT this audit's target):**
+- Item 1 (code-review checklist).
+- Item 2 (lint rule).
+- Item 5 (CI gate).
+
+---
+
+### I. Current idempotency pattern (application-level)
+
+**Source:** `src/lib/idempotency.ts`
+
+**`getCachedResponse()` (lines 122-160):**
+```ts
+export async function getCachedResponse(
+  tx: Prisma.TransactionClient,
+  key: string,
+  incomingRequestHash: string | null = null,
+): Promise<{ status: number; body: string } | null> {
+  const record = await tx.idempotencyKey.findUnique({
+    where: { key },
+  })
+  if (!record) return null
+  if (record.expiresAt.getTime() < Date.now()) return null
+  // ... requestHash enforcement (lines 143-157) ...
+  return { status: record.responseStatus, body: record.responseBody }
+}
+```
+
+**`storeIdempotencyRecord()` (lines 185-206):**
+```ts
+export async function storeIdempotencyRecord(
+  tx: Prisma.TransactionClient,
+  key: string,
+  resourceType: string,
+  resourceId: string,
+  responseStatus: number,
+  responseBody: string,
+  requestHash: string | null = null,
+): Promise<void> {
+  const expiresAt = new Date(Date.now() + IDEMPOTENCY_KEY_TTL_HOURS * 60 * 60 * 1000)
+  await tx.idempotencyKey.create({
+    data: { key, resourceType, resourceId, responseStatus, responseBody, requestHash, expiresAt },
+  })
+}
+```
+
+**Usage in capture route (`route.ts:81-87` + `route.ts:266-269`):**
+- The `Idempotency-Key` HTTP header is read at `route.ts:61` via `getIdempotencyKey(req)`.
+- Inside the txn, `getCachedResponse(tx, idempotencyKey, requestHash)` is called FIRST (`route.ts:82`) — if a cached response exists, it is returned WITHOUT re-executing the business write.
+- After the business write, `storeIdempotencyRecord(...)` is called (`route.ts:267`) so a retry with the same key hits the cache.
+
+**Is this the SAME as gateway idempotency?** **NO** — confirmed per task description.
+
+**The difference:**
+| Dimension | Application-level idempotency (current) | Gateway-level idempotency (target) |
+|---|---|---|
+| **Layer** | API route (`/api/payments`, `/api/payments/refund`) | Razorpay API (`instance.payments.capture`, `instance.payments.refund`, `instance.orders.create`) |
+| **Key source** | `Idempotency-Key` HTTP header sent by client | `crypto.randomUUID()` generated server-side BEFORE the txn |
+| **Storage** | `IdempotencyKey` table (column `key` + `requestHash` + cached response body) | `Outbox.payload` JSON column (additive field `gatewayIdempotencyKey`) OR new schema column on `Payment`/`Refund` |
+| **Dedup scope** | Stops a duplicate CLIENT request from creating duplicate `Payment` / `Refund` rows (dedup at API boundary). | Stops a duplicate PUBLISHER retry from causing a duplicate GATEWAY mutation (dedup at Razorpay boundary). |
+| **Retried by** | `withTransaction` P2002/P1008/P2024/P2034/P2036 retry loop (`db.ts:78-80`) | Outbox publisher's own retry loop (`outbox-publisher/index.ts:49` — 1s/5s/30s/5min/15min) |
+| **Failure mode if absent** | Client double-click → duplicate `Payment` row (mitigated — current code has it) | Publisher retry after gateway success-but-no-response → duplicate charge / duplicate refund / orphan order |
+| **TRANSACTION_RETRY_INVARIANT role** | Protects DB writes on retry (Option A pattern at the API route) | Protects external HTTP calls on retry (Option B pattern — pre-generated key honored by gateway) |
+
+The two layers are COMPLEMENTARY, not redundant. The application-level `Idempotency-Key` header deduplicates a single client retry at the API boundary (same `Idempotency-Key` → same `Payment.id` returned). The gateway-level key deduplicates a publisher retry at the Razorpay boundary (same `X-Idempotency-Key` → same capture object returned by Razorpay, no double-charge). Both must exist for end-to-end safety.
+
+---
+
+### J. withTransaction retry behavior
+
+**Source:** `src/lib/db.ts:62-83`
+
+```ts
+function isRetryableConflict(error: unknown): boolean {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) {
+    // P2034: Transaction failed due to a write conflict or a deadlock (PostgreSQL).
+    // P2036: Transaction timeout (rare; treat as retryable).
+    // P1008: Socket timeout — database failed to respond within the configured timeout.
+    // P2002: Unique constraint violation. For idempotency-keyed writes, this
+    //        means another concurrent transaction committed the same key first.
+    // P2024: Timed out fetching a connection from the pool (transient).
+    return error.code === 'P2034' || error.code === 'P2036' ||
+           error.code === 'P1008' || error.code === 'P2002' ||
+           error.code === 'P2024'
+  }
+  return false
+}
+```
+
+**Retry loop (`db.ts:95-138`):**
+- `MAX_RETRIES = 5` (line 39)
+- `INITIAL_BACKOFF_MS = 50` (line 40), exponential backoff `50 * 2^(attempt-1)` (line 114)
+- `DEFAULT_TX_TIMEOUT_MS = 30000` (line 44)
+- `DEFAULT_MAX_WAIT_MS = 10000` (line 45)
+- The retry loop re-executes the ENTIRE `fn` callback passed to `withTransaction(fn)` (line 106) on any of the 5 retryable codes.
+
+**5 retried Prisma codes:**
+1. **P2034** — Transaction failed due to a write conflict or a deadlock (PostgreSQL).
+2. **P2036** — Transaction timeout (rare).
+3. **P1008** — Socket timeout.
+4. **P2002** — Unique constraint violation (safe only for idempotency-keyed writes that re-check the cache at the start).
+5. **P2024** — Timed out fetching a connection from the pool (transient).
+
+**Why must external calls (`captureRazorpayPayment` / `refundRazorpayPayment` / `createRazorpayOrder`) be OUTSIDE `withTransaction`?**
+
+Per `TRANSACTION_RETRY_INVARIANT.md` §4.2 (lines 215-235) + §5 (lines 257-310):
+
+The retry loop re-runs the ENTIRE `fn` callback — including any external HTTP calls inside the body. Concretely:
+
+> *"The moment `realPayments` is flipped to `true`, the current code becomes invariant-violating because both `createRazorpayOrder()` (line 110) and `captureRazorpayPayment()` (line 155) sit **inside** the `withTransaction()` body that retries on P2002/P1008/P2024/P2034/P2036."* (TRANSACTION_RETRY_INVARIANT.md:215-218)
+
+> *"`captureRazorpayPayment()` (line 155) — the catastrophic case. A transaction that succeeds at the gateway call but then fails on a later DB write (e.g., a P2002 on `Payment.idempotencyKey` ...) will retry the whole body, calling `instance.payments.capture(...)` again. **The customer is charged twice.**"* (TRANSACTION_RETRY_INVARIANT.md:222-228)
+
+The 5 retry codes mean: any txn that succeeds at the gateway HTTP call but then fails on a later DB write (e.g., P2002 unique constraint violation on `Payment.idempotencyKey` from a sibling txn that committed in the meantime) WILL re-run the entire body — re-executing the gateway call. For non-idempotent gateway operations, this causes:
+- **Capture:** Duplicate charge (catastrophic — money lost for customer).
+- **Refund:** Duplicate refund (catastrophic — money refunded twice).
+- **Order create:** Orphan Razorpay order leak (minor — no money moved, but reconciliation noise + possible rate-limiting).
+
+The mitigation options (per §5):
+- **Option A** — Move the external call to AFTER commit (loses side-effect on crash between commit + call).
+- **Option B** — Pre-generate idempotency key BEFORE txn, store it inside txn, pass it as `X-Idempotency-Key` header to the gateway call. The gateway itself deduplicates on retry.
+- **Option C** — Outbox pattern: enqueue an outbox event inside the txn, an external publisher calls the gateway OUTSIDE any txn body. (DONE for capture/refund via Wave-4 4c + Wave-5 5a; NOT done for `createRazorpayOrder`.)
+
+**Current state of each external call against the invariant:**
+| External call | Option | Current location | Status |
+|---|---|---|---|
+| `captureRazorpayPayment()` | C (outbox publisher) | `outbox-publisher/index.ts:262` (OUTSIDE txn) | ✅ Safe by Option C (no retry re-execution by `withTransaction`); ⚠️ Still vulnerable to PUBLISHER retry (1s/5s/30s/5min/15min) — needs Option B key for defense-in-depth |
+| `refundRazorpayPayment()` | C (outbox publisher) | `outbox-publisher/index.ts:587` (OUTSIDE txn) | ✅ Safe by Option C; ⚠️ Same publisher-retry vulnerability |
+| `createRazorpayOrder()` | NONE | `route.ts:115` (INSIDE txn body line 79-275) | ❌ **UNSAFE in `realPayments=true` mode** — orphan-order leak on P2002/P1008/P2024/P2034/P2036 retry. This is the §8.2 item 4 deferred work. |
+
+---
+
+### K. Summary: Additive Rebuild Plan (no schema change)
+
+The gateway idempotency-key rebuild is **purely additive** at 4 layers. No Prisma migration required (the `Outbox.payload` column is `String // JSON` and `enqueueOutboxEvent` accepts `payload: unknown`).
+
+| # | File | Lines | Change | Type |
+|---|---|---|---|---|
+| 1 | `src/app/api/payments/route.ts` | ~77 + 240-245 | Generate `gatewayIdempotencyKey = randomUUID()` BEFORE `withTransaction`; add it to payload object | Additive (1 new const + 1 new payload field) |
+| 2 | `src/app/api/payments/refund/route.ts` | ~67 + 217-225 | Same as above for the refund path | Additive |
+| 3 | `mini-services/outbox-publisher/index.ts` | 139-144 + 262-266 | Extend `CaptureRequestedPayload` with `gatewayIdempotencyKey: string`; pass it as 4th arg to `captureRazorpayPayment()` | Additive (1 new interface field + 1 new call arg) |
+| 4 | `mini-services/outbox-publisher/index.ts` | 417-425 + 587-591 | Extend `RefundRequestedPayload` with `gatewayIdempotencyKey: string`; pass it as 4th arg to `refundRazorpayPayment()` | Additive |
+| 5 | `src/lib/razorpay.ts` | 49-52 + 63-66 | Add `idempotencyKey?: string` param to `createRazorpayOrder()`; pass as `{ headers: { 'X-Idempotency-Key': idempotencyKey } }` to `instance.orders.create()` when provided | Additive (optional param, default-unchanged behavior) |
+| 6 | `src/lib/razorpay.ts` | 108-112 + 123 | Add `idempotencyKey?: string` param to `captureRazorpayPayment()`; pass as headers to `instance.payments.capture()` when provided | Additive |
+| 7 | `src/lib/razorpay.ts` | 372-376 + 388 | Add `idempotencyKey?: string` param to `refundRazorpayPayment()`; pass as headers to `instance.payments.refund()` when provided | Additive |
+| 8 | `src/app/api/payments/route.ts` | 115 | Pass `gatewayIdempotencyKey` (separate from capture key) into `createRazorpayOrder(order.totalAmount, 'INR', orderCreateKey)` | Additive (1 new arg) |
+
+**No schema changes.** `prisma/schema.prisma` Outbox model untouched. `reconciliation.ts` M9/M10 `reEnqueueProhibited` flags (4 occurrences at lines 1983/1992/2383/2392) untouched.
+
+**Final answer to the task's framing question — "exactly how to rebuild the Gateway Idempotency Key additively on the Wave-5 baseline":**
+
+Generate `crypto.randomUUID()` BEFORE each `withTransaction` body in the two payment routes; persist the key additively as a new JSON field `gatewayIdempotencyKey` inside the existing `Outbox.payload` string column (NO Prisma migration); extend the publisher's two TypeScript payload interfaces + read the key after `JSON.parse`; pass the key as a new 4th optional arg to `captureRazorpayPayment()` / `refundRazorpayPayment()` / `createRazorpayOrder()`; have each razorpay.ts function inject `X-Idempotency-Key` as a request header on real-mode Razorpay SDK calls. All 8 changes are purely additive — no existing signature changes (the new param is optional), no existing payload field removed, no M9/M10 reEnqueueProhibited safety guard touched.
+
+**— End of forensic audit report —**
