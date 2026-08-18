@@ -256,13 +256,21 @@ async function processPaymentCaptureRequested(event: {
   //    This is the Wave-4 4c safety improvement: if the success-path txn
   //    retries (P2034 conflict), this call is NOT re-executed.
   //    In demo mode (realPayments=false), this returns mock success immediately.
+  //
+  //    Gateway idempotency key (Wave-9 rebuild):
+  //    Read the key from the outbox payload. If present, pass it to
+  //    captureRazorpayPayment() so Razorpay deduplicates on retry.
+  //    If absent (legacy outbox row created before this workstream),
+  //    proceed WITHOUT a key (backward-compatible — no new key generated).
   const gatewayPaymentId = payment.gatewayPaymentId ?? payload.gatewayPaymentId
+  const captureIdempotencyKey = payload.gatewayIdempotencyKey ?? undefined
   let captureResult
   try {
     captureResult = await captureRazorpayPayment(
       gatewayPaymentId,
       payment.amount,
       payment.currency,
+      captureIdempotencyKey,
     )
   } catch (captureError) {
     // Capture call failed (network error, gateway 5xx, etc.) — record the
@@ -582,12 +590,19 @@ async function processPaymentRefundRequested(event: {
   //    This is the Wave-4 4c / Wave-5 5a safety improvement: if the
   //    success-path txn retries (P2034 conflict), this call is NOT re-executed.
   //    In demo mode (realPayments=false), this returns mock success immediately.
+  //
+  //    Gateway idempotency key (Wave-9 rebuild):
+  //    Read the key from the outbox payload. If present, pass it to
+  //    refundRazorpayPayment() so Razorpay deduplicates on retry.
+  //    If absent (legacy outbox row), proceed WITHOUT a key (backward-compatible).
+  const refundIdempotencyKey = payload.gatewayIdempotencyKey ?? undefined
   let refundResult
   try {
     refundResult = await refundRazorpayPayment(
       gatewayPaymentId,
       refund.amount,
       refund.currency,
+      refundIdempotencyKey,
     )
   } catch (refundError) {
     // Refund call failed (network error, gateway 5xx, etc.) — record the

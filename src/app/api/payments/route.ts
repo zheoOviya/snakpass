@@ -7,6 +7,7 @@ import { info as logInfo, newTraceId } from '@/lib/logger'
 import { getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, parseCachedResponse, computeRequestHash } from '@/lib/idempotency'
 import { enqueueOutboxEvent } from '@/lib/outbox'
 import { createRazorpayOrder, verifyRazorpaySignature } from '@/lib/razorpay'
+import { randomUUID } from 'crypto'
 import { z } from 'zod'
 
 const captureBodySchema = z.object({
@@ -76,6 +77,13 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
   }
 
   try {
+    // Gateway Idempotency Key (additive — Wave-9 rebuild):
+    // Generated BEFORE withTransaction so a P2034 retry re-uses the SAME key.
+    // Passed to createRazorpayOrder() as X-Idempotency-Key header + stored in
+    // the outbox payload for the publisher to pass to captureRazorpayPayment().
+    const gatewayIdempotencyKey = randomUUID()
+    const orderCreateIdempotencyKey = randomUUID()
+
     const result = await withTransaction(async (tx) => {
       // P0-17: Check idempotency cache FIRST (inside txn)
       if (idempotencyKey) {
@@ -112,7 +120,7 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
       // Get or create the Razorpay order (gateway-side)
       let gatewayOrderId = order.payment?.gatewayOrderId
       if (!gatewayOrderId) {
-        const razorpayOrder = await createRazorpayOrder(order.totalAmount, 'INR')
+        const razorpayOrder = await createRazorpayOrder(order.totalAmount, 'INR', orderCreateIdempotencyKey)
         gatewayOrderId = razorpayOrder.razorpayOrderId
       }
 
@@ -242,6 +250,7 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
           orderId: order.id,
           gatewayPaymentId: body.razorpayPaymentId,
           amount: order.totalAmount,
+          gatewayIdempotencyKey,
         },
       })
 

@@ -6,6 +6,7 @@ import { withErrorHandler, apiError, AppError, IdempotencyKeyReuseError } from '
 import { info as logInfo, newTraceId } from '@/lib/logger'
 import { getIdempotencyKey, getCachedResponse, storeIdempotencyRecord, parseCachedResponse, computeRequestHash } from '@/lib/idempotency'
 import { enqueueOutboxEvent } from '@/lib/outbox'
+import { randomUUID } from 'crypto'
 import { z } from 'zod'
 
 // ----------------------------------------------------------------------------
@@ -66,6 +67,11 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
   }
 
   try {
+    // Gateway Idempotency Key (additive — Wave-9 rebuild):
+    // Generated BEFORE withTransaction so a P2034 retry re-uses the SAME key.
+    // Stored in the outbox payload for the publisher to pass to refundRazorpayPayment().
+    const gatewayIdempotencyKey = randomUUID()
+
     const result = await withTransaction(async (tx) => {
       // P0-17: Check idempotency cache FIRST (inside txn)
       if (idempotencyKey) {
@@ -222,6 +228,7 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
           amount: refundAmount,
           currency: payment.currency,
           fullRefund: refundAmount === payment.amount,
+          gatewayIdempotencyKey,
         },
       })
 

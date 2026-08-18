@@ -49,9 +49,10 @@ export interface RazorpayCaptureResponse {
 export async function createRazorpayOrder(
   amount: number,
   currency: string = 'INR',
+  idempotencyKey?: string,
 ): Promise<RazorpayOrderResponse> {
   if (!isFeatureEnabled('realPayments')) {
-    // Demo mode: return mock order
+    // Demo mode: return mock order. The idempotencyKey is accepted but not sent to a real gateway.
     return {
       razorpayOrderId: `order_demo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       amount,
@@ -60,10 +61,14 @@ export async function createRazorpayOrder(
   }
 
   const instance = getRazorpayInstance()!
+  // Pass the idempotency key as a header if provided (Razorpay X-Idempotency-Key).
+  const options = idempotencyKey
+    ? { headers: { 'X-Idempotency-Key': idempotencyKey } }
+    : undefined
   const order = await instance.orders.create({
     amount,
     currency,
-  })
+  }, options)
 
   return {
     razorpayOrderId: order.id,
@@ -109,9 +114,10 @@ export async function captureRazorpayPayment(
   razorpayPaymentId: string,
   amount: number,
   currency: string = 'INR',
+  idempotencyKey?: string,
 ): Promise<RazorpayCaptureResponse> {
   if (!isFeatureEnabled('realPayments')) {
-    // Demo mode: simulate successful capture
+    // Demo mode: simulate successful capture. The idempotencyKey is accepted but not sent to a real gateway.
     return {
       captured: true,
       gatewayPaymentId: razorpayPaymentId,
@@ -120,7 +126,11 @@ export async function captureRazorpayPayment(
   }
 
   const instance = getRazorpayInstance()!
-  const capture = await instance.payments.capture(razorpayPaymentId, amount, currency)
+  // Pass the idempotency key as a header if provided (Razorpay X-Idempotency-Key).
+  const options = idempotencyKey
+    ? { headers: { 'X-Idempotency-Key': idempotencyKey } }
+    : undefined
+  const capture = await instance.payments.capture(razorpayPaymentId, amount, currency, options)
 
   return {
     captured: capture.captured === true,
@@ -373,9 +383,10 @@ export async function refundRazorpayPayment(
   razorpayPaymentId: string,
   amount: number,
   currency: string = 'INR',
+  idempotencyKey?: string,
 ): Promise<RazorpayRefundResponse> {
   if (!isFeatureEnabled('realPayments')) {
-    // Demo mode: simulate successful refund
+    // Demo mode: simulate successful refund. The idempotencyKey is accepted but not sent to a real gateway.
     return {
       refunded: true,
       gatewayRefundId: `rpf_demo_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
@@ -385,7 +396,12 @@ export async function refundRazorpayPayment(
   }
 
   const instance = getRazorpayInstance()!
-  const refund = await instance.payments.refund(razorpayPaymentId, { amount, currency })
+  // Pass the idempotency key in the refund request body if provided (Razorpay idempotency_key).
+  const refundParams: Record<string, unknown> = { amount, currency }
+  if (idempotencyKey) {
+    refundParams.idempotency_key = idempotencyKey
+  }
+  const refund = await instance.payments.refund(razorpayPaymentId, refundParams)
 
   // Razorpay refund statuses: 'pending' | 'processed' | 'failed'.
   // 'pending' means the refund request is accepted and queued for processing
