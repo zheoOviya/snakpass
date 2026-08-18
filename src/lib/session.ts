@@ -2,6 +2,7 @@ import { cookies } from 'next/headers'
 import { db } from './db'
 import { randomToken } from './otp-service'
 import { setCsrfCookie } from './csrf'
+import { AppError } from './errors'
 
 // Cookie-based session. The session token maps to a Session row in the DB
 // (userId + role + expiry). HttpOnly + SameSite=Lax.
@@ -76,6 +77,46 @@ export async function getSessionUser(): Promise<SessionUser | null> {
   } catch {
     return null
   }
+}
+
+// ----------------------------------------------------------------------------
+// P0-07 — requireRole helper (RBAC convenience wrapper around getSessionUser)
+// ----------------------------------------------------------------------------
+// Used by route handlers that need an authenticated user WITH one of a set of
+// allowed roles. Returns the SessionUser on success; throws AppError on:
+//   - no session  → AUTHENTICATION_REQUIRED (401)
+//   - role denied → AUTHORIZATION_DENIED    (403)
+//
+// Usage:
+//   const session = await requireRole(['VENDOR_OWNER', 'ADMIN', 'SUPER_ADMIN'])
+//   // ... use session.userId / session.role
+//
+// For routes that need ownership checks (e.g. CONSUMER may only act on their own
+// order), the caller is responsible for the ownership comparison AFTER
+// requireRole() returns — e.g.:
+//   const session = await requireRole(['CONSUMER', 'VENDOR_OWNER', 'ADMIN', 'SUPER_ADMIN'])
+//   if (session.role === 'CONSUMER' && order.userId !== session.userId) {
+//     throw new AppError('AUTHORIZATION_DENIED', 'Not your order', 403)
+//   }
+// ----------------------------------------------------------------------------
+export async function requireRole(allowedRoles: string[]): Promise<SessionUser> {
+  const session = await getSessionUser()
+  if (!session) {
+    throw new AppError(
+      'AUTHENTICATION_REQUIRED',
+      'Authentication required',
+      401,
+    )
+  }
+  if (!allowedRoles.includes(session.role)) {
+    throw new AppError(
+      'AUTHORIZATION_DENIED',
+      'Insufficient permissions for this action',
+      403,
+      { requiredRoles: allowedRoles, actualRole: session.role },
+    )
+  }
+  return session
 }
 
 export async function destroySession(): Promise<void> {

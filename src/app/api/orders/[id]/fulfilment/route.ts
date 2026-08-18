@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
-import { db, withTransaction, TransactionConflictError } from '@/lib/db'
+import { withTransaction, TransactionConflictError } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { withErrorHandler, apiError, IdempotencyKeyReuseError } from '@/lib/errors'
 import { validateBody } from '@/lib/validation'
-import { info as logInfo, newTraceId } from '@/lib/logger'
+import { info as logInfo, warn as logWarn, newTraceId } from '@/lib/logger'
 import { enqueueOutboxEvent } from '@/lib/outbox'
 import {
   getIdempotencyKey,
@@ -17,6 +17,7 @@ import {
   FULFILMENT_STATUSES,
   isValidFulfilmentTransition,
 } from '@/lib/fulfilment-state'
+import { isFeatureEnabled } from '@/lib/deployment'
 
 // ----------------------------------------------------------------------------
 // P0-06 Wave-6 — Fulfilment route (parallel state machine — additive-only)
@@ -31,10 +32,18 @@ import {
 // Lazy-create: if no Fulfilment row exists for the Order, one is created with
 // status='PREPARING' + pickupOtp copied from Order.pickupOtp (P0-07 future use).
 //
-// P0-07 (pickup attribution) is INACTIVE in this wave:
-//   - No QR+OTP verification is performed on the PICKED_UP transition.
-//   - No RBAC on the PICKED_UP actor (any authenticated user can transition).
-// Activation is a separate Orchestrator directive.
+// P0-07 (pickup attribution) — FLAG-GATED, ADDITIVE:
+//   - When `pickupAttributionEnforcement` flag is ON (default OFF):
+//       * PICKED_UP via this route REQUIRES `Fulfilment.pickupVerifiedAt` to
+//         already be set (which can ONLY happen via the dedicated
+//         POST /api/orders/[id]/pickup/verify endpoint that performs QR+OTP
+//         verification + writes pickupVerifiedAt/By). If pickupVerifiedAt is
+//         NULL → 409 directing the caller to /pickup/verify.
+//       * This closes the I-13 gap: no caller can bypass QR+OTP verification
+//         by transitioning Fulfilment.status directly.
+//   - When OFF (default): existing behavior (plain state flip — backward-
+//     compatible). The pickup-verify endpoint coexists and is always callable,
+//     but the legacy PATCH path is NOT blocked.
 //
 // Optimistic locking: PATCH uses `tx.fulfilment.updateMany({ where: { id, version } })`
 // — 0 rows updated means another PATCH won the race → 409 Conflict (P0-25 Case B).
@@ -159,6 +168,59 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
                 code: 'CONFLICT',
                 message: `Invalid fulfilment transition: ${from} -> ${desired}. Expected next sequential status.`,
                 traceId,
+              },
+            },
+          }
+        }
+
+        // -------------------------------------------------------------------
+        // P0-07: Flag-gated PICKED_UP attribution check.
+        // When `pickupAttributionEnforcement` is ON, PICKED_UP via this route
+        // REQUIRES `Fulfilment.pickupVerifiedAt` to already be set — which can
+        // ONLY happen via the dedicated POST /api/orders/[id]/pickup/verify
+        // endpoint (which performs QR+OTP verification + writes
+        // pickupVerifiedAt/By + flips Fulfilment.status to PICKED_UP).
+        //
+        // This gate closes the I-13 gap: when the flag is ON, NO caller can
+        // bypass pickup attribution by transitioning Fulfilment.status
+        // directly via PATCH /fulfilment.
+        //
+        // When the flag is OFF (default — backward-compatible), this check is
+        // skipped and the existing behavior is preserved.
+        // -------------------------------------------------------------------
+        if (
+          desired === 'PICKED_UP' &&
+          isFeatureEnabled('pickupAttributionEnforcement') &&
+          !fulfilment.pickupVerifiedAt
+        ) {
+          logWarn(
+            'fulfilment-picked-up-attribution-required',
+            { orderId: id, fulfilmentId: fulfilment.id, flagState: 'ON' },
+            traceId,
+          )
+          return {
+            type: 'error' as const,
+            status: 409,
+            body: {
+              error: {
+                code: 'CONFLICT',
+                message:
+                  'PICKED_UP via PATCH /fulfilment requires prior pickup attribution when pickupAttributionEnforcement is ON. Use POST /api/orders/' +
+                  id +
+                  '/pickup/verify with a QR token + OTP to attribute pickup.',
+                traceId,
+                details: {
+                  reason: 'PICKUP_ATTRIBUTION_REQUIRED',
+                  redirectEndpoint: `/api/orders/${id}/pickup/verify`,
+                  redirectMethod: 'POST',
+                  requiredPayload: {
+                    otpId: '<otpId>',
+                    code: '<6-digit OTP>',
+                    qrToken: '<QR token>',
+                  },
+                  fulfilmentId: fulfilment.id,
+                  pickupVerifiedAt: fulfilment.pickupVerifiedAt,
+                },
               },
             },
           }

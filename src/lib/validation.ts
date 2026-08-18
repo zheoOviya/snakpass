@@ -75,11 +75,28 @@ export const otpSendBodySchema = z.object({
 })
 
 // OTP verify body
+// P0-07: `purpose` enum extended to include 'pickup' so the same OTP verification
+// service can be reused for pickup attribution (P0-07 pickup-verify endpoint).
 export const otpVerifyBodySchema = z.object({
   otpId: uuidSchema,
   code: otpSchema,
   phone: phoneSchema,
-  purpose: z.enum(['consumer_login', 'vendor_login']),
+  purpose: otpPurposeSchema,
+})
+
+// P0-07 — Pickup attribution verify body
+// POST /api/orders/[id]/pickup/verify  { otpId, code, qrToken }
+//   - otpId    : the OTP record ID issued when the order transitioned to READY_FOR_PICKUP
+//                (see status/route.ts → createOtp('phone', phone, 'pickup'))
+//   - code     : the 6-digit OTP code (scrypt-hashed server-side)
+//   - qrToken  : the QR-encoded credential string `snakzap:pickup:${orderId}:otp:${pickupOtp}`
+//                (see src/components/snak/order-tracking.tsx)
+// The server cross-checks otpId/code (verifyOtp), qrToken (decodeQrToken), and
+// otp.target === order.user.phone (cross-credential check) — all three MUST match.
+export const pickupVerifyBodySchema = z.object({
+  otpId: uuidSchema,
+  code: otpSchema,
+  qrToken: z.string().min(1, 'qrToken required'),
 })
 
 // Admin login body

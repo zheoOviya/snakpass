@@ -46,6 +46,13 @@ export type StateInvariantClass =
   | 'M19_ORDER_PAID_PAYMENT_REFUNDED'
   | 'M20_FULFILMENT_PICKED_UP_PAYMENT_NOT_CAPTURED'
   | 'M21_ORDER_FROZEN_STALE'
+  // P0-07 — additive parallel-state detectors (detection-only — additive).
+  // Live in this file (NOT reconciliation.ts) per P0-07 §6.4 + §8 boundary:
+  //   - Wave-5 5B (M1-M17) detection-only boundary in reconciliation.ts is
+  //     preserved — M22/M23 are NOT part of Wave-5 5B (they are state-invariant
+  //     detectors that check parallel Order/Fulfilment/Payment combinations).
+  | 'M22_FULFILMENT_PICKED_UP_NO_ATTRIBUTION'
+  | 'M23_ORDER_CANCELLED_FULFILMENT_PICKED_UP'
 
 export type StateInvariantSeverity = 'CRITICAL' | 'HIGH' | 'MEDIUM'
 
@@ -598,11 +605,263 @@ async function detectM21OrderFrozenStale(traceId: string): Promise<StateInvarian
 }
 
 // ----------------------------------------------------------------------------
-// Orchestrator — run all 4 detectors
+// M22 — Fulfilment PICKED_UP + pickupVerifiedAt IS NULL (I-13 Pickup Integrity)
+// ----------------------------------------------------------------------------
+// P0-07 — additive detector. When a Fulfilment is PICKED_UP but
+// `pickupVerifiedAt` is NULL, the pickup event has NO attribution — meaning
+// the pickup-verify endpoint was NOT used (the PICKED_UP state was reached
+// via a path that bypassed QR+OTP verification — e.g., direct PATCH
+// /fulfilment when the pickupAttributionEnforcement flag was OFF at the
+// time of the transition, and then the flag was flipped ON; or a data
+// inconsistency where the Fulfilment.status was set but pickupVerifiedAt
+// was not).
+//
+// Per I-13 (Pickup/Handoff Integrity — additive invariant code in P0-07),
+// this is a CRITICAL finding — the customer has "received" their order but
+// we cannot prove WHO picked it up.
+//
+// Detection-only → ExceptionQueue + alert. No auto-action (P0-07 does NOT
+// implement auto-repair of pickup state — remediation is admin-driven).
+//
+// Note: M20 already checks `Fulfilment.status='PICKED_UP'` + Payment status;
+// M22 is a DIFFERENT detector that checks the attribution fields specifically.
+// Both detectors may fire on the same Fulfilment row (different invariant
+// codes — I-08 vs I-13).
+// ----------------------------------------------------------------------------
+
+async function detectM22FulfilmentPickedUpNoAttribution(
+  traceId: string,
+): Promise<StateInvariantFinding[]> {
+  const findings: StateInvariantFinding[] = []
+
+  // Find Fulfilment rows in PICKED_UP status with no pickupVerifiedAt
+  // (attribution missing — no QR+OTP verification recorded).
+  const pickedUpFulfilments = await db.fulfilment.findMany({
+    where: {
+      status: 'PICKED_UP',
+      pickupVerifiedAt: null,
+    },
+    select: {
+      id: true,
+      orderId: true,
+      status: true,
+      version: true,
+      pickupOtp: true,
+      pickupVerifiedAt: true,
+      pickupVerifiedBy: true,
+      updatedAt: true,
+      order: {
+        select: {
+          id: true,
+          status: true,
+          totalAmount: true,
+          userId: true,
+          restaurantId: true,
+        },
+      },
+    },
+  })
+
+  for (const f of pickedUpFulfilments) {
+    const finding: StateInvariantFinding = {
+      mismatchClass: 'M22_FULFILMENT_PICKED_UP_NO_ATTRIBUTION',
+      severity: 'CRITICAL',
+      invariantCode: 'I-13', // Pickup/Handoff Integrity (P0-07 additive)
+      entityType: 'Fulfilment',
+      entityId: f.id,
+      description: `Fulfilment ${f.id} is PICKED_UP but pickupVerifiedAt IS NULL — pickup attribution is missing (no QR+OTP verification recorded). The customer received their order but we cannot prove WHO picked it up.`,
+      stateSnapshot: {
+        fulfilmentId: f.id,
+        fulfilmentStatus: f.status,
+        fulfilmentVersion: f.version,
+        pickupOtp: f.pickupOtp,
+        pickupVerifiedAt: f.pickupVerifiedAt,
+        pickupVerifiedBy: f.pickupVerifiedBy,
+        orderId: f.orderId,
+        orderStatus: f.order?.status,
+        orderTotalAmount: f.order?.totalAmount,
+        orderUserId: f.order?.userId,
+        orderRestaurantId: f.order?.restaurantId,
+        detectedAt: new Date().toISOString(),
+      },
+      // I-13 — pickup integrity violation. Default Level 1 freeze (transaction-
+      // level — the order/Fulfilment is already terminal, but the freeze
+      // prevents any further state changes until admin resolves the attribution
+      // gap). Q18 escalation policy reserves Level 3 for I-01/I-04 only.
+    }
+    findings.push(finding)
+
+    try {
+      await reportInvariantViolation({
+        invariant: 'I-13',
+        entityType: 'Fulfilment',
+        entityId: f.id,
+        description: finding.description,
+        stateSnapshot: finding.stateSnapshot,
+        traceId,
+      })
+    } catch (err) {
+      logError(
+        'm22-report-invariant-violation-failed',
+        { fulfilmentId: f.id, error: (err as Error).message },
+        traceId,
+      )
+    }
+
+    fireAlert('inconsistent-combo', {
+      mismatchClass: finding.mismatchClass,
+      severity: finding.severity,
+      invariant: finding.invariantCode,
+      fulfilmentId: f.id,
+      orderId: f.orderId,
+      pickupVerifiedAt: f.pickupVerifiedAt,
+      pickupVerifiedBy: f.pickupVerifiedBy,
+      traceId,
+    })
+
+    logWarn(
+      'm22-inconsistent-combo-detected',
+      {
+        mismatchClass: finding.mismatchClass,
+        fulfilmentId: f.id,
+        orderId: f.orderId,
+        pickupVerifiedAt: f.pickupVerifiedAt,
+        pickupVerifiedBy: f.pickupVerifiedBy,
+      },
+      traceId,
+    )
+  }
+
+  return findings
+}
+
+// ----------------------------------------------------------------------------
+// M23 — Order CANCELLED + Fulfilment PICKED_UP (I-02 Order Integrity)
+// ----------------------------------------------------------------------------
+// P0-07 — additive detector. When an Order is CANCELLED but its Fulfilment
+// is PICKED_UP, the order state is inconsistent with the fulfilment state —
+// the customer "received" their order (per Fulfilment) but the order was
+// cancelled (per Order). Per I-02 (Order Integrity — already used by M19),
+// this is a CRITICAL finding (parallel to M19, but covering the Order vs
+// Fulfilment dimension rather than Order vs Payment).
+//
+// Detection-only → ExceptionQueue + alert. No auto-action.
+// ----------------------------------------------------------------------------
+
+async function detectM23OrderCancelledFulfilmentPickedUp(
+  traceId: string,
+): Promise<StateInvariantFinding[]> {
+  const findings: StateInvariantFinding[] = []
+
+  // Find Orders in CANCELLED status whose Fulfilment is PICKED_UP.
+  // (1:1 Order → Fulfilment relation — Prisma relation filter.)
+  const cancelledOrdersWithPickedUpFulfilment = await db.order.findMany({
+    where: {
+      status: 'CANCELLED',
+      fulfilment: { status: 'PICKED_UP' },
+    },
+    select: {
+      id: true,
+      status: true,
+      totalAmount: true,
+      userId: true,
+      restaurantId: true,
+      updatedAt: true,
+      fulfilment: {
+        select: {
+          id: true,
+          status: true,
+          version: true,
+          pickupVerifiedAt: true,
+          pickupVerifiedBy: true,
+          updatedAt: true,
+        },
+      },
+    },
+  })
+
+  for (const order of cancelledOrdersWithPickedUpFulfilment) {
+    const fulfilment = order.fulfilment
+    if (!fulfilment) continue // defensive — the relation filter guarantees non-null
+
+    const finding: StateInvariantFinding = {
+      mismatchClass: 'M23_ORDER_CANCELLED_FULFILMENT_PICKED_UP',
+      severity: 'CRITICAL',
+      invariantCode: 'I-02', // Order Integrity (parallel to M19, different dimension)
+      entityType: 'Order',
+      entityId: order.id,
+      description: `Order ${order.id} is CANCELLED but Fulfilment ${fulfilment.id} is PICKED_UP — order state inconsistent with fulfilment state (customer received an order that was cancelled).`,
+      stateSnapshot: {
+        orderId: order.id,
+        orderStatus: order.status,
+        orderTotalAmount: order.totalAmount,
+        orderUpdatedAt: order.updatedAt,
+        fulfilmentId: fulfilment.id,
+        fulfilmentStatus: fulfilment.status,
+        fulfilmentVersion: fulfilment.version,
+        pickupVerifiedAt: fulfilment.pickupVerifiedAt,
+        pickupVerifiedBy: fulfilment.pickupVerifiedBy,
+        detectedAt: new Date().toISOString(),
+      },
+      // I-02 — order integrity violation. Default Level 1 freeze (Q18 policy —
+      // Level 3 reserved for I-01/I-04 money-state violations only).
+    }
+    findings.push(finding)
+
+    try {
+      await reportInvariantViolation({
+        invariant: 'I-02',
+        entityType: 'Order',
+        entityId: order.id,
+        description: finding.description,
+        stateSnapshot: finding.stateSnapshot,
+        traceId,
+      })
+    } catch (err) {
+      logError(
+        'm23-report-invariant-violation-failed',
+        { orderId: order.id, error: (err as Error).message },
+        traceId,
+      )
+    }
+
+    fireAlert('inconsistent-combo', {
+      mismatchClass: finding.mismatchClass,
+      severity: finding.severity,
+      invariant: finding.invariantCode,
+      orderId: order.id,
+      fulfilmentId: fulfilment.id,
+      orderStatus: order.status,
+      fulfilmentStatus: fulfilment.status,
+      traceId,
+    })
+
+    logWarn(
+      'm23-inconsistent-combo-detected',
+      {
+        mismatchClass: finding.mismatchClass,
+        orderId: order.id,
+        fulfilmentId: fulfilment.id,
+        orderStatus: order.status,
+        fulfilmentStatus: fulfilment.status,
+      },
+      traceId,
+    )
+  }
+
+  return findings
+}
+
+// ----------------------------------------------------------------------------
+// Orchestrator — run all 6 detectors (M18-M23)
 // ----------------------------------------------------------------------------
 
 /**
- * Run all 4 state-invariant detectors (M18-M21).
+ * Run all 6 state-invariant detectors (M18-M23).
+ *
+ * P0-07 ADDITIVE: M22/M23 are wired into this orchestrator (detection-only —
+ * they do NOT mutate any state; they only route findings to ExceptionQueue via
+ * the existing reportInvariantViolation() pathway + fire alerts).
  *
  * @param trigger — 'cron' | 'manual' | 'evidence'
  * @returns StateInvariantCheckResult — findings + m18AutoRefundsTriggered count
@@ -647,6 +906,15 @@ export async function runStateInvariantCheck(
     // M21
     const m21 = await detectM21OrderFrozenStale(traceId)
     allFindings = allFindings.concat(m21)
+
+    // P0-07 — additive detectors (detection-only, no auto-action).
+    // M22 — Fulfilment PICKED_UP + pickupVerifiedAt IS NULL (I-13 pickup integrity)
+    const m22 = await detectM22FulfilmentPickedUpNoAttribution(traceId)
+    allFindings = allFindings.concat(m22)
+
+    // M23 — Order CANCELLED + Fulfilment PICKED_UP (I-02 order integrity)
+    const m23 = await detectM23OrderCancelledFulfilmentPickedUp(traceId)
+    allFindings = allFindings.concat(m23)
 
     const completedAt = new Date()
     logInfo(
