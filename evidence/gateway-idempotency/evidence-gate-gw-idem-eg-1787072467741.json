@@ -1,0 +1,88 @@
+{
+  "directive": "GATEWAY-IDEMPOTENCY-EVIDENCE-GATE-01",
+  "implementationCommit": "cd4ae6aff61501f011b2aa9c1d9dc9793f891df2",
+  "evidenceRunId": "gw-idem-eg-1787072467741",
+  "timestamp": "2026-08-18T17:01:07.741Z",
+  "database": "postgresql (embedded 18.4 — controlled evidence environment)",
+  "e1ToE8": {
+    "E1": {
+      "name": "gatewayIdempotencyKey generated + persisted",
+      "passed": true,
+      "keyPresent": true,
+      "paymentStatus": "CAPTURE_PENDING"
+    },
+    "E2": {
+      "name": "Key deterministic (same on repeated reads)",
+      "passed": true,
+      "sameKey": true
+    },
+    "E3": {
+      "name": "Publisher reads key from payload",
+      "passed": true,
+      "readsKey": true,
+      "passesKey": true,
+      "payloadHasKey": true
+    },
+    "E4": {
+      "name": "Publisher does NOT regenerate key on retry",
+      "passed": true,
+      "noRandomUUID": true,
+      "usesFallback": true
+    },
+    "E5": {
+      "name": "Refund key separate from capture key",
+      "passed": true,
+      "captureKeyPresent": true,
+      "refundKeyPresent": true,
+      "differentKeys": true
+    },
+    "E6": {
+      "name": "Publisher passes refund key to refundRazorpayPayment",
+      "passed": true,
+      "readsRefundKey": true,
+      "passesRefundKey": true
+    },
+    "E7": {
+      "name": "Legacy keyless outbox rows compatible",
+      "passed": true,
+      "hasFallback": true,
+      "optionalParam": true
+    },
+    "E8": {
+      "name": "PostgreSQL persistence (direct DB query)",
+      "passed": true,
+      "keyInRawPayload": true,
+      "database": "postgresql"
+    }
+  },
+  "e9": {
+    "status": "BLOCKED",
+    "reason": "No Razorpay TEST-mode credentials available. External/operator dependency."
+  },
+  "wave5Regression": {
+    "passed": true,
+    "w5a": true,
+    "gatewayKey": true,
+    "reEnqueueCount": 4
+  },
+  "safety": {
+    "passed": true,
+    "flagsOff": true,
+    "m9m10": true,
+    "razorpayHasIdempotencyKey": true
+  },
+  "ok": false,
+  "section82": {
+    "name": "§8.2: createRazorpayOrder idempotency key",
+    "passed": true,
+    "keyBeforeTxn": true,
+    "passesToCreate": true
+  },
+  "e1ToE8AllPass": true,
+  "section82Pass": true,
+  "wave5RegressionPass": true,
+  "safetyPass": true,
+  "e9Status": "BLOCKED",
+  "applicationSidePass": true,
+  "verdict": "APPLICATION-SIDE PASS — E9 BLOCKED (external dependency)"
+}
