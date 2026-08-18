@@ -1,0 +1,108 @@
+{
+  "directive": "P0-06-EVIDENCE-GATE-01",
+  "implementationCommit": "58b6a83b441f1ce5f6f69f674346f394727ca2ed",
+  "evidenceRunId": "p06-eg-1787075441524",
+  "timestamp": "2026-08-18T17:50:41.524Z",
+  "database": "postgresql (embedded 18.4)",
+  "e1ToE12": {
+    "E1": {
+      "name": "Fulfilment model created (1:1)",
+      "passed": true,
+      "orderId": "cmsyyl0ft0002rcg9lh4icvbc",
+      "fulfilmentId": "cmsyyl1320006rcg9q2ev5r3r"
+    },
+    "E2": {
+      "name": "State machine (valid transition)",
+      "passed": true,
+      "from": "PREPARING",
+      "to": "ALMOST_READY"
+    },
+    "E3": {
+      "name": "Optimistic locking",
+      "passed": true,
+      "versionBefore": 0,
+      "versionAfter": 1
+    },
+    "E4": {
+      "name": "M18 detector",
+      "passed": true,
+      "hasM18": true,
+      "hasAutoRefund": true,
+      "captureIntact": true
+    },
+    "E5": {
+      "name": "M19 detector",
+      "passed": true,
+      "hasM19": true,
+      "hasI02": true
+    },
+    "E6": {
+      "name": "M20 detector",
+      "passed": true,
+      "hasM20": true,
+      "hasI08": true
+    },
+    "E7": {
+      "name": "M21 detector",
+      "passed": true,
+      "hasM21": true
+    },
+    "E8": {
+      "name": "Invariant-checker service",
+      "passed": true,
+      "serviceExists": true
+    },
+    "E9": {
+      "name": "inconsistent-combo alert",
+      "passed": true,
+      "hasRule": true
+    },
+    "E10": {
+      "name": "Wave-5 regression (5A)",
+      "passed": true,
+      "paymentStatus": "CAPTURE_PENDING",
+      "ledgerEntries": 2
+    },
+    "E11": {
+      "name": "No Order.status mutation",
+      "passed": true,
+      "orderStatusPaid": true
+    },
+    "E12": {
+      "name": "No Outbox re-enqueue (SI-11)",
+      "passed": true,
+      "reEnqueueProhibited": true
+    }
+  },
+  "migration": {
+    "name": "Migration REAL data",
+    "passed": true,
+    "ordersCount": 1,
+    "fulfilmentsCount": 1,
+    "orphanOrders": 0,
+    "duplicateFulfilments": 0,
+    "realDataNotEmpty": true,
+    "paidOrdersStatusPreserved": 1
+  },
+  "wave5Regression": {
+    "passed": true,
+    "w5a": true,
+    "reEnqueueCount": 4
+  },
+  "gatewayRegression": {
+    "passed": true,
+    "gatewayInCapture": true,
+    "gatewayInRefund": true,
+    "gatewayInPublisher": true
+  },
+  "safety": {
+    "passed": true,
+    "flagsOff": true,
+    "m9m10": true,
+    "firebaseFree": true,
+    "p07Absent": true
+  },
+  "ok": true,
+  "s5Pass": true,
+  "verdict": "S5 PASS — P0-06 CLOSED"
+}

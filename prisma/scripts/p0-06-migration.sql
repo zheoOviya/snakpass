@@ -147,11 +147,18 @@ $$;
 -- Grant permissions to snakzap_app (runtime role)
 -- ========================================
 -- Fulfilment: SELECT, INSERT, UPDATE (status transitions + version increment)
-GRANT SELECT, INSERT, UPDATE ON "Fulfilment" TO snakzap_app;
-GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO snakzap_app;
-
--- snakzap_admin retains full DDL + DML
-GRANT ALL PRIVILEGES ON "Fulfilment" TO snakzap_admin;
+-- Use DO block to conditionally grant if roles exist (embedded PostgreSQL may not have them)
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'snakzap_app') THEN
+    GRANT SELECT, INSERT, UPDATE ON "Fulfilment" TO snakzap_app;
+    GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO snakzap_app;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'snakzap_admin') THEN
+    GRANT ALL PRIVILEGES ON "Fulfilment" TO snakzap_admin;
+  END IF;
+END
+$$;
 
 COMMIT;
 
