@@ -8999,3 +8999,48 @@ Stage Summary:
   alert rule — task spec said "check if it already exists; if NOT, add it" → confirmed
   missing, added. Both are additive infrastructure additions; both preserve the
   spec's 6-file scope intent (no behavior change to existing Wave-5 code).
+
+---
+Task ID: p7-audit
+Agent: Explore
+Task: P0-07 Pickup Attribution forensic audit (READ/REVIEW-ONLY)
+
+Work Log:
+- Read worklog.md tail for context (P0-06 Wave-6 left pickup attribution INACTIVE).
+- Read prisma/schema.prisma (Order, Fulfilment, Payment, AuditLog, ExceptionQueue models).
+- Read src/lib/fulfilment-state.ts (NEXT_FULFILMENT_STATUS, FULFILMENT_STATUSES, validators).
+- Read src/app/api/orders/[id]/fulfilment/route.ts (PATCH + GET handlers).
+- Read src/app/api/orders/[id]/status/route.ts (Order.status PATCH route).
+- Read src/lib/snack.ts (ORDER_STATUSES, NEXT_STATUS).
+- Read src/lib/otp-service.ts (createOtp, verifyOtp signatures).
+- Read src/lib/session.ts (SessionUser, getSessionUser, role types).
+- Read src/lib/invariant-checker.ts (reportInvariantViolation, applyFreeze, FreezeLevel).
+- Read src/lib/state-invariants.ts (M18-M21 detectors, runStateInvariantCheck).
+- Read src/lib/razorpay.ts (capture/refund signatures incl. idempotencyKey params).
+- Read src/lib/alerting.ts (inconsistent-combo rule).
+- Read src/lib/deployment.ts (pickupAttributionEnforcement + invariantChecker flags).
+- Read src/lib/validation.ts (otpVerifyBodySchema, otpPurposeSchema, orderStatusSchema).
+- Grep'd src/lib/reconciliation.ts for reEnqueueProhibited (4 occurrences at lines 1983, 1992, 2383, 2392).
+- Read src/app/api/payments/route.ts (capture route + gatewayIdempotencyKey).
+- Read src/app/api/payments/refund/route.ts (refund route + gatewayIdempotencyKey + RBAC).
+- Read src/app/api/payments/evidence-publisher-run/route.ts (publisher — gateway idempotency USE).
+- Grep'd for pickupVerifiedAt/pickupVerifiedBy writes (NONE — only READs).
+- Grep'd for verifyOtp callers (admin/verify + auth/otp/verify; NO pickup-verify caller).
+- Grep'd for requireRole / RBAC helpers (NONE — inline checks only).
+- LS'd /api/orders/[id]/ (only status/ fulfilment/ route.ts — NO pickup/verify/ endpoint).
+- LS'd src/lib/invariant-checker* (single file invariant-checker.ts; NO index.ts subdir).
+- Grep'd for QR/QrCode in src (only UI text mentions — no QR code generation/verification logic).
+
+Stage Summary:
+- P0-06 created 5 P0-06-specific files (fulfilment-state.ts, state-invariants.ts, fulfilment/route.ts, invariant-checker.ts [single file, NOT index.ts subdir — worklog notation imprecise], p0-06-migration.sql) + modified 3 (schema.prisma Fulfilment model + Order.fulfilment relation; deployment.ts invariantChecker flag; alerting.ts inconsistent-combo rule). These are the P0-06 immutable boundary P0-07 must NOT modify.
+- Fulfilment model has pickupOtp/pickupVerifiedAt/pickupVerifiedBy fields PRESENT but NEVER WRITTEN. They are only READ in GET /api/orders/[id]/fulfilment (lines 357-358) and selected (but unused) in M20 detector (state-invariants.ts:418).
+- Fulfilment PATCH route is authenticated (getSessionUser, 401 if no session) but has NO RBAC + NO QR+OTP verification on PICKED_UP. Comment at route.ts:34-37 explicitly states P0-07 is INACTIVE.
+- Order.status PATCH route is COMPLETELY UNAUTHENTICATED — no getSessionUser import, no session check, no RBAC. Any anonymous caller can transition Order.status (incl. PICKED_UP). actorRole defaults to 'VENDOR_OWNER' at route.ts:99. CRITICAL pre-P0-07 gap.
+- verifyOtp() exists (otp-service.ts:50, signature (otpId, code) -> {ok, target?, purpose?}) but is NEVER called for purpose='pickup'. Pickup OTP is created (status route:54) but never verified.
+- NO /api/orders/[id]/pickup/verify endpoint exists (LS confirmed).
+- Roles: CONSUMER | VENDOR_OWNER | VENDOR_STAFF | ADMIN | SUPER_ADMIN (per User.role default + inline role checks). NO requireRole() helper — RBAC done inline per route.
+- M20 detector exists (state-invariants.ts:404-512) but is POST-TRANSITION only (queries db.fulfilment.findMany where status='PICKED_UP') — does NOT block the PICKED_UP transition. Does NOT check pickupVerifiedAt/pickupVerifiedBy attribution (selects pickupVerifiedAt at line 418 but never uses it in the finding logic).
+- Gateway idempotency: capture route generates gatewayIdempotencyKey (route.ts:84) + stores in outbox payload (route.ts:253). Refund route same (refund/route.ts:73 + 231). BUT publisher (evidence-publisher-run/route.ts) does NOT read or pass gatewayIdempotencyKey to captureRazorpayPayment() (line 114-118, 3 args) or refundRazorpayPayment() (line 299-303, 3 args). The 4th `idempotencyKey?` parameter exists on both functions (razorpay.ts:117, 386) but is NEVER supplied by the publisher. Gateway idempotency is WIRED IN DB but NOT PASSED TO GATEWAY.
+- pickupAttributionEnforcement flag exists (deployment.ts:30, default OFF) — P0-07 can flip it.
+- 4 reEnqueueProhibited occurrences confirmed in reconciliation.ts (lines 1983, 1992, 2383, 2392) — M9/M10 remediation escalates instead of re-enqueue.
+- P0-07 must NOT modify: fulfilment-state.ts, state-invariants.ts, fulfilment/route.ts, invariant-checker.ts, p0-06-migration.sql (P0-06 immutable boundary).
