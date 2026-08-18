@@ -153,6 +153,11 @@ model Order {
   version        Int            @default(0)
   // P0-01 Wave-3: 1:1 relation to Payment
   payment        Payment?
+  // P0-06 Wave-6: 1:1 relation to Fulfilment (parallel state machine — additive, additive-only)
+  // Order.status (NEXT_STATUS) is NOT modified — Fulfilment.status has its own
+  // NEXT_FULFILMENT_STATUS machine (PREPARING → ALMOST_READY → READY_FOR_PICKUP → PICKED_UP).
+  // Lazy-created on first access via GET/PATCH /api/orders/[id]/fulfilment.
+  fulfilment     Fulfilment?
 }
 
 model OrderItem {
@@ -634,4 +639,50 @@ model RemediationAction {
   @@unique([findingId, repairType])
   @@index([status, attemptedAt])
   @@index([repairType])
+}
+
+// ----------------------------------------
+// P0-06 Wave-6 — Fulfilment (parallel state machine — additive-only)
+// ----------------------------------------
+// 1:1 to Order. Parallel to Order.status (NEXT_STATUS) — does NOT modify
+// the existing Order state machine. Fulfilment has its own NEXT_FULFILMENT_STATUS
+// machine: PREPARING → ALMOST_READY → READY_FOR_PICKUP → PICKED_UP.
+//
+// Lifecycle:
+//   PREPARING        (default — created lazily on first access)
+//     → ALMOST_READY
+//     → READY_FOR_PICKUP
+//     → PICKED_UP    (terminal)
+//
+// Lazy-created: when GET/PATCH /api/orders/[id]/fulfilment is called and no
+// Fulfilment row exists yet, it is created with status='PREPARING' +
+// pickupOtp copied from Order.pickupOtp.
+//
+// Optimistic locking: every PATCH uses a conditional UPDATE
+// (`WHERE id = X AND version = expectedVersion`). A version mismatch returns
+// HTTP 409 (same pattern as Order.status PATCH — P0-25 Case B).
+//
+// P0-07 (pickup attribution): pickupOtp / pickupVerifiedAt / pickupVerifiedBy
+// fields are PRESENT but INACTIVE in this wave. No QR+OTP verification is
+// performed on the PICKED_UP transition; no RBAC is enforced on the
+// PICKED_UP actor. P0-07 activation is a separate Orchestrator directive.
+model Fulfilment {
+  id                String   @id @default(cuid())
+  // 1:1 to Order — @unique ensures at most one Fulfilment per Order.
+  orderId           String   @unique
+  order             Order    @relation(fields: [orderId], references: [id])
+  // Parallel state machine (NEXT_FULFILMENT_STATUS) — does NOT touch Order.status.
+  status            String   @default("PREPARING") // PREPARING | ALMOST_READY | READY_FOR_PICKUP | PICKED_UP
+  // JSON array of {status, at} — parallel to Order.statusHistory.
+  statusHistory     String   @default("[]")
+  // P0-25: Optimistic-locking version field. Incremented on every PATCH.
+  version           Int      @default(0)
+  // P0-07 future: pickup attribution fields (INACTIVE in this wave).
+  pickupOtp         String?  // copied from Order.pickupOtp on lazy-create
+  pickupVerifiedAt  DateTime? // set when pickup is verified (P0-07 — not yet enforced)
+  pickupVerifiedBy  String?  // actor who verified pickup (P0-07 — not yet enforced)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([status])
 }

@@ -152,6 +152,21 @@ export const ALERT_RULES: AlertRule[] = [
     comparison: 'gt',
     cooldownMs: 60_000,
   },
+  // P0-06 Wave-6: Inconsistent state combination detected (M18-M21 detectors).
+  // Fired by state-invariants.ts when an Order/Payment/Fulfilment combo violates
+  // a parallel-state invariant (e.g., Order CANCELLED + Payment CAPTURED).
+  // These are READ-DETECT-AND-REPORT events — the auto-refund path (M18) reuses
+  // the existing refund route via HTTP; the alert is informational + for paging.
+  {
+    id: 'inconsistent-combo',
+    name: 'Inconsistent State Combination Detected',
+    description: 'Order/Payment/Fulfilment state combination violates a parallel-state invariant (M18-M21)',
+    severity: 'critical',
+    metric: 'inconsistent_combo_count',
+    threshold: 0,
+    comparison: 'gt',
+    cooldownMs: 60_000,
+  },
 ]
 
 // Fire an alert. In dev: log to stderr. In production: send to PagerDuty/Opsgenie.

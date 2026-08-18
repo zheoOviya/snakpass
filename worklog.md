@@ -8925,3 +8925,77 @@ The gateway idempotency-key rebuild is **purely additive** at 4 layers. No Prism
 Generate `crypto.randomUUID()` BEFORE each `withTransaction` body in the two payment routes; persist the key additively as a new JSON field `gatewayIdempotencyKey` inside the existing `Outbox.payload` string column (NO Prisma migration); extend the publisher's two TypeScript payload interfaces + read the key after `JSON.parse`; pass the key as a new 4th optional arg to `captureRazorpayPayment()` / `refundRazorpayPayment()` / `createRazorpayOrder()`; have each razorpay.ts function inject `X-Idempotency-Key` as a request header on real-mode Razorpay SDK calls. All 8 changes are purely additive — no existing signature changes (the new param is optional), no existing payload field removed, no M9/M10 reEnqueueProhibited safety guard touched.
 
 **— End of forensic audit report —**
+
+---
+Task ID: p06-impl
+Agent: full-stack-developer
+Task: P0-06 State Separation implementation (additive-only — P0-06-IMPLEMENT-01)
+
+Work Log:
+- Read worklog tail + P0_06_READ_PLAN_FIRST.md for context; audited existing patterns:
+  src/app/api/orders/[id]/status/route.ts (PATCH/withTransaction/optimistic-lock/audit/outbox),
+  src/lib/invariant-checker.ts (reportInvariantViolation), src/lib/alerting.ts (fireAlert),
+  src/lib/deployment.ts (FEATURE_FLAGS), src/lib/idempotency.ts (P0-17 pattern),
+  src/lib/snack.ts (NEXT_STATUS), mini-services/reconciliation/index.ts (port 3010 pattern).
+- Verified `invariantChecker` flag was NOT present in deployment.ts (read-plan claim was inaccurate);
+  added it ADDITIVELY (default OFF) so isFeatureEnabled('invariantChecker') type-checks.
+- Verified `inconsistent-combo` alert rule was NOT present in alerting.ts; added it ADDITIVELY.
+- Implemented all 8 changes (6 spec'd + 2 additive infrastructure additions):
+  1. prisma/schema.prisma: added Fulfilment model (1:1 to Order via orderId @unique,
+     status/statusHistory/version/pickupOtp/pickupVerifiedAt/pickupVerifiedBy/created/updated
+     + @@index([status])) AT THE END of the file; added `fulfilment Fulfilment?` relation
+     on Order model after `payment Payment?`. NO existing table mutation.
+  2. src/lib/fulfilment-state.ts (NEW): FULFILMENT_STATUSES array,
+     NEXT_FULFILMENT_STATUS map (PREPARING→ALMOST_READY→READY_FOR_PICKUP→PICKED_UP→null),
+     isValidFulfilmentTransition (idempotent same→same=true),
+     deriveFulfilmentStatusFromOrder (backfill mapping), FULFILMENT_STATUS_META.
+  3. src/app/api/orders/[id]/fulfilment/route.ts (NEW): PATCH + GET. getSessionUser auth
+     (401 if unauthenticated), lazy-create Fulfilment (PREPARING default + pickupOtp copy),
+     optimistic-lock updateMany({ where: { id, version } }) → 409 if 0 rows,
+     idempotent same→same returns 200 + idempotent:true, AuditLog FULFILMENT_STATUS_CHANGED,
+     Outbox FULFILMENT_STATUS_CHANGED (additive event type), P0-17 idempotency-key
+     support (resourceType='Fulfilment'), TransactionConflictError → 409.
+  4. src/lib/state-invariants.ts (NEW): M18-M21 detectors + runStateInvariantCheck(trigger).
+     M18 (Order CANCELLED + Payment CAPTURED → CRITICAL, I-01, forceFreezeLevel=3)
+     auto-refunds via HTTP fetch to ${EVIDENCE_BASE_URL}/api/payments/refund — gated
+     by isStateInvariantCheckerEnabled() && STATE_INVARIANT_AUTO_REFUND !== 'false'.
+     M19/M20/M21 detection-only → ExceptionQueue (existing reportInvariantViolation)
+     + fireAlert('inconsistent-combo'). M21 (Order FROZEN stale) → alert only (no
+     ExceptionQueue routing — no invariant violation).
+  5. mini-services/invariant-checker/index.ts + package.json (NEW): Bun.serve on
+     port 3011 (configurable). Endpoints: GET /, POST /trigger (manual, ignores
+     flag), GET /status. setInterval poll loop checks
+     isStateInvariantCheckerEnabled() per-tick (admin can enable/disable without
+     restart). Uses globalForPrisma pattern (mirrors reconciliation service).
+  6. prisma/scripts/p0-06-migration.sql (NEW): CREATE TABLE "Fulfilment" (additive),
+     unique index on orderId, status index, FK to Order (ON DELETE RESTRICT),
+     backfill INSERT (CASE-derived status from Order.status, NOT EXISTS guard for
+     idempotent re-run), verification DO block (RAISE EXCEPTION on missing/dup
+     Fulfilment), GRANTs to snakzap_app + snakzap_admin, commented-down-migration.
+  7. src/lib/deployment.ts: added invariantChecker flag (default OFF — getFlag).
+  8. src/lib/alerting.ts: added 'inconsistent-combo' alert rule (CRITICAL, 60s cooldown).
+- Tests passed:
+  - bunx prisma generate → ✔ Generated Prisma Client v6.19.2 (schema valid)
+  - bun run lint → exit 0 (no eslint errors)
+  - bunx next dev -p 3000 → ✓ Ready in 793ms; GET / → 200; GET /api/orders/test/fulfilment → 401 (AUTHENTICATION_REQUIRED — exactly per task spec)
+- Committed all changes (no push).
+
+Stage Summary:
+- 6 new files + 4 modified files (2 of which — deployment.ts invariantChecker flag +
+  alerting.ts inconsistent-combo rule — are ADDITIVE infrastructure additions needed
+  for the spec'd files to compile/run; the other 4 are the spec'd modifications).
+- Total new LOC: ~830 (fulfilment-state ~95, fulfilment route ~270, state-invariants
+  ~440, invariant-checker index.ts ~175, p0-06-migration.sql ~150). Modified LOC:
+  schema.prisma +50, deployment.ts +20, alerting.ts +15.
+- Implementation class: Class-2 expand-migrate-contract (additive). NO existing table
+  mutation, NO Order.status split, NO Payment/Refund/LedgerEntry/Outbox semantic change.
+- M18 auto-refund reuses EXISTING /api/payments/refund route via HTTP fetch — no new
+  financial mutation logic. M19/M20/M21 detection-only.
+- P0-07 pickup attribution fields present but INACTIVE (no QR+OTP, no RBAC on PICKED_UP).
+- invariantChecker flag defaults OFF (per Wave-6 deployment class). NOT activated.
+- S5 NOT declared PASS. P0-06 NOT declared CLOSED.
+- DEVIATION: task spec said "invariantChecker flag already exists in deployment.ts:80"
+  but it did NOT — added it additively (default OFF). Same for `inconsistent-combo`
+  alert rule — task spec said "check if it already exists; if NOT, add it" → confirmed
+  missing, added. Both are additive infrastructure additions; both preserve the
+  spec's 6-file scope intent (no behavior change to existing Wave-5 code).

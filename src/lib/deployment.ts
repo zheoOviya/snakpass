@@ -65,6 +65,22 @@ export const FEATURE_FLAGS = {
   //           CLASS B/D/E mismatches are NEVER automatically repaired (regardless of flag).
   // Production enablement requires separate Orchestrator authorization.
   reconciliationAutoRepair: { key: 'reconciliation-auto-repair', enabled: getFlag('reconciliation-auto-repair', false), description: 'Enable M16-only reconciliation auto-repair (operational, non-financial)' },
+
+  // P0-06 Wave-6: State-invariant checker (default OFF — additive, parallel detector)
+  // When OFF: The invariant-checker mini-service starts but does NOT run M18-M21
+  //           detectors. The state-invariants library functions are still callable
+  //           (e.g., via manual POST /trigger on the mini-service) but the cron
+  //           poll loop is inert. The P0-28 invariant-checker pathway remains
+  //           unchanged (existing reportInvariantViolation() callers — routes,
+  //           reconciliation 5B detectors — continue to work independently).
+  // When ON:  The mini-service's setInterval poll runs runStateInvariantCheck()
+  //           on a 1-hour cadence (configurable via INVARIANT_CHECKER_POLL_INTERVAL_MS).
+  //           M18 (Order CANCELLED + Payment CAPTURED → auto-refund) — the only
+  //           detector that performs an automatic action — reuses the existing
+  //           refund route via HTTP fetch (NO new financial mutation logic).
+  //           M19/M20/M21 are detection-only → ExceptionQueue + alert.
+  // Production enablement requires separate Orchestrator authorization.
+  invariantChecker: { key: 'invariant-checker', enabled: getFlag('invariant-checker', false), description: 'Enable P0-06 state-invariant checker (M18-M21 detectors — M18 auto-refund reuses existing refund route)' },
 } as const
 
 export function isFeatureEnabled(key: keyof typeof FEATURE_FLAGS): boolean {
