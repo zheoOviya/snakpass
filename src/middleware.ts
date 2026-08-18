@@ -50,7 +50,7 @@ function classifyPath(pathname: string): keyof typeof RATE_LIMITS {
   if (pathname.startsWith('/api/auth/otp/send')) return 'otpSend'
   if (pathname.startsWith('/api/auth/otp/verify')) return 'otpVerify'
   if (pathname.startsWith('/api/auth/admin')) return 'auth'
-  if (pathname.startsWith('/api/auth/firebase')) return 'auth'
+  if (pathname.startsWith('/api/auth/supabase')) return 'auth'
   if (pathname.startsWith('/api/auth/login')) return 'auth'
   if (pathname.startsWith('/api/orders') && pathname.endsWith('/status')) return 'adminWrite'
   if (pathname.startsWith('/api/orders') && !pathname.includes('/', '/api/orders'.length)) return 'payment'

@@ -7,8 +7,8 @@ import { db } from './db'
 //   - admin 2FA (email channel)
 //   - pickup OTP delivery (sent to consumer's phone when order is ready)
 //
-// In production this is backed by Firebase Authentication (phone SMS) — see
-// src/lib/firebase.ts for the client-side Firebase path. When Firebase
+// In production this is backed by Supabase Authentication (phone SMS) — see
+// src/lib/supabase.ts for the client-side Supabase path. When Supabase
 // credentials are NOT configured (e.g. this sandbox), we run in "demo mode":
 // the 6-digit code is generated and stored server-side (scrypt-hashed) and
 // returned to the caller so the UI can surface it for testing. The verify
@@ -25,7 +25,7 @@ function hashCode(code: string): string {
 
 export interface CreateOtpResult {
   otpId: string
-  code: string // returned so demo-mode UI can display it; in real Firebase mode this is the code we'd send via SMS/email
+  code: string // returned so demo-mode UI can display it; in real Supabase mode this is the code we'd send via SMS/email
 }
 
 export async function createOtp(

@@ -77,7 +77,7 @@ export default function Home() {
             2FA-secured console.
           </p>
           <div className="mt-5 flex flex-wrap gap-2 text-xs">
-            <span className="rounded-full bg-white/20 px-3 py-1">🔥 Firebase OTP auth</span>
+            <span className="rounded-full bg-white/20 px-3 py-1">🔥 Supabase OTP auth</span>
             <span className="rounded-full bg-white/20 px-3 py-1">⚡ Real-time order tracking</span>
             <span className="rounded-full bg-white/20 px-3 py-1">🔒 Admin 2FA</span>
             <span className="rounded-full bg-white/20 px-3 py-1">🚫 No delivery</span>
@@ -156,14 +156,14 @@ export default function Home() {
             </div>
           </div>
           <p className="mt-3 text-[11px] text-muted-foreground">
-            Demo mode shows the OTP/2FA code on screen. Configure <code className="font-mono">NEXT_PUBLIC_FIREBASE_*</code> env vars to enable real SMS/email delivery via Firebase Authentication.
+            Demo mode shows the OTP/2FA code on screen. Configure <code className="font-mono">NEXT_PUBLIC_SUPABASE_*</code> env vars to enable real SMS/email delivery via Supabase Authentication.
           </p>
         </div>
       </main>
 
       <footer className="mt-auto border-t bg-card">
         <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-2 px-4 py-4 text-center text-xs text-muted-foreground sm:flex-row sm:text-left">
-          <span><strong className="text-foreground">SnakZap</strong> — Pickup-first food ordering platform · Firebase Authentication</span>
+          <span><strong className="text-foreground">SnakZap</strong> — Pickup-first food ordering platform · Supabase Authentication</span>
           <div className="flex gap-3">
             <span>🚫 No delivery</span>
             <span>💳 Max 10% commission</span>

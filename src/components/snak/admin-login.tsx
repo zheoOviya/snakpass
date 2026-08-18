@@ -123,7 +123,7 @@ export function AdminLogin({ onDone }: { onDone: () => void }) {
                       Demo mode — your 2FA code: <span className="font-mono font-bold tracking-widest">{demoCode}</span>
                     </p>
                   )}
-                  <p className="mt-2 text-xs text-muted-foreground">Delivered via Firebase Auth (email OTP channel)</p>
+                  <p className="mt-2 text-xs text-muted-foreground">Delivered via email (2FA OTP channel)</p>
                 </div>
                 <Button onClick={verify2fa} disabled={busy} className="w-full">
                   {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <ShieldCheck className="mr-1 h-4 w-4" />}

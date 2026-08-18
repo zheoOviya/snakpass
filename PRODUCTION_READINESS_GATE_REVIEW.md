@@ -213,7 +213,7 @@ Source: `src/lib/deployment.ts` (lines 25–54). All defaults to `false`; env va
 | Alert-evaluator (Fly.io) | 🚫 NOT DEPLOYED | `mini-services/alert-evaluator/index.ts` exists (port 3005, long-lived `setInterval` evaluating 13 alert rules incl. `orphan_business_count` fixed in Wave-4 4d). Production-compatible if `DATABASE_URL` = Supabase pooler. Not a smoke-test dependency (Phase-3 BLOCKER #9). |
 | Outbox-publisher (Fly.io) | 🚫 NOT DEPLOYED | `mini-services/outbox-publisher/index.ts` exists with Wave-4 4c Phase 2 capture handler. Long-lived process (lease-based atomic claim loop). Needs Fly.io (or equivalent long-running host). Without it, `PAYMENT_CAPTURE_REQUESTED` events are never consumed → `Payment` stays in `CAPTURE_PENDING` (acceptable in demo mode; blocks `realPayments=true`). |
 | Backup-scheduler | 🚫 NOT DEPLOYED (and needs rewrite) | `mini-services/backup-scheduler/index.ts` uses SQLite file-copy logic — references `db/custom.db` which does NOT exist in PostgreSQL deployment. Phase-3 rewrite needed (`pg_dump` → Supabase Storage bucket `snakzap-backups`). Blocker #10 in INFRASTRUCTURE_READINESS.md. |
-| Firebase (Admin SDK) | 🚫 NOT PROVISIONED | `firebase-admin` v14.2.0 + `firebase` v12.17.1 installed. `FIREBASE_SERVICE_ACCOUNT_JSON` env var NOT configured. In `NODE_ENV=production`, `firebase-admin.ts` HARD-FAILS on any token verification attempt (fail-closed) — staging must either skip Firebase auth paths OR configure the service account. |
+| ~~Firebase (Admin SDK)~~ → Supabase Auth | ✅ REMOVED | Firebase deps + source files removed (FIREBASE-ELIMINATION-IMPLEMENT-01). Supabase is the sole auth platform — `src/lib/supabase-admin.ts` + `src/lib/supabase.ts` + `/api/auth/supabase/session`. Production Supabase project NOT provisioned (HB-7). |
 | Supabase Storage bucket (`snakzap-backups`) | 🚫 NOT PROVISIONED | Required by Phase-3 `pg_dump` rewrite (DR_RUNBOOK.md §3.2). |
 | GitHub repo secrets | 🚫 NOT VERIFIED | `VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` needed by `deploy.yml`. NOT verified present (INFRASTRUCTURE_READINESS.md Blocker #3 — Orchestrator-only check). |
 | GitHub environments (`staging`, `production`) | 🚫 NOT CONFIGURED | `deploy.yml` requires `staging` (no protection) + `production` (required reviewers) GitHub environments. Blockers #4, #5. |
@@ -362,7 +362,7 @@ These MUST be resolved before production can be authorized. Each maps to a launc
 | HB-8 | Production Vercel environment configured (all 26 env vars) | R8 | Operator (per docs/ENV_VAR_AUDIT.md §4) |
 | HB-9 | `realtime`, `alert-evaluator`, `outbox-publisher` deployed to Fly.io | R9 | Operator (3 Fly.io apps in `nrt` region) |
 | HB-10 | Razorpay production API keys + webhook secret provisioned | R10 | Operator |
-| HB-11 | Firebase service account JSON provisioned | R11 | Operator |
+| HB-11 | Supabase Auth production configuration (URL, secret key, JWKS URL, anon key) | R11 | Operator |
 | HB-12 | `snakzap_app` role + WORM REVOKE applied to production Supabase | R12 | Operator (apply `create-roles.sql` + `revoke-worm.sql`) |
 | HB-13 | GitHub repo secrets (`VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID`) + environments (`staging`, `production`) configured | R23 | Operator |
 | HB-14 | `outbox-publisher` running as long-lived service (REQUIRED before `realPayments=true`) | R9 | Operator (Fly.io) |

@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
 
 // P0-09 — Server-side Supabase JWT verification (DEV-002 closure)
-// Replaces Firebase Admin SDK with Supabase service role key.
+// Supabase server-side admin client + JWT verification (sole auth platform).
 // Direct Protector of I-12 (Session Revocation).
 //
 // The server verifies the Supabase access token using the project's JWKS
