@@ -6,7 +6,19 @@ import { fileURLToPath } from "url";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
+// HB-15 item 2: Custom ESLint rule — no external calls inside withTransaction() body
+// Reference: docs/TRANSACTION_RETRY_INVARIANT.md §8.2 item 2
+import noExternalCallInTransaction from "./eslint-rules/no-external-call-in-transaction.js";
+
 const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
+  plugins: {
+    // HB-15 item 2: Custom plugin for TRANSACTION_RETRY_INVARIANT enforcement
+    'transaction-invariant': {
+      rules: {
+        'no-external-call': noExternalCallInTransaction,
+      },
+    },
+  },
   rules: {
     // TypeScript rules
     "@typescript-eslint/no-explicit-any": "off",
@@ -42,9 +54,16 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "no-undef": "off",
     "no-unreachable": "off",
     "no-useless-escape": "off",
+
+    // HB-15 item 2: TRANSACTION_RETRY_INVARIANT enforcement
+    // Flags capture/send/notify/publish/fetch calls inside withTransaction() bodies
+    "transaction-invariant/no-external-call": "error",
   },
 }, {
-  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills"]
+  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills",
+    // Publisher is exempt — its external calls are intentionally OUTSIDE the txn body (Wave-4 4c)
+    "mini-services/outbox-publisher/**",
+  ],
 }];
 
 export default eslintConfig;
