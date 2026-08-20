@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { motion } from 'framer-motion'
 import { Phone, ShieldCheck, ArrowLeft, Loader2, MessageSquare } from 'lucide-react'
 import { Input } from '@/components/ui/input'
@@ -24,6 +25,7 @@ interface PhoneOtpLoginProps {
 type Mode = 'supabase' | 'demo'
 
 export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, icon, onDone }: PhoneOtpLoginProps) {
+  const router = useRouter()
   const [step, setStep] = useState<'phone' | 'otp'>('phone')
   const [phone, setPhone] = useState(demoPhone ?? '+9198765')
   const [otpId, setOtpId] = useState('')
@@ -32,6 +34,33 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
   const [mode, setMode] = useState<Mode>(isSupabaseConfigured ? 'supabase' : 'demo')
   const { toast } = useToast()
   const { refresh } = useAuth()
+
+  // ADDITIVE (Wave 2 Task 2A): after a successful OTP verify, the caller's
+  // `onDone()` only fires for returning users with a campusId set. First-time
+  // users (campusId === null) are routed to /onboarding/campus instead.
+  //
+  // The OTP verify route itself is governed (Task 1 — read-only) so it does
+  // not surface campusId. We re-fetch /api/auth/me (which Task 2A modified to
+  // include campusId + campusName) and gate on the resulting field.
+  async function routeAfterVerify() {
+    try {
+      const meRes = await fetch('/api/auth/me', { cache: 'no-store' })
+      const meData = (await meRes.json().catch(() => ({}))) as {
+        user?: { campusId?: string | null; role?: string }
+      }
+      const u = meData.user
+      // Only CONSUMER role goes through campus onboarding. Vendor/admin login
+      // paths don't have a campus concept — let them fall through to onDone().
+      if (u && u.role === 'CONSUMER' && !u.campusId) {
+        router.push('/onboarding/campus')
+        return
+      }
+    } catch {
+      // If the /me fetch fails, fall through to onDone() — don't block the
+      // login flow on a transient error.
+    }
+    onDone()
+  }
 
   async function sendOtp() {
     if (phone.replace(/\D/g, '').length < 10) {
@@ -99,7 +128,7 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
           if (!res.ok) throw new Error(data.error?.message || data.error)
           await refresh()
           toast({ title: 'Welcome!', description: data.user?.name ?? 'Logged in' })
-          onDone()
+          await routeAfterVerify()
         } catch (e) {
           toast({ title: 'Session creation failed', description: (e as Error).message, variant: 'destructive' })
         }
@@ -118,7 +147,7 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
         if (!res.ok) throw new Error(data?.error?.message ?? 'Verification failed')
         await refresh()
         toast({ title: 'Welcome!', description: data.user?.name ?? 'Logged in' })
-        onDone()
+        await routeAfterVerify()
       } catch (e) {
         toast({ title: 'Verification failed', description: (e as Error).message, variant: 'destructive' })
       }

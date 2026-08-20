@@ -1,0 +1,1171 @@
+     1→'use client'
+     2→
+     3→import * as React from 'react'
+     4→import { motion, AnimatePresence, useReducedMotion } from 'framer-motion'
+     5→import {
+     6→  Search,
+     7→  X,
+     8→  SlidersHorizontal,
+     9→  ChevronDown,
+    10→  ChevronUp,
+    11→  RefreshCw,
+    12→  Star,
+    13→  Tag,
+    14→  DoorOpen,
+    15→  Leaf,
+    16→  MapPin,
+    17→  AlertCircle,
+    18→  ArrowUpDown,
+    19→  Check,
+    20→} from 'lucide-react'
+    21→import { Button } from '@/components/ui/button'
+    22→import { Input } from '@/components/ui/input'
+    23→import { Card, CardContent } from '@/components/ui/card'
+    24→import { Badge } from '@/components/ui/badge'
+    25→import { Checkbox } from '@/components/ui/checkbox'
+    26→import {
+    27→  Sheet,
+    28→  SheetContent,
+    29→  SheetHeader,
+    30→  SheetTitle,
+    31→  SheetDescription,
+    32→} from '@/components/ui/sheet'
+    33→import { useCampus } from '@/lib/campus-store'
+    34→import { useToast } from '@/hooks/use-toast'
+    35→import { cn } from '@/lib/utils'
+    36→import { RestaurantCardV2 } from '../restaurant-card-v2'
+    37→import { EmptyState } from '../empty-state'
+    38→import { RestaurantCardSkeleton } from '../skeleton-loader'
+    39→import type { Restaurant } from '@/lib/types'
+    40→
+    41→// ════════════════════════════════════════════════════════════════════════════
+    42→//  ExploreScreen — Wave 2 Task 2C
+    43→//
+    44→//  Implements blueprint §10 RESTAURANT DISCOVERY with the full filter set:
+    45→//  - Search bar (debounced 250ms) by name / cuisine / description (server-side)
+    46→//  - Toggle chips: Open Now / Veg Only / Offers / Rating ≥ 4.0 / Campus
+    47→//  - Cuisine multi-select (bottom sheet) — populated from results' cuisines
+    48→//  - Price range: Under ₹200 / ₹200–400 / ₹400+ (based on priceForTwo)
+    49→//  - Sort: Recommended (default) / Rating / Prep Time / Price Low→High
+    50→//  - Active filter chips bar with × remove + "Clear all"
+    51→//  - Loading: RestaurantCardSkeleton grid
+    52→//  - Empty: EmptyState "no-restaurants" variant
+    53→//  - Error: inline retry card
+    54→//  - Pull-to-refresh (touch-based, mobile) + Refresh button (desktop fallback)
+    55→//  - "Load more" button (simpler than infinite scroll for MVP — opt per spec)
+    56→//
+    57→//  Server-side filters (q, veg, campusId) drive the fetch. The remaining
+    58→//  filters (openNow, offers, rating, cuisines, priceRange, sort) are applied
+    59→//  client-side post-fetch so the user sees instant feedback without re-fetching.
+    60→//
+    61→//  Governance: Task 2C owns this file. consumer-view.tsx + restaurant-detail-
+    62→//  screen.tsx (2D) are untouched — the parent wires onSelectRestaurant.
+    63→// ════════════════════════════════════════════════════════════════════════════
+    64→
+    65→// ---------------------------------------------------------------------------
+    66→//  Types — local additive shapes (not in shared types.ts to avoid governance
+    67→//  boundary violation). Mirror the additive fields the API now returns.
+    68→// ---------------------------------------------------------------------------
+    69→
+    70→/** Restaurant list item shape returned by /api/restaurants (Wave 2C additive). */
+    71→interface RestaurantListItem extends Restaurant {
+    72→  /** Reward multiplier (default 1.0). Wave 2C additive. */
+    73→  rewardMultiplier: number
+    74→  /** Open/closed state — always true for MVP (no hours model). */
+    75→  isOpen: boolean
+    76→  /** Derived deal label ("Great value") or null. Wave 2C additive. */
+    77→  deal: string | null
+    78→}
+    79→
+    80→// ---------------------------------------------------------------------------
+    81→//  Filter config — declarative chip definitions
+    82→// ---------------------------------------------------------------------------
+    83→
+    84→type ToggleKey = 'openNow' | 'vegOnly' | 'offers' | 'ratingGte4' | 'useCampus'
+    85→type PriceRange = 'any' | 'under200' | '200to400' | 'over400'
+    86→type SortKey = 'recommended' | 'rating' | 'prepTime' | 'priceLowHigh'
+    87→
+    88→interface ToggleChipConfig {
+    89→  key: ToggleKey
+    90→  label: string
+    91→  Icon: typeof Star
+    92→  /** Helper to read the active state from the filter state object. */
+    93→  isActive: (s: FilterState) => boolean
+    94→}
+    95→
+    96→const TOGGLE_CHIPS: ToggleChipConfig[] = [
+    97→  {
+    98→    key: 'openNow',
+    99→    label: 'Open Now',
+   100→    Icon: DoorOpen,
+   101→    isActive: (s) => s.openNow,
+   102→  },
+   103→  {
+   104→    key: 'vegOnly',
+   105→    label: 'Veg Only',
+   106→    Icon: Leaf,
+   107→    isActive: (s) => s.vegOnly,
+   108→  },
+   109→  {
+   110→    key: 'offers',
+   111→    label: 'Offers',
+   112→    Icon: Tag,
+   113→    isActive: (s) => s.offers,
+   114→  },
+   115→  {
+   116→    key: 'ratingGte4',
+   117→    label: 'Rating ≥ 4.0',
+   118→    Icon: Star,
+   119→    isActive: (s) => s.ratingGte4,
+   120→  },
+   121→  {
+   122→    key: 'useCampus',
+   123→    label: 'My Campus',
+   124→    Icon: MapPin,
+   125→    isActive: (s) => s.useCampus,
+   126→  },
+   127→]
+   128→
+   129→const PRICE_RANGES: { value: PriceRange; label: string; chip: string }[] = [
+   130→  { value: 'any', label: 'Any price', chip: '' },
+   131→  { value: 'under200', label: 'Under ₹200', chip: 'Under ₹200' },
+   132→  { value: '200to400', label: '₹200 – ₹400', chip: '₹200–400' },
+   133→  { value: 'over400', label: '₹400+', chip: '₹400+' },
+   134→]
+   135→
+   136→const SORTS: { value: SortKey; label: string }[] = [
+   137→  { value: 'recommended', label: 'Recommended' },
+   138→  { value: 'rating', label: 'Rating' },
+   139→  { value: 'prepTime', label: 'Prep Time' },
+   140→  { value: 'priceLowHigh', label: 'Price: Low → High' },
+   141→]
+   142→
+   143→interface FilterState {
+   144→  openNow: boolean
+   145→  vegOnly: boolean
+   146→  offers: boolean
+   147→  ratingGte4: boolean
+   148→  useCampus: boolean
+   149→  cuisines: string[]
+   150→  priceRange: PriceRange
+   151→  sort: SortKey
+   152→}
+   153→
+   154→const DEFAULT_FILTERS: FilterState = {
+   155→  openNow: false,
+   156→  vegOnly: false,
+   157→  offers: false,
+   158→  ratingGte4: false,
+   159→  useCampus: false,
+   160→  cuisines: [],
+   161→  priceRange: 'any',
+   162→  sort: 'recommended',
+   163→}
+   164→
+   165→// ---------------------------------------------------------------------------
+   166→//  Constants
+   167→// ---------------------------------------------------------------------------
+   168→
+   169→const SEARCH_DEBOUNCE_MS = 250
+   170→const PAGE_SIZE = 6
+   171→const GREAT_VALUE_THRESHOLD_PAISE = 30000
+   172→const RATING_FLOOR = 4.0
+   173→
+   174→// ---------------------------------------------------------------------------
+   175→//  Sub-components
+   176→// ---------------------------------------------------------------------------
+   177→
+   178→/** Single toggle filter chip — pill shape, filled when active. */
+   179→function FilterChip({
+   180→  label,
+   181→  Icon,
+   182→  active,
+   183→  onClick,
+   184→  disabled,
+   185→}: {
+   186→  label: string
+   187→  Icon: typeof Star
+   188→  active: boolean
+   189→  onClick: () => void
+   190→  disabled?: boolean
+   191→}) {
+   192→  return (
+   193→    <motion.button
+   194→      type="button"
+   195→      onClick={onClick}
+   196→      disabled={disabled}
+   197→      aria-pressed={active}
+   198→      whileTap={{ scale: 0.95 }}
+   199→      transition={{ duration: 0.12 }}
+   200→      className={cn(
+   201→        'snak-focus-ring inline-flex h-9 shrink-0 items-center gap-1.5 rounded-full px-3.5 text-xs font-medium transition-colors',
+   202→        'whitespace-nowrap select-none',
+   203→        active
+   204→          ? 'bg-primary text-primary-foreground'
+   205→          : 'bg-muted text-muted-foreground hover:bg-muted/70',
+   206→        disabled && 'cursor-not-allowed opacity-40',
+   207→      )}
+   208→    >
+   209→      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+   210→      <span>{label}</span>
+   211→    </motion.button>
+   212→  )
+   213→}
+   214→
+   215→/** Active filter chip with an × remove button — rendered in the active filter bar. */
+   216→function ActiveFilterChip({
+   217→  label,
+   218→  onRemove,
+   219→}: {
+   220→  label: string
+   221→  onRemove: () => void
+   222→}) {
+   223→  return (
+   224→    <Badge
+   225→      variant="secondary"
+   226→      className="gap-1 rounded-full bg-secondary px-2.5 py-1 text-xs"
+   227→    >
+   228→      <span className="max-w-[140px] truncate">{label}</span>
+   229→      <button
+   230→        type="button"
+   231→        onClick={onRemove}
+   232→        aria-label={`Remove filter: ${label}`}
+   233→        className="snak-focus-ring -mr-1 ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded-full hover:bg-secondary-foreground/15"
+   234→      >
+   235→        <X className="h-3 w-3" aria-hidden="true" />
+   236→      </button>
+   237→    </Badge>
+   238→  )
+   239→}
+   240→
+   241→/**
+   242→ * Trigger button for a bottom-sheet dropdown (cuisines / price / sort).
+   243→ * Shows the active selection label and a chevron icon.
+   244→ */
+   245→function SheetTriggerButton({
+   246→  label,
+   247→  value,
+   248→  active,
+   249→  Icon,
+   250→  onClick,
+   251→  badgeCount,
+   252→}: {
+   253→  label: string
+   254→  value: string
+   255→  active: boolean
+   256→  Icon: typeof Star
+   257→  onClick: () => void
+   258→  badgeCount?: number
+   259→}) {
+   260→  return (
+   261→    <button
+   262→      type="button"
+   263→      onClick={onClick}
+   264→      aria-haspopup="dialog"
+   265→      aria-expanded={active}
+   266→      className={cn(
+   267→        'snak-focus-ring inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-xs font-medium transition-colors',
+   268→        active
+   269→          ? 'border-primary bg-primary/5 text-primary'
+   270→          : 'border-border bg-background text-foreground hover:bg-accent',
+   271→      )}
+   272→    >
+   273→      <Icon className="h-3.5 w-3.5" aria-hidden="true" />
+   274→      <span className="text-muted-foreground">{label}:</span>
+   275→      <span className="max-w-[120px] truncate font-semibold">{value}</span>
+   276→      {typeof badgeCount === 'number' && badgeCount > 0 && (
+   277→        <span
+   278→          className="inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground"
+   279→          aria-label={`${badgeCount} selected`}
+   280→        >
+   281→          {badgeCount}
+   282→        </span>
+   283→      )}
+   284→      <ChevronDown
+   285→        className={cn('h-3 w-3 transition-transform', active && 'rotate-180')}
+   286→        aria-hidden="true"
+   287→      />
+   288→    </button>
+   289→  )
+   290→}
+   291→
+   292→/** Error card with retry — shown when fetch fails. */
+   293→function ErrorCard({ onRetry }: { onRetry: () => void }) {
+   294→  return (
+   295→    <Card className="mx-auto max-w-md border-destructive/30 bg-destructive/5">
+   296→      <CardContent className="flex flex-col items-center gap-3 p-6 text-center">
+   297→        <AlertCircle className="h-10 w-10 text-destructive" aria-hidden="true" />
+   298→        <div className="space-y-1">
+   299→          <p className="text-sm font-semibold text-foreground">
+   300→            Couldn’t load restaurants
+   301→          </p>
+   302→          <p className="text-xs text-muted-foreground">
+   303→            Something went wrong. Please try again.
+   304→          </p>
+   305→        </div>
+   306→        <Button
+   307→          type="button"
+   308→          variant="outline"
+   309→          size="sm"
+   310→          onClick={onRetry}
+   311→          className="snak-focus-ring"
+   312→        >
+   313→          <RefreshCw className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
+   314→          Try again
+   315→        </Button>
+   316→      </CardContent>
+   317→    </Card>
+   318→  )
+   319→}
+   320→
+   321→// ---------------------------------------------------------------------------
+   322→//  Sheet config (defined outside the component so the JSX stays clean)
+   323→// ---------------------------------------------------------------------------
+   324→
+   325→type SheetKind = 'cuisines' | 'price' | 'sort' | null
+   326→
+   327→// ---------------------------------------------------------------------------
+   328→//  Main component
+   329→// ---------------------------------------------------------------------------
+   330→
+   331→export interface ExploreScreenProps {
+   332→  /** Called when a restaurant card is tapped. Parent handles navigation. */
+   333→  onSelectRestaurant: (id: string) => void
+   334→  /** Optional className override for the root wrapper. */
+   335→  className?: string
+   336→}
+   337→
+   338→export function ExploreScreen({
+   339→  onSelectRestaurant,
+   340→  className,
+   341→}: ExploreScreenProps) {
+   342→  const prefersReduced = useReducedMotion()
+   343→  const { toast } = useToast()
+   344→  const selectedCampusId = useCampus((s) => s.selectedCampusId)
+   345→  const selectedCampusName = useCampus((s) => s.selectedCampusName)
+   346→
+   347→  // --- State -----------------------------------------------------------------
+   348→  const [search, setSearch] = React.useState('')
+   349→  const [debouncedSearch, setDebouncedSearch] = React.useState('')
+   350→  const [filters, setFilters] = React.useState<FilterState>(DEFAULT_FILTERS)
+   351→  const [restaurants, setRestaurants] = React.useState<RestaurantListItem[]>([])
+   352→  const [loading, setLoading] = React.useState(true)
+   353→  const [error, setError] = React.useState<string | null>(null)
+   354→  const [visibleCount, setVisibleCount] = React.useState(PAGE_SIZE)
+   355→  const [refreshing, setRefreshing] = React.useState(false)
+   356→  const [openSheet, setOpenSheet] = React.useState<SheetKind>(null)
+   357→  // Working drafts inside sheets — applied on "Apply" or live-updated.
+   358→  const [draftCuisines, setDraftCuisines] = React.useState<string[]>([])
+   359→  const [draftPriceRange, setDraftPriceRange] =
+   360→    React.useState<PriceRange>('any')
+   361→  const [draftSort, setDraftSort] = React.useState<SortKey>('recommended')
+   362→
+   363→  // Pull-to-refresh state (mobile only — touchstart/touchmove on the
+   364→  // scroll container).
+   365→  const scrollRef = React.useRef<HTMLDivElement | null>(null)
+   366→  const pullStartY = React.useRef<number | null>(null)
+   367→  const [pullDistance, setPullDistance] = React.useState(0)
+   368→  const PULL_THRESHOLD = 70
+   369→  const PULL_MAX = 100
+   370→
+   371→  // --- Debounce search (250ms per acceptance criteria) ----------------------
+   372→  React.useEffect(() => {
+   373→    const t = setTimeout(() => setDebouncedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
+   374→    return () => clearTimeout(t)
+   375→  }, [search])
+   376→
+   377→  // --- Reset visible count when filters / search change ----------------------
+   378→  React.useEffect(() => {
+   379→    setVisibleCount(PAGE_SIZE)
+   380→  }, [debouncedSearch, filters])
+   381→
+   382→  // --- Fetch (server-side filters: q + vegOnly + campusId) -------------------
+   383→  const fetchRef = React.useRef(0)
+   384→  const doFetch = React.useCallback(
+   385→    async (opts: { silent?: boolean } = {}) => {
+   386→      const silent = opts.silent ?? false
+   387→      if (!silent) setLoading(true)
+   388→      setError(null)
+   389→      const myFetchId = ++fetchRef.current
+   390→      try {
+   391→        const params = new URLSearchParams()
+   392→        if (debouncedSearch) params.set('q', debouncedSearch)
+   393→        if (filters.vegOnly) params.set('veg', '1')
+   394→        if (filters.useCampus && selectedCampusId) {
+   395→          params.set('campusId', selectedCampusId)
+   396→        }
+   397→        const url = `/api/restaurants${params.size ? `?${params.toString()}` : ''}`
+   398→        const res = await fetch(url, { cache: 'no-store' })
+   399→        if (!res.ok) {
+   400→          throw new Error(`HTTP ${res.status}`)
+   401→        }
+   402→        const data = (await res.json().catch(() => ({}))) as {
+   403→          restaurants?: RestaurantListItem[]
+   404→          error?: string
+   405→        }
+   406→        // Stale-response guard — only commit if this fetch is the latest.
+   407→        if (myFetchId !== fetchRef.current) return
+   408→        if (data.restaurants) {
+   409→          setRestaurants(data.restaurants)
+   410→        } else {
+   411→          setRestaurants([])
+   412→          if (data.error) setError(data.error)
+   413→        }
+   414→      } catch (e) {
+   415→        if (myFetchId !== fetchRef.current) return
+   416→        setError(e instanceof Error ? e.message : 'Failed to fetch restaurants')
+   417→        setRestaurants([])
+   418→      } finally {
+   419→        if (myFetchId === fetchRef.current) {
+   420→          setLoading(false)
+   421→          setRefreshing(false)
+   422→          setPullDistance(0)
+   423→        }
+   424→      }
+   425→    },
+   426→    [debouncedSearch, filters.vegOnly, filters.useCampus, selectedCampusId],
+   427→  )
+   428→
+   429→  // Trigger fetch whenever server-side inputs change.
+   430→  React.useEffect(() => {
+   431→    doFetch()
+   432→  }, [doFetch])
+   433→
+   434→  // --- Derived: available cuisines (from currently loaded restaurants) ------
+   435→  const availableCuisines = React.useMemo(() => {
+   436→    const set = new Set<string>()
+   437→    for (const r of restaurants) set.add(r.cuisine)
+   438→    return Array.from(set).sort((a, b) => a.localeCompare(b))
+   439→  }, [restaurants])
+   440→
+   441→  // --- Derived: client-side filtered + sorted results -----------------------
+   442→  const filteredRestaurants = React.useMemo(() => {
+   443→    let list = restaurants.slice()
+   444→    // openNow — always true for MVP (no hours model); kept for spec compliance.
+   445→    if (filters.openNow) {
+   446→      list = list.filter((r) => r.isOpen)
+   447→    }
+   448→    // offers — filter to restaurants with a non-null deal.
+   449→    if (filters.offers) {
+   450→      list = list.filter((r) => r.deal !== null && r.deal !== '')
+   451→    }
+   452→    // ratingGte4 — rating floor.
+   453→    if (filters.ratingGte4) {
+   454→      list = list.filter((r) => r.rating >= RATING_FLOOR)
+   455→    }
+   456→    // cuisines (multi-select) — must include all selected cuisines.
+   457→    if (filters.cuisines.length > 0) {
+   458→      const wanted = new Set(filters.cuisines)
+   459→      list = list.filter((r) => wanted.has(r.cuisine))
+   460→    }
+   461→    // priceRange — based on priceForTwo (paise).
+   462→    if (filters.priceRange !== 'any') {
+   463→      list = list.filter((r) => {
+   464→        const paise = r.priceForTwo
+   465→        if (filters.priceRange === 'under200') return paise < 20000
+   466→        if (filters.priceRange === '200to400')
+   467→          return paise >= 20000 && paise <= 40000
+   468→        if (filters.priceRange === 'over400') return paise > 40000
+   469→        return true
+   470→      })
+   471→    }
+   472→    // sort
+   473→    switch (filters.sort) {
+   474→      case 'rating':
+   475→        list.sort((a, b) => b.rating - a.rating)
+   476→        break
+   477→      case 'prepTime':
+   478→        list.sort((a, b) => a.prepTimeMins - b.prepTimeMins)
+   479→        break
+   480→      case 'priceLowHigh':
+   481→        list.sort((a, b) => a.priceForTwo - b.priceForTwo)
+   482→        break
+   483→      case 'recommended':
+   484→      default:
+   485→        // Default API order (rating desc) — preserve.
+   486→        break
+   487→    }
+   488→    return list
+   489→  }, [restaurants, filters])
+   490→
+   491→  // Visible slice — "Load more" paginated.
+   492→  const visibleRestaurants = filteredRestaurants.slice(0, visibleCount)
+   493→  const hasMore = visibleCount < filteredRestaurants.length
+   494→
+   495→  // --- Active filter chips (rendered above results) -------------------------
+   496→  const activeFilterChips: { label: string; onRemove: () => void }[] = React.useMemo(
+   497→    () => {
+   498→      const chips: { label: string; onRemove: () => void }[] = []
+   499→      if (filters.openNow) {
+   500→        chips.push({
+   501→          label: 'Open Now',
+   502→          onRemove: () => setFilters((f) => ({ ...f, openNow: false })),
+   503→        })
+   504→      }
+   505→      if (filters.vegOnly) {
+   506→        chips.push({
+   507→          label: 'Veg Only',
+   508→          onRemove: () => setFilters((f) => ({ ...f, vegOnly: false })),
+   509→        })
+   510→      }
+   511→      if (filters.offers) {
+   512→        chips.push({
+   513→          label: 'Offers',
+   514→          onRemove: () => setFilters((f) => ({ ...f, offers: false })),
+   515→        })
+   516→      }
+   517→      if (filters.ratingGte4) {
+   518→        chips.push({
+   519→          label: 'Rating ≥ 4.0',
+   520→          onRemove: () => setFilters((f) => ({ ...f, ratingGte4: false })),
+   521→        })
+   522→      }
+   523→      if (filters.useCampus && selectedCampusName) {
+   524→        chips.push({
+   525→          label: `Campus: ${selectedCampusName}`,
+   526→          onRemove: () => setFilters((f) => ({ ...f, useCampus: false })),
+   527→        })
+   528→      }
+   529→      for (const c of filters.cuisines) {
+   530→        chips.push({
+   531→          label: c,
+   532→          onRemove: () =>
+   533→            setFilters((f) => ({
+   534→              ...f,
+   535→              cuisines: f.cuisines.filter((x) => x !== c),
+   536→            })),
+   537→        })
+   538→      }
+   539→      if (filters.priceRange !== 'any') {
+   540→        const cfg = PRICE_RANGES.find((p) => p.value === filters.priceRange)
+   541→        if (cfg && cfg.chip) {
+   542→          chips.push({
+   543→            label: cfg.chip,
+   544→            onRemove: () => setFilters((f) => ({ ...f, priceRange: 'any' })),
+   545→          })
+   546→        }
+   547→      }
+   548→      if (filters.sort !== 'recommended') {
+   549→        const cfg = SORTS.find((s) => s.value === filters.sort)
+   550→        if (cfg) {
+   551→          chips.push({
+   552→            label: `Sort: ${cfg.label}`,
+   553→            onRemove: () => setFilters((f) => ({ ...f, sort: 'recommended' })),
+   554→          })
+   555→        }
+   556→      }
+   557→      return chips
+   558→    },
+   559→    [filters, selectedCampusName],
+   560→  )
+   561→
+   562→  const hasActiveFilters = activeFilterChips.length > 0
+   563→
+   564→  const clearAllFilters = React.useCallback(() => {
+   565→    setFilters(DEFAULT_FILTERS)
+   566→    setDraftCuisines([])
+   567→    setDraftPriceRange('any')
+   568→    setDraftSort('recommended')
+   569→  }, [])
+   570→
+   571→  // --- Pull-to-refresh handlers --------------------------------------------
+   572→  const onTouchStart = (e: React.TouchEvent) => {
+   573→    const el = scrollRef.current
+   574→    if (!el || el.scrollTop > 0) return
+   575→    pullStartY.current = e.touches[0]?.clientY ?? null
+   576→  }
+   577→  const onTouchMove = (e: React.TouchEvent) => {
+   578→    if (pullStartY.current == null) return
+   579→    const delta = e.touches[0]?.clientY ?? 0
+   580→    const pull = delta - pullStartY.current
+   581→    if (pull > 0 && pull <= PULL_MAX) {
+   582→      setPullDistance(pull)
+   583→    }
+   584→  }
+   585→  const onTouchEnd = () => {
+   586→    if (pullDistance >= PULL_THRESHOLD) {
+   587→      setRefreshing(true)
+   588→      doFetch({ silent: true })
+   589→    } else {
+   590→      setPullDistance(0)
+   591→    }
+   592→    pullStartY.current = null
+   593→  }
+   594→
+   595→  const handleManualRefresh = () => {
+   596→    setRefreshing(true)
+   597→    doFetch({ silent: true })
+   598→  }
+   599→
+   600→  // --- Sheet handlers --------------------------------------------------------
+   601→  const openCuisineSheet = () => {
+   602→    setDraftCuisines(filters.cuisines.slice())
+   603→    setOpenSheet('cuisines')
+   604→  }
+   605→  const openPriceSheet = () => {
+   606→    setDraftPriceRange(filters.priceRange)
+   607→    setOpenSheet('price')
+   608→  }
+   609→  const openSortSheet = () => {
+   610→    setDraftSort(filters.sort)
+   611→    setOpenSheet('sort')
+   612→  }
+   613→
+   614→  const applyCuisines = () => {
+   615→    setFilters((f) => ({ ...f, cuisines: draftCuisines.slice() }))
+   616→    setOpenSheet(null)
+   617→  }
+   618→  const toggleDraftCuisine = (c: string) => {
+   619→    setDraftCuisines((cur) =>
+   620→      cur.includes(c) ? cur.filter((x) => x !== c) : [...cur, c],
+   621→    )
+   622→  }
+   623→  const applyPriceRange = () => {
+   624→    setFilters((f) => ({ ...f, priceRange: draftPriceRange }))
+   625→    setOpenSheet(null)
+   626→  }
+   627→  const applySort = () => {
+   628→    setFilters((f) => ({ ...f, sort: draftSort }))
+   629→    setOpenSheet(null)
+   630→  }
+   631→
+   632→  // --- Toggle chip handler ---------------------------------------------------
+   633→  const toggleFilter = (key: ToggleKey) => {
+   634→    setFilters((f) => {
+   635→      const next = !f[key]
+   636→      // Special-case "useCampus" — if no campus selected, surface a toast.
+   637→      if (key === 'useCampus' && next && !selectedCampusId) {
+   638→        toast({
+   639→          title: 'No campus selected',
+   640→          description: 'Pick a campus from the top bar first.',
+   641→          variant: 'destructive',
+   642→        })
+   643→        return f // don't toggle on
+   644→      }
+   645→      return { ...f, [key]: next }
+   646→    })
+   647→  }
+   648→
+   649→  // --- Render: skeleton grid (loading) --------------------------------------
+   650→  const renderSkeletons = () => (
+   651→    <div
+   652→      role="status"
+   653→      aria-label="Loading restaurants"
+   654→      className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3"
+   655→    >
+   656→      {Array.from({ length: PAGE_SIZE }).map((_, i) => (
+   657→        <RestaurantCardSkeleton key={i} />
+   658→      ))}
+   659→    </div>
+   660→  )
+   661→
+   662→  // --- Render: results grid --------------------------------------------------
+   663→  const renderResults = () => {
+   664→    if (filteredRestaurants.length === 0) {
+   665→      return (
+   666→        <EmptyState
+   667→          variant="no-restaurants"
+   668→          title={
+   669→            debouncedSearch || hasActiveFilters
+   670→              ? 'No matches found'
+   671→              : 'No restaurants near this campus yet'
+   672→          }
+   673→          description={
+   674→            debouncedSearch || hasActiveFilters
+   675→              ? 'Try adjusting your filters or search term.'
+   676→              : 'Try switching to a different campus, or browse all restaurants.'
+   677→          }
+   678→          actionLabel={
+   679→            hasActiveFilters ? 'Clear all filters' : 'Switch campus'
+   680→          }
+   681→          onAction={
+   682→            hasActiveFilters
+   683→              ? clearAllFilters
+   684→              : () => {
+   685→                  setFilters((f) => ({ ...f, useCampus: false }))
+   686→                }
+   687→          }
+   688→          secondaryActionLabel={
+   689→            hasActiveFilters ? 'Switch campus' : undefined
+   690→          }
+   691→          onSecondaryAction={
+   692→            hasActiveFilters
+   693→              ? () => {
+   694→                  setFilters((f) => ({ ...f, useCampus: false }))
+   695→                }
+   696→              : undefined
+   697→          }
+   698→        />
+   699→      )
+   700→    }
+   701→    return (
+   702→      <>
+   703→        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+   704→          {visibleRestaurants.map((r, i) => (
+   705→            <motion.div
+   706→              key={r.id}
+   707→              initial={prefersReduced ? false : { opacity: 0, y: 8 }}
+   708→              animate={{ opacity: 1, y: 0 }}
+   709→              transition={{
+   710→                duration: 0.28,
+   711→                ease: [0.3, 0, 0, 1],
+   712→                delay: prefersReduced ? 0 : Math.min(i * 0.03, 0.24),
+   713→              }}
+   714→            >
+   715→              <RestaurantCardV2
+   716→                restaurant={r}
+   717→                isOpen={r.isOpen}
+   718→                rewardMultiplier={r.rewardMultiplier}
+   719→                dealLabel={r.deal ?? undefined}
+   720→                onPress={(restaurant) => onSelectRestaurant(restaurant.id)}
+   721→              />
+   722→            </motion.div>
+   723→          ))}
+   724→        </div>
+   725→        {hasMore && (
+   726→          <div className="mt-6 flex justify-center">
+   727→            <Button
+   728→              type="button"
+   729→              variant="outline"
+   730→              size="sm"
+   731→              onClick={() =>
+   732→                setVisibleCount((c) => c + PAGE_SIZE)
+   733→              }
+   734→              className="snak-focus-ring"
+   735→            >
+   736→              Load more
+   737→              <span className="ml-1 text-muted-foreground">
+   738→                ({filteredRestaurants.length - visibleCount} more)
+   739→              </span>
+   740→            </Button>
+   741→          </div>
+   742→        )}
+   743→      </>
+   744→    )
+   745→  }
+   746→
+   747→  // Pull-to-refresh visual indicator
+   748→  const pullProgress = Math.min(pullDistance / PULL_THRESHOLD, 1)
+   749→  const pullActive = pullDistance >= PULL_THRESHOLD
+   750→
+   751→  // Active sort + price labels for the trigger buttons
+   752→  const sortLabel =
+   753→    SORTS.find((s) => s.value === filters.sort)?.label ?? 'Recommended'
+   754→  const priceLabel =
+   755→    PRICE_RANGES.find((p) => p.value === filters.priceRange)?.label ?? 'Any price'
+   756→
+   757→  return (
+   758→    <div
+   759→      className={cn('flex min-h-[calc(100vh-4rem)] flex-col bg-background', className)}
+   760→    >
+   761→      {/* Sticky search + filters header */}
+   762→      <div
+   763→        className={cn(
+   764→          'sticky top-0 z-10 border-b border-border bg-background/95 backdrop-blur-sm',
+   765→        )}
+   766→      >
+   767→        <div className="mx-auto w-full max-w-6xl px-4 py-3 sm:px-6">
+   768→          {/* Search bar row */}
+   769→          <div className="flex items-center gap-2">
+   770→            <div className="relative flex-1">
+   771→              <Search
+   772→                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+   773→                aria-hidden="true"
+   774→              />
+   775→              <Input
+   776→                type="search"
+   777→                inputMode="search"
+   778→                placeholder="Search restaurants, cuisines…"
+   779→                value={search}
+   780→                onChange={(e) => setSearch(e.target.value)}
+   781→                aria-label="Search restaurants"
+   782→                className="h-10 rounded-lg pl-9 pr-9"
+   783→              />
+   784→              {search && (
+   785→                <button
+   786→                  type="button"
+   787→                  onClick={() => setSearch('')}
+   788→                  aria-label="Clear search"
+   789→                  className="snak-focus-ring absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-full text-muted-foreground hover:bg-accent"
+   790→                >
+   791→                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+   792→                </button>
+   793→              )}
+   794→            </div>
+   795→            <Button
+   796→              type="button"
+   797→              variant="outline"
+   798→              size="icon"
+   799→              onClick={handleManualRefresh}
+   800→              disabled={refreshing}
+   801→              aria-label="Refresh restaurants"
+   802→              className="snak-focus-ring h-10 w-10 shrink-0"
+   803→            >
+   804→              <RefreshCw
+   805→                className={cn('h-4 w-4', refreshing && 'animate-spin')}
+   806→                aria-hidden="true"
+   807→              />
+   808→            </Button>
+   809→          </div>
+   810→
+   811→          {/* Filter chips row — horizontally scrollable; scrollbar hidden
+   812→              via Tailwind arbitrary variants (works in webkit + Firefox). */}
+   813→          <div
+   814→            role="group"
+   815→            aria-label="Quick filters"
+   816→            className="-mx-1 mt-3 flex items-center gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+   817→          >
+   818→            {TOGGLE_CHIPS.map((chip) => {
+   819→              const isActive = chip.isActive(filters)
+   820→              // Disable "useCampus" if no campus selected — already handled by
+   821→              // toggleFilter's toast, but visually signal it too.
+   822→              const isDisabled =
+   823→                chip.key === 'useCampus' && !selectedCampusId
+   824→              return (
+   825→                <FilterChip
+   826→                  key={chip.key}
+   827→                  label={
+   828→                    chip.key === 'useCampus' && selectedCampusName && isActive
+   829→                      ? selectedCampusName
+   830→                      : chip.label
+   831→                  }
+   832→                  Icon={chip.Icon}
+   833→                  active={isActive}
+   834→                  onClick={() => toggleFilter(chip.key)}
+   835→                  disabled={isDisabled}
+   836→                />
+   837→              )
+   838→            })}
+   839→          </div>
+   840→
+   841→          {/* Secondary row — sheet triggers */}
+   842→          <div className="mt-2 flex items-center gap-2 overflow-x-auto pb-1">
+   843→            <SheetTriggerButton
+   844→              label="Cuisine"
+   845→              value={
+   846→                filters.cuisines.length === 0
+   847→                  ? 'All'
+   848→                  : filters.cuisines.length === 1
+   849→                    ? filters.cuisines[0]!
+   850→                    : `${filters.cuisines.length} selected`
+   851→              }
+   852→              active={filters.cuisines.length > 0 || openSheet === 'cuisines'}
+   853→              Icon={SlidersHorizontal}
+   854→              onClick={openCuisineSheet}
+   855→              badgeCount={filters.cuisines.length}
+   856→            />
+   857→            <SheetTriggerButton
+   858→              label="Price"
+   859→              value={priceLabel}
+   860→              active={filters.priceRange !== 'any' || openSheet === 'price'}
+   861→              Icon={Tag}
+   862→              onClick={openPriceSheet}
+   863→            />
+   864→            <SheetTriggerButton
+   865→              label="Sort"
+   866→              value={sortLabel}
+   867→              active={filters.sort !== 'recommended' || openSheet === 'sort'}
+   868→              Icon={ArrowUpDown}
+   869→              onClick={openSortSheet}
+   870→            />
+   871→          </div>
+   872→
+   873→          {/* Active filters bar — removable chips */}
+   874→          <AnimatePresence initial={false}>
+   875→            {hasActiveFilters && (
+   876→              <motion.div
+   877→                initial={prefersReduced ? false : { height: 0, opacity: 0 }}
+   878→                animate={{ height: 'auto', opacity: 1 }}
+   879→                exit={prefersReduced ? { opacity: 0 } : { height: 0, opacity: 0 }}
+   880→                transition={{ duration: 0.2, ease: [0.3, 0, 0, 1] }}
+   881→                className="overflow-hidden"
+   882→              >
+   883→                <div className="mt-2 flex flex-wrap items-center gap-1.5 pb-1">
+   884→                  <span className="text-xs font-medium text-muted-foreground">
+   885→                    Active:
+   886→                  </span>
+   887→                  {activeFilterChips.map((chip, i) => (
+   888→                    <ActiveFilterChip
+   889→                      key={`${chip.label}-${i}`}
+   890→                      label={chip.label}
+   891→                      onRemove={chip.onRemove}
+   892→                    />
+   893→                  ))}
+   894→                  <button
+   895→                    type="button"
+   896→                    onClick={clearAllFilters}
+   897→                    className="snak-focus-ring ml-1 text-xs font-medium text-primary hover:underline"
+   898→                  >
+   899→                    Clear all
+   900→                  </button>
+   901→                </div>
+   902→              </motion.div>
+   903→            )}
+   904→          </AnimatePresence>
+   905→        </div>
+   906→      </div>
+   907→
+   908→      {/* Pull-to-refresh indicator (mobile only — touch devices) */}
+   909→      <div
+   910→        className={cn(
+   911→          'flex items-center justify-center overflow-hidden transition-all',
+   912→          pullDistance > 0 ? 'h-8' : 'h-0',
+   913→        )}
+   914→        style={{
+   915→          opacity: pullProgress,
+   916→        }}
+   917→        aria-hidden="true"
+   918→      >
+   919→        <RefreshCw
+   920→          className={cn('h-4 w-4', pullActive && 'animate-spin')}
+   921→          style={{
+   922→            transform: `rotate(${pullProgress * 360}deg)`,
+   923→          }}
+   924→        />
+   925→      </div>
+   926→
+   927→      {/* Results body — touch handlers attached for pull-to-refresh */}
+   928→      <div
+   929→        ref={scrollRef}
+   930→        onTouchStart={onTouchStart}
+   931→        onTouchMove={onTouchMove}
+   932→        onTouchEnd={onTouchEnd}
+   933→        className="flex-1 touch-pan-y overflow-y-auto"
+   934→        style={{
+   935→          transform: pullDistance > 0 ? `translateY(${pullDistance * 0.4}px)` : undefined,
+   936→          transition: pullDistance === 0 ? 'transform 0.2s ease' : undefined,
+   937→        }}
+   938→      >
+   939→        <div className="mx-auto w-full max-w-6xl px-4 py-4 sm:px-6">
+   940→          {/* Result count summary */}
+   941→          {!loading && !error && (
+   942→            <div className="mb-3 flex items-center justify-between">
+   943→              <p className="text-xs text-muted-foreground" aria-live="polite">
+   944→                {filteredRestaurants.length === 0
+   945→                  ? 'No restaurants match'
+   946→                  : `${filteredRestaurants.length} restaurant${filteredRestaurants.length === 1 ? '' : 's'}`}
+   947→              </p>
+   948→            </div>
+   949→          )}
+   950→
+   951→          {/* Loading state */}
+   952→          {loading ? (
+   953→            renderSkeletons()
+   954→          ) : error ? (
+   955→            <ErrorCard onRetry={() => doFetch()} />
+   956→          ) : (
+   957→            renderResults()
+   958→          )}
+   959→        </div>
+   960→      </div>
+   961→
+   962→      {/* Cuisine multi-select bottom sheet */}
+   963→      <Sheet
+   964→        open={openSheet === 'cuisines'}
+   965→        onOpenChange={(o) => o || setOpenSheet(null)}
+   966→      >
+   967→        <SheetContent
+   968→          side="bottom"
+   969→          className="mx-auto max-h-[85vh] w-full max-w-md rounded-t-3xl p-0"
+   970→        >
+   971→          <SheetHeader className="px-5 pb-2 pt-4">
+   972→            <SheetTitle className="text-base">Filter by cuisine</SheetTitle>
+   973→            <SheetDescription className="text-xs">
+   974→              Pick one or more cuisines to narrow results.
+   975→            </SheetDescription>
+   976→          </SheetHeader>
+   977→          <div className="max-h-[55vh] overflow-y-auto px-5 py-2">
+   978→            {availableCuisines.length === 0 ? (
+   979→              <p className="py-6 text-center text-sm text-muted-foreground">
+   980→                No cuisines available.
+   981→              </p>
+   982→            ) : (
+   983→              <ul className="divide-y divide-border">
+   984→                {availableCuisines.map((c) => {
+   985→                  const checked = draftCuisines.includes(c)
+   986→                  return (
+   987→                    <li key={c}>
+   988→                      <label
+   989→                        className="flex cursor-pointer items-center gap-3 py-3"
+   990→                        htmlFor={`cuisine-${c}`}
+   991→                      >
+   992→                        <Checkbox
+   993→                          id={`cuisine-${c}`}
+   994→                          checked={checked}
+   995→                          onCheckedChange={() => toggleDraftCuisine(c)}
+   996→                        />
+   997→                        <span className="flex-1 text-sm font-medium">
+   998→                          {c}
+   999→                        </span>
+  1000→                        {checked && (
+  1001→                          <Check
+  1002→                            className="h-4 w-4 text-primary"
+  1003→                            aria-hidden="true"
+  1004→                          />
+  1005→                        )}
+  1006→                      </label>
+  1007→                    </li>
+  1008→                  )
+  1009→                })}
+  1010→              </ul>
+  1011→            )}
+  1012→          </div>
+  1013→          <div className="sticky bottom-0 flex gap-2 border-t border-border bg-background px-5 py-3">
+  1014→            <Button
+  1015→              type="button"
+  1016→              variant="ghost"
+  1017→              size="sm"
+  1018→              onClick={() => setDraftCuisines([])}
+  1019→              disabled={draftCuisines.length === 0}
+  1020→              className="snak-focus-ring"
+  1021→            >
+  1022→              Clear
+  1023→            </Button>
+  1024→            <Button
+  1025→              type="button"
+  1026→              size="sm"
+  1027→              onClick={applyCuisines}
+  1028→              className="snak-focus-ring flex-1"
+  1029→            >
+  1030→              Apply {draftCuisines.length > 0 && `(${draftCuisines.length})`}
+  1031→            </Button>
+  1032→          </div>
+  1033→        </SheetContent>
+  1034→      </Sheet>
+  1035→
+  1036→      {/* Price range bottom sheet */}
+  1037→      <Sheet
+  1038→        open={openSheet === 'price'}
+  1039→        onOpenChange={(o) => o || setOpenSheet(null)}
+  1040→      >
+  1041→        <SheetContent
+  1042→          side="bottom"
+  1043→          className="mx-auto max-h-[85vh] w-full max-w-md rounded-t-3xl p-0"
+  1044→        >
+  1045→          <SheetHeader className="px-5 pb-2 pt-4">
+  1046→            <SheetTitle className="text-base">Price for two</SheetTitle>
+  1047→            <SheetDescription className="text-xs">
+  1048→              Pick a price range based on cost for two.
+  1049→            </SheetDescription>
+  1050→          </SheetHeader>
+  1051→          <div className="px-5 py-2">
+  1052→            <ul className="divide-y divide-border">
+  1053→              {PRICE_RANGES.map((p) => {
+  1054→                const checked = draftPriceRange === p.value
+  1055→                return (
+  1056→                  <li key={p.value}>
+  1057→                    <button
+  1058→                      type="button"
+  1059→                      onClick={() => setDraftPriceRange(p.value)}
+  1060→                      className="snak-focus-ring flex w-full items-center gap-3 py-3 text-left"
+  1061→                      aria-pressed={checked}
+  1062→                    >
+  1063→                      <span
+  1064→                        className={cn(
+  1065→                          'flex h-4 w-4 items-center justify-center rounded-full border-2',
+  1066→                          checked
+  1067→                            ? 'border-primary bg-primary text-primary-foreground'
+  1068→                            : 'border-border bg-background',
+  1069→                        )}
+  1070→                      >
+  1071→                        {checked && (
+  1072→                          <Check className="h-3 w-3" aria-hidden="true" />
+  1073→                        )}
+  1074→                      </span>
+  1075→                      <span className="flex-1 text-sm font-medium">
+  1076→                        {p.label}
+  1077→                      </span>
+  1078→                    </button>
+  1079→                  </li>
+  1080→                )
+  1081→              })}
+  1082→            </ul>
+  1083→          </div>
+  1084→          <div className="sticky bottom-0 flex gap-2 border-t border-border bg-background px-5 py-3">
+  1085→            <Button
+  1086→              type="button"
+  1087→              size="sm"
+  1088→              onClick={applyPriceRange}
+  1089→              className="snak-focus-ring flex-1"
+  1090→            >
+  1091→              Apply
+  1092→            </Button>
+  1093→          </div>
+  1094→        </SheetContent>
+  1095→      </Sheet>
+  1096→
+  1097→      {/* Sort bottom sheet */}
+  1098→      <Sheet
+  1099→        open={openSheet === 'sort'}
+  1100→        onOpenChange={(o) => o || setOpenSheet(null)}
+  1101→      >
+  1102→        <SheetContent
+  1103→          side="bottom"
+  1104→          className="mx-auto max-h-[85vh] w-full max-w-md rounded-t-3xl p-0"
+  1105→        >
+  1106→          <SheetHeader className="px-5 pb-2 pt-4">
+  1107→            <SheetTitle className="text-base">Sort by</SheetTitle>
+  1108→            <SheetDescription className="text-xs">
+  1109→              Choose how to order results.
+  1110→            </SheetDescription>
+  1111→          </SheetHeader>
+  1112→          <div className="px-5 py-2">
+  1113→            <ul className="divide-y divide-border">
+  1114→              {SORTS.map((s) => {
+  1115→                const checked = draftSort === s.value
+  1116→                return (
+  1117→                  <li key={s.value}>
+  1118→                    <button
+  1119→                      type="button"
+  1120→                      onClick={() => setDraftSort(s.value)}
+  1121→                      className="snak-focus-ring flex w-full items-center gap-3 py-3 text-left"
+  1122→                      aria-pressed={checked}
+  1123→                    >
+  1124→                      <span
+  1125→                        className={cn(
+  1126→                          'flex h-4 w-4 items-center justify-center rounded-full border-2',
+  1127→                          checked
+  1128→                            ? 'border-primary bg-primary text-primary-foreground'
+  1129→                            : 'border-border bg-background',
+  1130→                        )}
+  1131→                      >
+  1132→                        {checked && (
+  1133→                          <Check className="h-3 w-3" aria-hidden="true" />
+  1134→                        )}
+  1135→                      </span>
+  1136→                      <span className="flex-1 text-sm font-medium">
+  1137→                        {s.label}
+  1138→                      </span>
+  1139→                      {s.value === 'rating' && (
+  1140→                        <ChevronUp className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+  1141→                      )}
+  1142→                      {s.value === 'priceLowHigh' && (
+  1143→                        <ChevronUp className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+  1144→                      )}
+  1145→                      {s.value === 'prepTime' && (
+  1146→                        <ChevronUp className="h-3 w-3 text-muted-foreground" aria-hidden="true" />
+  1147→                      )}
+  1148→                    </button>
+  1149→                  </li>
+  1150→                )
+  1151→              })}
+  1152→            </ul>
+  1153→          </div>
+  1154→          <div className="sticky bottom-0 flex gap-2 border-t border-border bg-background px-5 py-3">
+  1155→            <Button
+  1156→              type="button"
+  1157→              size="sm"
+  1158→              onClick={applySort}
+  1159→              className="snak-focus-ring flex-1"
+  1160→            >
+  1161→              Apply
+  1162→            </Button>
+  1163→          </div>
+  1164→        </SheetContent>
+  1165→      </Sheet>
+  1166→    </div>
+  1167→  )
+  1168→}
+  1169→
+  1170→export default ExploreScreen
+  1171→

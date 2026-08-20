@@ -1,0 +1,857 @@
+     1→'use client'
+     2→
+     3→// src/components/snak/screens/home-screen.tsx
+     4→//
+     5→// Home screen — premium consumer landing surface per blueprint §9.
+     6→//
+     7→// Sections (in render order, mobile-first):
+     8→//  1. Campus context bar        — shows selected campus + "Change" affordance
+     9→//  2. Search bar                — inline filter that scopes the Popular grid
+    10→//  3. Quick Reorder             — horizontal carousel of recently ordered restaurants
+    11→//  4. Open Now                  — horizontal carousel of isOpen===true restaurants
+    12→//  5. Popular Near You          — 2-col grid of RestaurantCardV2 (top 6 by rating)
+    13→//  6. Deals                     — horizontal carousel of restaurants with `deal` label
+    14→//  7. Rewards Progress          — RewardProgressRing + "View rewards" CTA
+    15→//  8. Friends Ordering Nearby   — SocialFeedCard list (last 3 ordered_from activities)
+    16→//  9. Gift a Friend CTA         — violet accent card
+    17→// 10. Start Group Order CTA     — rose accent card
+    18→// 11. Recently Ordered          — vertical list of last 3 orders
+    19→//
+    20→// Governance (Task 2B):
+    21→//  - Does NOT touch any API route — uses existing GET /api/restaurants,
+    22→//    GET /api/orders?role=consumer, GET /api/social/feed, GET /api/rewards/account.
+    23→//  - Uses Task 1B components: RestaurantCardV2, RewardProgressRing, EmptyState,
+    24→//    SkeletonLoader, SocialFeedCard.
+    25→//  - Uses Task 1C stores: useCampus, useSocial, useRewards.
+    26→//  - Tapping a restaurant → ui-store.openRestaurant(id) — ConsumerView wires
+    27→//    the actual restaurant-detail overlay (Task 2D's screen via dynamic import).
+    28→
+    29→import * as React from 'react'
+    30→import { motion, useReducedMotion, type Variants } from 'framer-motion'
+    31→import {
+    32→  Search,
+    33→  RefreshCw,
+    34→  ChevronRight,
+    35→  Gift,
+    36→  Users,
+    37→  Sparkles,
+    38→  ArrowRight,
+    39→  MapPin,
+    40→} from 'lucide-react'
+    41→import { Button } from '@/components/ui/button'
+    42→import { Input } from '@/components/ui/input'
+    43→import { Card, CardContent } from '@/components/ui/card'
+    44→import { Badge } from '@/components/ui/badge'
+    45→import { useToast } from '@/hooks/use-toast'
+    46→import { inr, timeAgo, STATUS_META } from '@/lib/snack'
+    47→import { useCampus } from '@/lib/campus-store'
+    48→import { useSocial } from '@/lib/social-store'
+    49→import { useRewards } from '@/lib/rewards-store'
+    50→import { useUI } from '@/lib/ui-store'
+    51→import { useAuth } from '@/hooks/use-auth'
+    52→import type { Order, Restaurant, SocialActivity } from '@/lib/types'
+    53→
+    54→import { RestaurantCardV2 } from '@/components/snak/restaurant-card-v2'
+    55→import { RewardProgressRing } from '@/components/snak/reward-progress-ring'
+    56→import { EmptyState } from '@/components/snak/empty-state'
+    57→import {
+    58→  RestaurantCardSkeleton,
+    59→  OrderCardSkeleton,
+    60→  SocialFeedSkeleton,
+    61→  RewardRingSkeleton,
+    62→} from '@/components/snak/skeleton-loader'
+    63→import { SocialFeedCard } from '@/components/snak/social-feed-card'
+    64→import { CampusBadge } from '@/components/snak/bits'
+    65→import { SendGiftFlow } from '@/components/snak/screens/send-gift-flow'
+    66→
+    67→// ─────────────────────────────────────────────────────────────────────────────
+    68→// Local types — additive Wave 2C fields on Restaurant (Task 2C owns types.ts
+    69→// extension; we declare a local additive interface here so the file compiles
+    70→// even before 2C lands).
+    71→// ─────────────────────────────────────────────────────────────────────────────
+    72→
+    73→type RestaurantWithExtras = Restaurant & {
+    74→  /** Wave 2C additive — reward multiplier (default 1). */
+    75→  rewardMultiplier?: number
+    76→  /** Wave 2C additive — derived open/closed state. */
+    77→  isOpen?: boolean
+    78→  /** Wave 2C additive — derived "Great value" deal label, if any. */
+    79→  deal?: string | null
+    80→}
+    81→
+    82→type RestaurantFetchState = {
+    83→  data: RestaurantWithExtras[]
+    84→  loading: boolean
+    85→  error: string | null
+    86→}
+    87→
+    88→type OrdersFetchState = {
+    89→  data: Order[]
+    90→  loading: boolean
+    91→  error: string | null
+    92→}
+    93→
+    94→// ─────────────────────────────────────────────────────────────────────────────
+    95→// Motion presets — stagger pattern per DESIGN_SYSTEM.md §6.4
+    96→// ─────────────────────────────────────────────────────────────────────────────
+    97→
+    98→const SECTION_CONTAINER: Variants = {
+    99→  hidden: {},
+   100→  show: {
+   101→    transition: { staggerChildren: 0.03, delayChildren: 0.04 },
+   102→  },
+   103→}
+   104→
+   105→const SECTION_ITEM: Variants = {
+   106→  hidden: { opacity: 0, y: 8 },
+   107→  show: {
+   108→    opacity: 1,
+   109→    y: 0,
+   110→    transition: { duration: 0.28, ease: [0.3, 0, 0, 1] },
+   111→  },
+   112→}
+   113→
+   114→// ─────────────────────────────────────────────────────────────────────────────
+   115→// HomeScreen — public surface
+   116→// ─────────────────────────────────────────────────────────────────────────────
+   117→
+   118→export interface HomeScreenProps {
+   119→  /** Called when the user pulls to refresh. Defaults to a no-op. */
+   120→  onRefresh?: () => Promise<void> | void
+   121→}
+   122→
+   123→export function HomeScreen({ onRefresh }: HomeScreenProps) {
+   124→  const prefersReduced = useReducedMotion()
+   125→  const { toast } = useToast()
+   126→  const { user } = useAuth()
+   127→  const openRestaurant = useUI((s) => s.openRestaurant)
+   128→  const setActiveTab = useUI((s) => s.setActiveTab)
+   129→
+   130→  // ── Send-gift flow (Task 6D — modal triggered by the "Gift a Friend" CTA) ──
+   131→  const [sendGiftOpen, setSendGiftOpen] = React.useState(false)
+   132→
+   133→  const selectedCampusId = useCampus((s) => s.selectedCampusId)
+   134→  const selectedCampusName = useCampus((s) => s.selectedCampusName)
+   135→
+   136→  // ── Restaurants ──────────────────────────────────────────────────────────
+   137→  // Fetched once on mount, scoped by campus when selected. We do NOT
+   138→  // re-fetch on inline search — that's a client-side filter for snappy UX.
+   139→  const [restaurants, setRestaurants] = React.useState<RestaurantFetchState>({
+   140→    data: [],
+   141→    loading: true,
+   142→    error: null,
+   143→  })
+   144→  const [q, setQ] = React.useState('')
+   145→
+   146→  const fetchRestaurants = React.useCallback(async () => {
+   147→    setRestaurants((s) => ({ ...s, loading: true, error: null }))
+   148→    try {
+   149→      const url = selectedCampusId
+   150→        ? `/api/campuses/${encodeURIComponent(selectedCampusId)}/restaurants`
+   151→        : '/api/restaurants'
+   152→      const res = await fetch(url, { cache: 'no-store' })
+   153→      const data = (await res.json().catch(() => ({}))) as {
+   154→        restaurants?: RestaurantWithExtras[]
+   155→        error?: { message?: string }
+   156→      }
+   157→      if (!res.ok) {
+   158→        throw new Error(data?.error?.message ?? `Failed (${res.status})`)
+   159→      }
+   160→      setRestaurants({ data: data.restaurants ?? [], loading: false, error: null })
+   161→    } catch (e) {
+   162→      const msg = (e as Error).message
+   163→      setRestaurants({ data: [], loading: false, error: msg })
+   164→      toast({
+   165→        title: 'Could not load restaurants',
+   166→        description: msg,
+   167→        variant: 'destructive',
+   168→      })
+   169→    }
+   170→  }, [selectedCampusId, toast])
+   171→
+   172→  // ── My orders (recent) ────────────────────────────────────────────────────
+   173→  const [orders, setOrders] = React.useState<OrdersFetchState>({
+   174→    data: [],
+   175→    loading: true,
+   176→    error: null,
+   177→  })
+   178→
+   179→  const fetchOrders = React.useCallback(async () => {
+   180→    setOrders((s) => ({ ...s, loading: true, error: null }))
+   181→    try {
+   182→      const res = await fetch('/api/orders?role=consumer&limit=10', { cache: 'no-store' })
+   183→      const data = (await res.json().catch(() => ({}))) as {
+   184→        orders?: Order[]
+   185→        error?: { message?: string }
+   186→      }
+   187→      if (!res.ok) {
+   188→        throw new Error(data?.error?.message ?? `Failed (${res.status})`)
+   189→      }
+   190→      setOrders({ data: data.orders ?? [], loading: false, error: null })
+   191→    } catch {
+   192→      // Soft-fail — Home should still render even if /api/orders 401s (e.g.,
+   193→      // a stale session that's about to refresh). Empty state will surface.
+   194→      setOrders({ data: [], loading: false, error: 'unavailable' })
+   195→    }
+   196→  }, [])
+   197→
+   198→  // ── Social feed (Friends Ordering Nearby) ────────────────────────────────
+   199→  // We use the social-store's `feed` slice — Task 1C's useSocial already
+   200→  // fetches /api/social/feed on consumer-view mount. We just read + filter it.
+   201→  const socialFeed = useSocial((s) => s.feed)
+   202→  const socialConnections = useSocial((s) => s.connections)
+   203→  const socialLoading = useSocial((s) => s.isLoading)
+   204→  const refreshSocial = useSocial((s) => s.refresh)
+   205→
+   206→  // ── Rewards ──────────────────────────────────────────────────────────────
+   207→  const rewardsAccount = useRewards((s) => s.account)
+   208→  const rewardsLoading = useRewards((s) => s.isLoading)
+   209→  const refreshRewards = useRewards((s) => s.refresh)
+   210→
+   211→  // ── Initial load + whenever the campus changes ───────────────────────────
+   212→  React.useEffect(() => {
+   213→    fetchRestaurants()
+   214→    fetchOrders()
+   215→    refreshSocial().catch(() => {
+   216→      /* best-effort */
+   217→    })
+   218→    if (user?.userId) {
+   219→      refreshRewards(user.userId).catch(() => {
+   220→        /* best-effort */
+   221→      })
+   222→    }
+   223→  }, [fetchRestaurants, fetchOrders, refreshSocial, refreshRewards, user?.userId])
+   224→
+   225→  // ── Pull-to-refresh handler ──────────────────────────────────────────────
+   226→  const [refreshing, setRefreshing] = React.useState(false)
+   227→  const handleRefresh = React.useCallback(async () => {
+   228→    setRefreshing(true)
+   229→    try {
+   230→      await Promise.all([
+   231→        fetchRestaurants(),
+   232→        fetchOrders(),
+   233→        refreshSocial(),
+   234→        user?.userId ? refreshRewards(user.userId) : Promise.resolve(),
+   235→      ])
+   236→      await onRefresh?.()
+   237→    } finally {
+   238→      setRefreshing(false)
+   239→    }
+   240→  }, [
+   241→    fetchRestaurants,
+   242→    fetchOrders,
+   243→    refreshSocial,
+   244→    refreshRewards,
+   245→    onRefresh,
+   246→    user?.userId,
+   247→  ])
+   248→
+   249→  // ── Derived section data ─────────────────────────────────────────────────
+   250→  // Restaurants matching the inline search query (client-side filter — snappy).
+   251→  const filteredRestaurants = React.useMemo(() => {
+   252→    const query = q.trim().toLowerCase()
+   253→    if (!query) return restaurants.data
+   254→    return restaurants.data.filter(
+   255→      (r) =>
+   256→        r.name.toLowerCase().includes(query) ||
+   257→        r.cuisine.toLowerCase().includes(query) ||
+   258→        r.description.toLowerCase().includes(query),
+   259→    )
+   260→  }, [restaurants.data, q])
+   261→
+   262→  // Quick Reorder: unique restaurant ids from the user's recent orders, capped
+   263→  // at 5. We show their cards as a horizontal carousel so the user can jump
+   264→  // straight back into their favourites.
+   265→  const quickReorderRestaurants = React.useMemo(() => {
+   266→    const seen = new Set<string>()
+   267→    const out: RestaurantWithExtras[] = []
+   268→    for (const o of orders.data) {
+   269→      const rid = o.restaurant.id
+   270→      if (seen.has(rid)) continue
+   271→      const match = restaurants.data.find((r) => r.id === rid)
+   272→      if (match) {
+   273→        seen.add(rid)
+   274→        out.push(match)
+   275→      }
+   276→      if (out.length >= 5) break
+   277→    }
+   278→    return out
+   279→  }, [orders.data, restaurants.data])
+   280→
+   281→  const openNowRestaurants = React.useMemo(
+   282→    () => filteredRestaurants.filter((r) => r.isOpen !== false).slice(0, 8),
+   283→    [filteredRestaurants],
+   284→  )
+   285→
+   286→  const popularRestaurants = React.useMemo(
+   287→    () => filteredRestaurants.slice(0, 6),
+   288→    [filteredRestaurants],
+   289→  )
+   290→
+   291→  const dealsRestaurants = React.useMemo(
+   292→    () => filteredRestaurants.filter((r) => !!r.deal).slice(0, 8),
+   293→    [filteredRestaurants],
+   294→  )
+   295→
+   296→  const friendsOrdering = React.useMemo<SocialActivity[]>(
+   297→    () =>
+   298→      socialFeed
+   299→        .filter((a) => a.verb === 'ordered_from')
+   300→        .slice(0, 3),
+   301→    [socialFeed],
+   302→  )
+   303→
+   304→  const recentOrders = React.useMemo(() => orders.data.slice(0, 3), [orders.data])
+   305→
+   306→  const hasFriends = socialConnections.length > 0
+   307→  const hasRewardsAccount = !!rewardsAccount
+   308→
+   309→  // ── Render helpers ────────────────────────────────────────────────────────
+   310→  function handleRestaurantTap(r: Restaurant) {
+   311→    openRestaurant(r.id)
+   312→  }
+   313→
+   314→  function handleReorderTap(r: Restaurant) {
+   315→    openRestaurant(r.id)
+   316→  }
+   317→
+   318→  // ═══════════════════════════════════════════════════════════════════════════
+   319→  // RENDER
+   320→  // ═══════════════════════════════════════════════════════════════════════════
+   321→  return (
+   322→    <>
+   323→    <PullToRefresh onRefresh={handleRefresh} refreshing={refreshing}>
+   324→      <motion.div
+   325→        variants={SECTION_CONTAINER}
+   326→        initial={prefersReduced ? false : 'hidden'}
+   327→        animate="show"
+   328→        className="mx-auto w-full max-w-6xl space-y-8 px-4 py-5 pb-24"
+   329→      >
+   330→        {/* ────────────────────────────────────────────────────────────────────
+   331→            1. Campus context bar
+   332→            ──────────────────────────────────────────────────────────────────── */}
+   333→        <motion.section variants={SECTION_ITEM} aria-label="Campus context">
+   334→          <div className="flex items-center justify-between gap-3">
+   335→            <div className="flex min-w-0 items-center gap-2">
+   336→              {selectedCampusName ? (
+   337→                <CampusBadge name={selectedCampusName} />
+   338→              ) : (
+   339→                <span className="inline-flex items-center gap-1 rounded-full bg-secondary px-2.5 py-1 text-xs font-medium text-secondary-foreground">
+   340→                  <MapPin className="h-3.5 w-3.5 text-primary" aria-hidden="true" />
+   341→                  All campuses
+   342→                </span>
+   343→              )}
+   344→            </div>
+   345→            <Button
+   346→              type="button"
+   347→              size="sm"
+   348→              variant="ghost"
+   349→              className="h-7 gap-1 px-2 text-xs text-muted-foreground"
+   350→              onClick={() => setActiveTab('explore')}
+   351→            >
+   352→              Change
+   353→              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+   354→            </Button>
+   355→          </div>
+   356→        </motion.section>
+   357→
+   358→        {/* ────────────────────────────────────────────────────────────────────
+   359→            2. Search bar — inline filter
+   360→            ──────────────────────────────────────────────────────────────────── */}
+   361→        <motion.section variants={SECTION_ITEM} aria-label="Search">
+   362→          <div className="relative">
+   363→            <Search
+   364→              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+   365→              aria-hidden="true"
+   366→            />
+   367→            <Input
+   368→              type="search"
+   369→              value={q}
+   370→              onChange={(e) => setQ(e.target.value)}
+   371→              placeholder="Search restaurants, cuisines…"
+   372→              aria-label="Search restaurants and cuisines"
+   373→              className="h-11 rounded-2xl border-border/80 bg-card pl-10 pr-10 text-sm shadow-sm"
+   374→            />
+   375→            {q && (
+   376→              <button
+   377→                type="button"
+   378→                onClick={() => setQ('')}
+   379→                aria-label="Clear search"
+   380→                className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground hover:text-foreground"
+   381→              >
+   382→                Clear
+   383→              </button>
+   384→            )}
+   385→          </div>
+   386→        </motion.section>
+   387→
+   388→        {/* ────────────────────────────────────────────────────────────────────
+   389→            3. Quick Reorder — horizontal carousel of recently ordered restaurants
+   390→            ──────────────────────────────────────────────────────────────────── */}
+   391→        <section aria-labelledby="home-quick-reorder">
+   392→          <SectionHeader id="home-quick-reorder" title="Quick Reorder" icon="🔄" />
+   393→          {orders.loading ? (
+   394→            <HorizontalScroll>
+   395→              {Array.from({ length: 3 }).map((_, i) => (
+   396→                <div key={i} className="w-64 shrink-0">
+   397→                  <RestaurantCardSkeleton />
+   398→                </div>
+   399→              ))}
+   400→            </HorizontalScroll>
+   401→          ) : quickReorderRestaurants.length === 0 ? (
+   402→            <EmptyState
+   403→              variant="no-orders"
+   404→              title="No recent orders yet"
+   405→              description="Your favourite restaurants will appear here for one-tap reorder."
+   406→              className="py-8"
+   407→            />
+   408→          ) : (
+   409→            <HorizontalScroll>
+   410→              {quickReorderRestaurants.map((r) => (
+   411→                <div key={r.id} className="w-64 shrink-0">
+   412→                  <RestaurantCardV2
+   413→                    restaurant={r}
+   414→                    isOpen={r.isOpen !== false}
+   415→                    rewardMultiplier={r.rewardMultiplier}
+   416→                    dealLabel={r.deal ?? undefined}
+   417→                    onPress={handleReorderTap}
+   418→                  />
+   419→                </div>
+   420→              ))}
+   421→            </HorizontalScroll>
+   422→          )}
+   423→        </section>
+   424→
+   425→        {/* ────────────────────────────────────────────────────────────────────
+   426→            4. Open Now — horizontal carousel
+   427→            ──────────────────────────────────────────────────────────────────── */}
+   428→        <section aria-labelledby="home-open-now">
+   429→          <SectionHeader id="home-open-now" title="Open Now" icon="🟢" />
+   430→          {restaurants.loading ? (
+   431→            <HorizontalScroll>
+   432→              {Array.from({ length: 3 }).map((_, i) => (
+   433→                <div key={i} className="w-64 shrink-0">
+   434→                  <RestaurantCardSkeleton />
+   435→                </div>
+   436→              ))}
+   437→            </HorizontalScroll>
+   438→          ) : openNowRestaurants.length === 0 ? (
+   439→            <EmptyState
+   440→              variant="no-restaurants"
+   441→              title="No restaurants open near you"
+   442→              description="Try a different campus or check back in a few minutes."
+   443→              className="py-8"
+   444→            />
+   445→          ) : (
+   446→            <HorizontalScroll>
+   447→              {openNowRestaurants.map((r) => (
+   448→                <div key={r.id} className="w-64 shrink-0">
+   449→                  <RestaurantCardV2
+   450→                    restaurant={r}
+   451→                    isOpen={r.isOpen !== false}
+   452→                    rewardMultiplier={r.rewardMultiplier}
+   453→                    dealLabel={r.deal ?? undefined}
+   454→                    onPress={handleRestaurantTap}
+   455→                  />
+   456→                </div>
+   457→              ))}
+   458→            </HorizontalScroll>
+   459→          )}
+   460→        </section>
+   461→
+   462→        {/* ────────────────────────────────────────────────────────────────────
+   463→            5. Popular Near You — grid of RestaurantCardV2
+   464→            ──────────────────────────────────────────────────────────────────── */}
+   465→        <section aria-labelledby="home-popular">
+   466→          <SectionHeader id="home-popular" title="Popular Near You" icon="🔥" />
+   467→          {restaurants.loading ? (
+   468→            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+   469→              {Array.from({ length: 6 }).map((_, i) => (
+   470→                <RestaurantCardSkeleton key={i} />
+   471→              ))}
+   472→            </div>
+   473→          ) : popularRestaurants.length === 0 ? (
+   474→            <EmptyState
+   475→              variant="no-restaurants"
+   476→              className="py-8"
+   477→              actionLabel="Switch campus"
+   478→              onAction={() => setActiveTab('explore')}
+   479→            />
+   480→          ) : (
+   481→            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+   482→              {popularRestaurants.map((r) => (
+   483→                <RestaurantCardV2
+   484→                  key={r.id}
+   485→                  restaurant={r}
+   486→                  isOpen={r.isOpen !== false}
+   487→                  rewardMultiplier={r.rewardMultiplier}
+   488→                  dealLabel={r.deal ?? undefined}
+   489→                  onPress={handleRestaurantTap}
+   490→                />
+   491→              ))}
+   492→            </div>
+   493→          )}
+   494→        </section>
+   495→
+   496→        {/* ────────────────────────────────────────────────────────────────────
+   497→            6. Deals — horizontal carousel
+   498→            ──────────────────────────────────────────────────────────────────── */}
+   499→        {dealsRestaurants.length > 0 && (
+   500→          <section aria-labelledby="home-deals">
+   501→            <SectionHeader id="home-deals" title="Deals" icon="⚡" />
+   502→            <HorizontalScroll>
+   503→              {dealsRestaurants.map((r) => (
+   504→                <div key={r.id} className="w-64 shrink-0">
+   505→                  <RestaurantCardV2
+   506→                    restaurant={r}
+   507→                    isOpen={r.isOpen !== false}
+   508→                    rewardMultiplier={r.rewardMultiplier}
+   509→                    dealLabel={r.deal ?? undefined}
+   510→                    onPress={handleRestaurantTap}
+   511→                  />
+   512→                </div>
+   513→              ))}
+   514→            </HorizontalScroll>
+   515→          </section>
+   516→        )}
+   517→
+   518→        {/* ────────────────────────────────────────────────────────────────────
+   519→            7. Rewards Progress — RewardProgressRing + "View rewards" CTA
+   520→            ──────────────────────────────────────────────────────────────────── */}
+   521→        <section aria-labelledby="home-rewards">
+   522→          <SectionHeader id="home-rewards" title="Rewards Progress" icon="✨" />
+   523→          <Card className="overflow-hidden border-gold-200 bg-gradient-to-br from-gold-50 to-amber-50 dark:border-gold-900/40 dark:from-gold-950/30 dark:to-amber-950/20">
+   524→            <CardContent className="flex flex-col items-start gap-4 p-5 sm:flex-row sm:items-center">
+   525→              {rewardsLoading ? (
+   526→                <RewardRingSkeleton />
+   527→              ) : hasRewardsAccount ? (
+   528→                <RewardProgressRing
+   529→                  points={rewardsAccount.pointsBalance}
+   530→                  size={96}
+   531→                  earnRate="You earn points on every order"
+   532→                />
+   533→              ) : (
+   534→                <div className="flex w-full flex-col items-start gap-3">
+   535→                  <div className="flex h-20 w-20 items-center justify-center rounded-full bg-gold-100 dark:bg-gold-950/60">
+   536→                    <Sparkles className="h-8 w-8 text-gold-600 dark:text-gold-400" aria-hidden="true" />
+   537→                  </div>
+   538→                  <p className="text-sm text-muted-foreground">
+   539→                    Earn points on every order and unlock tier-based rewards.
+   540→                  </p>
+   541→                </div>
+   542→              )}
+   543→              <div className="flex flex-1 flex-col gap-2 sm:items-end">
+   544→                <Button
+   545→                  type="button"
+   546→                  variant="outline"
+   547→                  className="border-gold-300 text-gold-800 hover:bg-gold-100 dark:border-gold-800 dark:text-gold-300 dark:hover:bg-gold-950/60"
+   548→                  onClick={() => setActiveTab('rewards')}
+   549→                >
+   550→                  View rewards
+   551→                  <ArrowRight className="ml-1 h-4 w-4" aria-hidden="true" />
+   552→                </Button>
+   553→              </div>
+   554→            </CardContent>
+   555→          </Card>
+   556→        </section>
+   557→
+   558→        {/* ────────────────────────────────────────────────────────────────────
+   559→            8. Friends Ordering Nearby — SocialFeedCard list (only if has friends)
+   560→            ──────────────────────────────────────────────────────────────────── */}
+   561→        {hasFriends && (
+   562→          <section aria-labelledby="home-friends">
+   563→            <SectionHeader id="home-friends" title="Friends Ordering Nearby" icon="👥" />
+   564→            {socialLoading ? (
+   565→              <div className="space-y-3">
+   566→                {Array.from({ length: 2 }).map((_, i) => (
+   567→                  <SocialFeedSkeleton key={i} />
+   568→                ))}
+   569→              </div>
+   570→            ) : friendsOrdering.length === 0 ? (
+   571→              <EmptyState
+   572→                variant="no-friends"
+   573→                title="No friends ordering right now"
+   574→                description="When friends order, you'll see their activity here."
+   575→                className="py-8"
+   576→              />
+   577→            ) : (
+   578→              <div className="space-y-3">
+   579→                {friendsOrdering.map((a) => (
+   580→                  <SocialFeedCard
+   581→                    key={a.id}
+   582→                    activity={a}
+   583→                    onPress={(act) => {
+   584→                      if (act.restaurantId) openRestaurant(act.restaurantId)
+   585→                    }}
+   586→                  />
+   587→                ))}
+   588→              </div>
+   589→            )}
+   590→          </section>
+   591→        )}
+   592→
+   593→        {/* ────────────────────────────────────────────────────────────────────
+   594→            9. Gift a Friend — violet CTA card
+   595→            10. Start Group Order — rose CTA card
+   596→            (paired in a 2-up grid on sm+, stacked on mobile)
+   597→            ──────────────────────────────────────────────────────────────────── */}
+   598→        <section aria-label="Social actions" className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+   599→          <CTACard
+   600→            tone="violet"
+   601→            icon={<Gift className="h-5 w-5" aria-hidden="true" />}
+   602→            title="Gift a Friend"
+   603→            description="Send a food gift to a friend on campus."
+   604→            ctaLabel="Send gift"
+   605→            onCta={() => setSendGiftOpen(true)}
+   606→          />
+   607→          <CTACard
+   608→            tone="rose"
+   609→            icon={<Users className="h-5 w-5" aria-hidden="true" />}
+   610→            title="Start Group Order"
+   611→            description="Split an order with friends — one pickup."
+   612→            ctaLabel="Start group"
+   613→            onCta={() =>
+   614→              toast({
+   615→                title: 'Group ordering coming in Wave 7',
+   616→                description: 'Group orders will be available soon.',
+   617→              })
+   618→            }
+   619→          />
+   620→        </section>
+   621→
+   622→        {/* ────────────────────────────────────────────────────────────────────
+   623→            11. Recently Ordered — vertical list of last 3 orders
+   624→            ──────────────────────────────────────────────────────────────────── */}
+   625→        <section aria-labelledby="home-recent">
+   626→          <SectionHeader id="home-recent" title="Recently Ordered" icon="📋" />
+   627→          {orders.loading ? (
+   628→            <div className="space-y-3">
+   629→              {Array.from({ length: 3 }).map((_, i) => (
+   630→                <OrderCardSkeleton key={i} />
+   631→              ))}
+   632→            </div>
+   633→          ) : recentOrders.length === 0 ? (
+   634→            <EmptyState
+   635→              variant="no-orders"
+   636→              className="py-8"
+   637→              actionLabel="Browse restaurants"
+   638→              onAction={() => setActiveTab('explore')}
+   639→            />
+   640→          ) : (
+   641→            <div className="space-y-2">
+   642→              {recentOrders.map((o) => (
+   643→                <RecentOrderRow
+   644→                  key={o.id}
+   645→                  order={o}
+   646→                  onOpen={() => setActiveTab('orders')}
+   647→                />
+   648→              ))}
+   649→            </div>
+   650→          )}
+   651→        </section>
+   652→      </motion.div>
+   653→    </PullToRefresh>
+   654→
+   655→      {/* ────────────────────────────────────────────────────────────────────
+   656→          Task 6D — Send-gift modal (opened by the "Gift a Friend" CTA above).
+   657→          Rendered as a sibling so it overlays the whole screen regardless of
+   658→          scroll position.
+   659→          ──────────────────────────────────────────────────────────────────── */}
+   660→      <SendGiftFlow open={sendGiftOpen} onClose={() => setSendGiftOpen(false)} />
+   661→    </>
+   662→  )
+   663→}
+   664→
+   665→// ═══════════════════════════════════════════════════════════════════════════
+   666→// Helper components
+   667→// ═══════════════════════════════════════════════════════════════════════════
+   668→
+   669→function SectionHeader({ id, title, icon }: { id: string; title: string; icon: string }) {
+   670→  return (
+   671→    <div className="mb-3 flex items-center gap-2">
+   672→      <span aria-hidden="true" className="text-base">
+   673→        {icon}
+   674→      </span>
+   675→      <h2 id={id} className="text-base font-semibold tracking-tight text-foreground sm:text-lg">
+   676→        {title}
+   677→      </h2>
+   678→    </div>
+   679→  )
+   680→}
+   681→
+   682→function HorizontalScroll({ children }: { children: React.ReactNode }) {
+   683→  return (
+   684→    <div
+   685→      className="snak-scroll -mx-4 flex gap-4 overflow-x-auto px-4 pb-2"
+   686→      role="list"
+   687→    >
+   688→      {children}
+   689→    </div>
+   690→  )
+   691→}
+   692→
+   693→interface CTACardProps {
+   694→  tone: 'violet' | 'rose'
+   695→  icon: React.ReactNode
+   696→  title: string
+   697→  description: string
+   698→  ctaLabel: string
+   699→  onCta: () => void
+   700→}
+   701→
+   702→function CTACard({ tone, icon, title, description, ctaLabel, onCta }: CTACardProps) {
+   703→  const toneClasses =
+   704→    tone === 'violet'
+   705→      ? 'border-violet-200 bg-gradient-to-br from-violet-50 to-fuchsia-50 dark:border-violet-900/50 dark:from-violet-950/30 dark:to-fuchsia-950/20'
+   706→      : 'border-rose-200 bg-gradient-to-br from-rose-50 to-pink-50 dark:border-rose-900/50 dark:from-rose-950/30 dark:to-pink-950/20'
+   707→  const iconBg =
+   708→    tone === 'violet'
+   709→      ? 'bg-violet-500 text-white'
+   710→      : 'bg-rose-500 text-white'
+   711→  const btnClass =
+   712→    tone === 'violet'
+   713→      ? 'bg-violet-600 text-white hover:bg-violet-700'
+   714→      : 'bg-rose-600 text-white hover:bg-rose-700'
+   715→
+   716→  return (
+   717→    <Card className={toneClasses}>
+   718→      <CardContent className="flex items-start gap-3 p-4">
+   719→        <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${iconBg}`}>
+   720→          {icon}
+   721→        </div>
+   722→        <div className="min-w-0 flex-1">
+   723→          <h3 className="font-semibold text-foreground">{title}</h3>
+   724→          <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">{description}</p>
+   725→          <Button
+   726→            type="button"
+   727→            size="sm"
+   728→            className={`mt-3 h-8 px-3 text-xs ${btnClass}`}
+   729→            onClick={onCta}
+   730→          >
+   731→            {ctaLabel}
+   732→            <ArrowRight className="ml-1 h-3.5 w-3.5" aria-hidden="true" />
+   733→          </Button>
+   734→        </div>
+   735→      </CardContent>
+   736→    </Card>
+   737→  )
+   738→}
+   739→
+   740→function RecentOrderRow({ order, onOpen }: { order: Order; onOpen: () => void }) {
+   741→  const meta = STATUS_META[order.status] ?? STATUS_META.CONFIRMED
+   742→  return (
+   743→    <button
+   744→      type="button"
+   745→      onClick={onOpen}
+   746→      aria-label={`Open order from ${order.restaurant.name}, ${order.itemsCount} items`}
+   747→      className="snak-focus-ring flex w-full items-center gap-3 rounded-xl border bg-card p-3 text-left transition hover:shadow-md"
+   748→    >
+   749→      <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-teal-400 to-emerald-500 text-xl">
+   750→        🍽
+   751→      </div>
+   752→      <div className="min-w-0 flex-1">
+   753→        <div className="flex items-center gap-2">
+   754→          <span className="truncate font-medium text-foreground">{order.restaurant.name}</span>
+   755→          <Badge className={`text-[10px] ${meta.tone}`}>{meta.short}</Badge>
+   756→        </div>
+   757→        <p className="mt-0.5 text-xs text-muted-foreground">
+   758→          {order.itemsCount} items · #{order.id.slice(-6).toUpperCase()} · {timeAgo(order.createdAt)}
+   759→        </p>
+   760→      </div>
+   761→      <div className="text-right">
+   762→        <p className="text-sm font-semibold text-foreground">{inr(order.totalAmount)}</p>
+   763→      </div>
+   764→    </button>
+   765→  )
+   766→}
+   767→
+   768→// ═══════════════════════════════════════════════════════════════════════════
+   769→// PullToRefresh — minimal pull-to-refresh wrapper (touch pointer events only).
+   770→// We use a simple threshold-based pull on touchstart/touchmove/touchend. The
+   771→// page doesn't scroll mid-pull (we only engage when scrollTop === 0). When
+   772→// the threshold (70px) is exceeded, onRefresh fires after release.
+   773→// ═══════════════════════════════════════════════════════════════════════════
+   774→
+   775→interface PullToRefreshProps {
+   776→  onRefresh: () => Promise<void> | void
+   777→  refreshing: boolean
+   778→  children: React.ReactNode
+   779→}
+   780→
+   781→const PULL_THRESHOLD = 70
+   782→
+   783→function PullToRefresh({ onRefresh, refreshing, children }: PullToRefreshProps) {
+   784→  const startY = React.useRef<number | null>(null)
+   785→  const [pull, setPull] = React.useState(0)
+   786→  // `isPulling` tracks whether the user is actively dragging (touchstart fired
+   787→  // and touchend hasn't). We use state (not a ref) because the transition
+   788→  // style depends on it — refs accessed during render are an eslint violation.
+   789→  const [isPulling, setIsPulling] = React.useState(false)
+   790→  const containerRef = React.useRef<HTMLDivElement | null>(null)
+   791→
+   792→  function onTouchStart(e: React.TouchEvent) {
+   793→    // Only engage if the user is at the very top of the scroll container.
+   794→    const target = containerRef.current
+   795→    if (!target || target.scrollTop > 0) {
+   796→      startY.current = null
+   797→      setIsPulling(false)
+   798→      return
+   799→    }
+   800→    startY.current = e.touches[0]?.clientY ?? null
+   801→    setIsPulling(true)
+   802→  }
+   803→
+   804→  function onTouchMove(e: React.TouchEvent) {
+   805→    if (startY.current === null || refreshing) return
+   806→    const dy = (e.touches[0]?.clientY ?? 0) - startY.current
+   807→    if (dy > 0) {
+   808→      // Rubber-band: dampen the visual pull so it feels elastic.
+   809→      const dampened = Math.min(120, dy * 0.5)
+   810→      setPull(dampened)
+   811→    }
+   812→  }
+   813→
+   814→  function onTouchEnd() {
+   815→    if (startY.current === null) return
+   816→    startY.current = null
+   817→    setIsPulling(false)
+   818→    if (pull >= PULL_THRESHOLD && !refreshing) {
+   819→      void onRefresh()
+   820→    }
+   821→    setPull(0)
+   822→  }
+   823→
+   824→  return (
+   825→    <div
+   826→      ref={containerRef}
+   827→      onTouchStart={onTouchStart}
+   828→      onTouchMove={onTouchMove}
+   829→      onTouchEnd={onTouchEnd}
+   830→      className="relative"
+   831→    >
+   832→      {/* Pull indicator — only visible while actively pulling or refreshing */}
+   833→      {(pull > 4 || refreshing) && (
+   834→        <div
+   835→          className="pointer-events-none absolute left-1/2 top-2 z-10 -translate-x-1/2"
+   836→          aria-hidden="true"
+   837→        >
+   838→          <RefreshCw
+   839→            className={`h-5 w-5 text-muted-foreground ${refreshing ? 'animate-spin' : ''}`}
+   840→            style={{ transform: `rotate(${Math.min(180, pull * 2)}deg)` }}
+   841→          />
+   842→        </div>
+   843→      )}
+   844→      <div
+   845→        style={{
+   846→          transform: `translateY(${refreshing ? 24 : pull}px)`,
+   847→          transition: isPulling ? 'none' : 'transform 200ms ease',
+   848→        }}
+   849→      >
+   850→        {children}
+   851→      </div>
+   852→    </div>
+   853→  )
+   854→}
+   855→
+   856→export default HomeScreen
+   857→

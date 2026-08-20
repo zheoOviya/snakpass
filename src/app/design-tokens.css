@@ -1,0 +1,676 @@
+/*
+ * ════════════════════════════════════════════════════════════════════════════
+ *  SNAKZAP — PREMIUM DESIGN TOKENS
+ *  Companion to globals.css. Import in globals.css AFTER tailwind:
+ *
+ *    @import "tailwindcss";
+ *    @import "tw-animate-css";
+ *    @import "./design-tokens.css";
+ *
+ *  Provides:
+ *    1. Full brand color ramps (50–950) — teal, emerald, gold, violet, rose, danger, success
+ *    2. Semantic accent tokens — --reward, --social, --group, --success, --danger + foregrounds
+ *    3. Refined primary/secondary/muted (preserves existing teal brand, adds warm depth)
+ *    4. Typography tokens — display, sans, mono, devanagari + type scale
+ *    5. Spacing scale (4px grid)
+ *    6. Radius scale (already partially in globals; adds 2xl/3xl)
+ *    7. Soft premium shadow tokens (not harsh)
+ *    8. Motion tokens — durations + easings + spring presets
+ *    9. Z-index stacking layers
+ *   10. Glassmorphism + gradient mesh helpers as utility classes
+ *
+ *  Color space: OKLCH (matches existing globals.css).
+ *  Dark mode: `.dark` class selector (matches next-themes setup in providers.tsx).
+ *
+ *  NOTE: This file does NOT redefine --background/--foreground/--card etc.
+ *  It only ADDS new tokens and refines --primary/-secondary/-muted/-ring
+ *  to harmonize with the new accent ramps. Existing globals.css remains
+ *  authoritative for shadcn base tokens.
+ * ════════════════════════════════════════════════════════════════════════════
+ */
+
+/* ───────────────────────────────────────────────────────────────────────────
+ *  TAILWIND 4 THEME INLINE — expose tokens as Tailwind color utilities
+ *  Usage: bg-teal-500, text-gold-400, border-rose-300, bg-reward, etc.
+ * ─────────────────────────────────────────────────────────────────────────── */
+@theme inline {
+  /* Brand ramps */
+  --color-teal-50:  var(--teal-50);
+  --color-teal-100: var(--teal-100);
+  --color-teal-200: var(--teal-200);
+  --color-teal-300: var(--teal-300);
+  --color-teal-400: var(--teal-400);
+  --color-teal-500: var(--teal-500);
+  --color-teal-600: var(--teal-600);
+  --color-teal-700: var(--teal-700);
+  --color-teal-800: var(--teal-800);
+  --color-teal-900: var(--teal-900);
+  --color-teal-950: var(--teal-950);
+
+  --color-emerald-50:  var(--emerald-50);
+  --color-emerald-100: var(--emerald-100);
+  --color-emerald-200: var(--emerald-200);
+  --color-emerald-300: var(--emerald-300);
+  --color-emerald-400: var(--emerald-400);
+  --color-emerald-500: var(--emerald-500);
+  --color-emerald-600: var(--emerald-600);
+  --color-emerald-700: var(--emerald-700);
+  --color-emerald-800: var(--emerald-800);
+  --color-emerald-900: var(--emerald-900);
+  --color-emerald-950: var(--emerald-950);
+
+  --color-gold-50:  var(--gold-50);
+  --color-gold-100: var(--gold-100);
+  --color-gold-200: var(--gold-200);
+  --color-gold-300: var(--gold-300);
+  --color-gold-400: var(--gold-400);
+  --color-gold-500: var(--gold-500);
+  --color-gold-600: var(--gold-600);
+  --color-gold-700: var(--gold-700);
+  --color-gold-800: var(--gold-800);
+  --color-gold-900: var(--gold-900);
+  --color-gold-950: var(--gold-950);
+
+  --color-violet-50:  var(--violet-50);
+  --color-violet-100: var(--violet-100);
+  --color-violet-200: var(--violet-200);
+  --color-violet-300: var(--violet-300);
+  --color-violet-400: var(--violet-400);
+  --color-violet-500: var(--violet-500);
+  --color-violet-600: var(--violet-600);
+  --color-violet-700: var(--violet-700);
+  --color-violet-800: var(--violet-800);
+  --color-violet-900: var(--violet-900);
+  --color-violet-950: var(--violet-950);
+
+  --color-rose-50:  var(--rose-50);
+  --color-rose-100: var(--rose-100);
+  --color-rose-200: var(--rose-200);
+  --color-rose-300: var(--rose-300);
+  --color-rose-400: var(--rose-400);
+  --color-rose-500: var(--rose-500);
+  --color-rose-600: var(--rose-600);
+  --color-rose-700: var(--rose-700);
+  --color-rose-800: var(--rose-800);
+  --color-rose-900: var(--rose-900);
+  --color-rose-950: var(--rose-950);
+
+  --color-danger-50:  var(--danger-50);
+  --color-danger-100: var(--danger-100);
+  --color-danger-200: var(--danger-200);
+  --color-danger-300: var(--danger-300);
+  --color-danger-400: var(--danger-400);
+  --color-danger-500: var(--danger-500);
+  --color-danger-600: var(--danger-600);
+  --color-danger-700: var(--danger-700);
+  --color-danger-800: var(--danger-800);
+  --color-danger-900: var(--danger-900);
+  --color-danger-950: var(--danger-950);
+
+  --color-success-50:  var(--success-50);
+  --color-success-100: var(--success-100);
+  --color-success-200: var(--success-200);
+  --color-success-300: var(--success-300);
+  --color-success-400: var(--success-400);
+  --color-success-500: var(--success-500);
+  --color-success-600: var(--success-600);
+  --color-success-700: var(--success-700);
+  --color-success-800: var(--success-800);
+  --color-success-900: var(--success-900);
+  --color-success-950: var(--success-950);
+
+  /* Semantic accents (single-step) */
+  --color-reward:            var(--reward);
+  --color-reward-foreground: var(--reward-foreground);
+  --color-reward-muted:      var(--reward-muted);
+  --color-social:            var(--social);
+  --color-social-foreground: var(--social-foreground);
+  --color-social-muted:      var(--social-muted);
+  --color-group:             var(--group);
+  --color-group-foreground:  var(--group-foreground);
+  --color-group-muted:       var(--group-muted);
+  --color-success:           var(--success-token);
+  --color-success-foreground: var(--success-foreground);
+  --color-danger:            var(--danger-token);
+  --color-danger-foreground: var(--danger-foreground);
+  --color-warning:           var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info:              var(--info);
+  --color-info-foreground:   var(--info-foreground);
+
+  /* Typography */
+  --font-display:     var(--font-display-stack);
+  --font-sans:         var(--font-sans-stack);
+  --font-mono:         var(--font-mono-stack);
+  --font-devanagari:   var(--font-devanagari-stack);
+
+  /* Radius */
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 14px);
+
+  /* Shadows */
+  --shadow-card:     var(--snak-shadow-card);
+  --shadow-popover:  var(--snak-shadow-popover);
+  --shadow-fab:      var(--snak-shadow-fab);
+  --shadow-glow:     var(--snak-shadow-glow);
+
+  /* Z-index */
+  --z-nav:        var(--snak-z-nav);
+  --z-sticky:     var(--snak-z-sticky);
+  --z-sheet:      var(--snak-z-sheet);
+  --z-modal:      var(--snak-z-modal);
+  --z-toast:      var(--snak-z-toast);
+  --z-tooltip:    var(--snak-z-tooltip);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  LIGHT THEME
+ * ════════════════════════════════════════════════════════════════════════════ */
+:root {
+  /* ── Teal / Emerald Primary (refined from existing #0D9488) ───────────────── */
+  --teal-50:  oklch(0.975 0.018 178);
+  --teal-100: oklch(0.945 0.035 178);
+  --teal-200: oklch(0.895 0.058 178);
+  --teal-300: oklch(0.835 0.085 178);
+  --teal-400: oklch(0.760 0.108 178);
+  --teal-500: oklch(0.680 0.120 178);  /* brand anchor — matches #0D9488 */
+  --teal-600: oklch(0.595 0.124 178);
+  --teal-700: oklch(0.490 0.112 178);
+  --teal-800: oklch(0.395 0.090 178);
+  --teal-900: oklch(0.310 0.068 178);
+  --teal-950: oklch(0.225 0.048 178);
+
+  /* ── Emerald (gradient partner, success accent) ─────────────────────────── */
+  --emerald-50:  oklch(0.970 0.020 158);
+  --emerald-100: oklch(0.935 0.045 158);
+  --emerald-200: oklch(0.880 0.078 158);
+  --emerald-300: oklch(0.820 0.110 156);
+  --emerald-400: oklch(0.755 0.140 154);
+  --emerald-500: oklch(0.685 0.158 152);  /* matches existing from-teal-500 to-emerald-600 ramp */
+  --emerald-600: oklch(0.610 0.158 150);
+  --emerald-700: oklch(0.510 0.140 150);
+  --emerald-800: oklch(0.410 0.110 150);
+  --emerald-900: oklch(0.325 0.085 150);
+  --emerald-950: oklch(0.240 0.060 150);
+
+  /* ── Gold / Amber — REWARDS accent ──────────────────────────────────────── */
+  --gold-50:  oklch(0.975 0.025 85);
+  --gold-100: oklch(0.945 0.055 82);
+  --gold-200: oklch(0.900 0.090 80);
+  --gold-300: oklch(0.855 0.120 78);
+  --gold-400: oklch(0.805 0.145 75);
+  --gold-500: oklch(0.755 0.160 72);   /* primary reward coin color */
+  --gold-600: oklch(0.675 0.160 65);
+  --gold-700: oklch(0.560 0.140 58);
+  --gold-800: oklch(0.440 0.115 55);
+  --gold-900: oklch(0.345 0.090 55);
+  --gold-950: oklch(0.255 0.065 55);
+
+  /* ── Violet — SOCIAL accent (friends, feed, gifting) ────────────────────── */
+  --violet-50:  oklch(0.975 0.020 300);
+  --violet-100: oklch(0.940 0.045 300);
+  --violet-200: oklch(0.885 0.080 300);
+  --violet-300: oklch(0.820 0.115 300);
+  --violet-400: oklch(0.735 0.150 300);
+  --violet-500: oklch(0.645 0.180 300);
+  --violet-600: oklch(0.555 0.200 300);
+  --violet-700: oklch(0.460 0.180 300);
+  --violet-800: oklch(0.375 0.145 300);
+  --violet-900: oklch(0.305 0.115 300);
+  --violet-950: oklch(0.225 0.085 300);
+
+  /* ── Rose / Pink — GROUP ORDERS accent ──────────────────────────────────── */
+  --rose-50:  oklch(0.975 0.018 15);
+  --rose-100: oklch(0.945 0.038 15);
+  --rose-200: oklch(0.890 0.065 15);
+  --rose-300: oklch(0.825 0.095 14);
+  --rose-400: oklch(0.755 0.130 12);
+  --rose-500: oklch(0.680 0.170 12);
+  --rose-600: oklch(0.605 0.205 12);
+  --rose-700: oklch(0.505 0.190 12);
+  --rose-800: oklch(0.405 0.155 12);
+  --rose-900: oklch(0.325 0.120 12);
+  --rose-950: oklch(0.245 0.085 12);
+
+  /* ── Danger (red) — cancel / errors ─────────────────────────────────────── */
+  --danger-50:  oklch(0.970 0.015 25);
+  --danger-100: oklch(0.935 0.040 25);
+  --danger-200: oklch(0.865 0.080 25);
+  --danger-300: oklch(0.780 0.130 25);
+  --danger-400: oklch(0.700 0.180 25);
+  --danger-500: oklch(0.620 0.220 25);
+  --danger-600: oklch(0.550 0.210 22);
+  --danger-700: oklch(0.460 0.180 22);
+  --danger-800: oklch(0.370 0.140 22);
+  --danger-900: oklch(0.300 0.105 22);
+  --danger-950: oklch(0.220 0.070 22);
+
+  /* ── Success (emerald-shifted green, distinct from primary emerald) ────── */
+  --success-50:  oklch(0.970 0.020 150);
+  --success-100: oklch(0.935 0.050 150);
+  --success-200: oklch(0.870 0.085 148);
+  --success-300: oklch(0.805 0.120 146);
+  --success-400: oklch(0.740 0.145 144);
+  --success-500: oklch(0.680 0.160 142);
+  --success-600: oklch(0.590 0.155 142);
+  --success-700: oklch(0.485 0.135 142);
+  --success-800: oklch(0.390 0.105 142);
+  --success-900: oklch(0.310 0.080 142);
+  --success-950: oklch(0.230 0.055 142);
+
+  /* ── Semantic accent tokens (single-step convenience) ───────────────────── */
+  --reward:               var(--gold-500);
+  --reward-foreground:    oklch(0.27 0.05 78);   /* dark brown-gold text on gold-50 */
+  --reward-muted:         var(--gold-100);
+
+  --social:               var(--violet-500);
+  --social-foreground:    oklch(0.99 0.005 300);
+  --social-muted:         var(--violet-100);
+
+  --group:                var(--rose-500);
+  --group-foreground:     oklch(0.99 0.005 15);
+  --group-muted:          var(--rose-100);
+
+  --success-token:        var(--success-500);
+  --success-foreground:   oklch(0.99 0.01 150);
+
+  --danger-token:         var(--danger-500);
+  --danger-foreground:    oklch(0.99 0.01 25);
+
+  --warning:              oklch(0.78 0.155 70);
+  --warning-foreground:   oklch(0.28 0.06 70);
+
+  --info:                 var(--teal-500);
+  --info-foreground:      oklch(0.99 0.01 178);
+
+  /* ── Refined shadcn base tokens (override in light) ─────────────────────── */
+  /* Primary stays teal but uses refined ramp anchor 600 for stronger CTAs */
+  --primary:             var(--teal-600);
+  --primary-foreground:  oklch(0.99 0.01 178);
+  --ring:                var(--teal-500);
+
+  /* Secondary warms slightly toward teal-tinted neutral */
+  --secondary:            oklch(0.965 0.012 178);
+  --secondary-foreground:  oklch(0.27 0.03 178);
+
+  /* Muted stays soft warm neutral */
+  --muted:            oklch(0.965 0.008 178);
+  --muted-foreground:  oklch(0.50 0.018 188);
+  --accent:           oklch(0.94 0.04 175);
+  --accent-foreground: oklch(0.30 0.08 178);
+
+  /* Destructive maps to danger ramp */
+  --destructive:          var(--danger-500);
+
+  /* ── Typography stacks ───────────────────────────────────────────────────── */
+  /* Display = Plus Jakarta Sans (warm geometric, premium heading face)
+     Sans   = Geist Sans (already loaded via next/font in layout.tsx)
+     Mono   = Geist Mono (already loaded)
+     Devanagari = Noto Sans Devanagari (Hindi/Marathi/etc.Indian scripts)        */
+  --font-display-stack: "Plus Jakarta Sans", var(--font-geist-sans, ui-sans-serif), system-ui, "Segoe UI", "Noto Sans Devanagari", sans-serif;
+  --font-sans-stack:     var(--font-geist-sans, ui-sans-serif), system-ui, "Segoe UI", "Noto Sans Devanagari", "Noto Sans", sans-serif;
+  --font-mono-stack:     var(--font-geist-mono, ui-monospace), "SF Mono", "Cascadia Code", "Roboto Mono", monospace;
+  --font-devanagari-stack: "Noto Sans Devanagari", var(--font-geist-sans, sans-serif);
+
+  /* Type scale (rem-based, mobile-first) */
+  --text-display: 2.5rem;     --text-display--line-height: 1.1;   --text-display--weight: 700;
+  --text-h1:      2rem;       --text-h1--line-height:      1.15;  --text-h1--weight:      700;
+  --text-h2:      1.5rem;     --text-h2--line-height:      1.2;   --text-h2--weight:      600;
+  --text-h3:      1.25rem;    --text-h3--line-height:      1.3;   --text-h3--weight:      600;
+  --text-body-lg: 1.125rem;   --text-body-lg--line-height: 1.5;   --text-body-lg--weight: 400;
+  --text-body:    1rem;       --text-body--line-height:    1.55;  --text-body--weight:    400;
+  --text-small:   0.875rem;   --text-small--line-height:   1.45;  --text-small--weight:   400;
+  --text-caption: 0.75rem;    --text-caption--line-height: 1.4;   --text-caption--weight: 500;
+  --text-micro:   0.6875rem;  --text-micro--line-height:   1.3;   --text-micro--weight:   600;
+
+  /* ── Spacing scale (4px base grid; matches Tailwind default steps) ──────── */
+  --space-px:  1px;
+  --space-0:   0;
+  --space-1:   0.25rem;   /* 4 */
+  --space-2:   0.5rem;    /* 8 */
+  --space-3:   0.75rem;   /* 12 */
+  --space-4:   1rem;      /* 16 — base card padding */
+  --space-5:   1.25rem;   /* 20 */
+  --space-6:   1.5rem;    /* 24 */
+  --space-8:   2rem;      /* 32 */
+  --space-10:  2.5rem;    /* 40 */
+  --space-12:  3rem;      /* 48 */
+  --space-16:  4rem;      /* 64 */
+  --space-20:  5rem;      /* 80 */
+  --space-24:  6rem;      /* 96 */
+
+  /* Layout heights */
+  --height-bottom-nav: 4rem;            /* 64px */
+  --height-bottom-nav-safe: calc(4rem + env(safe-area-inset-bottom, 0px));
+  --height-app-bar: 3.5rem;             /* 56px sticky header */
+  --height-app-bar-safe: calc(3.5rem + env(safe-area-inset-top, 0px));
+  --height-sticky-cta: 4.5rem;          /* 72px sticky CTA bar with FAB */
+  --max-w-mobile: 28rem;                /* 448 — single column phone */
+  --max-w-sm: 36rem;                    /* 576 */
+  --max-w-md: 48rem;                    /* 768 — 2-col breakpoint */
+  --max-w-lg: 64rem;                    /* 1024 — 3-col breakpoint */
+  --max-w-xl: 80rem;                    /* 1280 */
+
+  /* Radius (adds to existing globals.css which sets --radius 0.75rem) */
+  --radius-xs: 0.25rem;
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;    /* cards premium */
+  --radius-3xl: 1.5rem;     /* bottom sheets */
+  --radius-pill: 9999px;    /* chips, badges, FABs */
+
+  /* ── Premium soft shadows (multi-layer, not harsh single drop) ─────────── */
+  --snak-shadow-card:
+    0 1px 2px oklch(0.18 0.02 200 / 0.04),
+    0 2px 8px oklch(0.18 0.02 200 / 0.04),
+    0 8px 24px oklch(0.18 0.02 200 / 0.06);
+  --snak-shadow-popover:
+    0 2px 4px oklch(0.18 0.02 200 / 0.05),
+    0 8px 16px oklch(0.18 0.02 200 / 0.06),
+    0 24px 48px oklch(0.18 0.02 200 / 0.10);
+  --snak-shadow-fab:
+    0 4px 12px oklch(0.49 0.124 178 / 0.30),
+    0 12px 32px oklch(0.49 0.124 178 / 0.20);
+  --snak-shadow-glow:
+    0 0 0 4px oklch(0.680 0.120 178 / 0.18);
+
+  /* ── Motion tokens (framer-motion reference values) ────────────────────── */
+  --duration-instant: 0.08s;
+  --duration-fast:    0.15s;
+  --duration-base:    0.22s;
+  --duration-slow:    0.32s;
+  --duration-slower:  0.48s;
+
+  --ease-standard:    cubic-bezier(0.2, 0, 0, 1);       /* decelerate — entrance */
+  --ease-emphasized:  cubic-bezier(0.3, 0, 0, 1);       /* long decelerate */
+  --ease-in:          cubic-bezier(0.4, 0, 1, 1);       /* accelerate — exit */
+  --ease-out:         cubic-bezier(0, 0, 0.2, 1);
+  --ease-spring:      cubic-bezier(0.34, 1.56, 0.64, 1); /* gentle overshoot */
+  --ease-bounce:      cubic-bezier(0.68, -0.6, 0.32, 1.6); /* strong bounce — rewards */
+
+  /* Framer Motion preset objects (documented reference; not auto-applied) */
+  /* spring.gentle  = { stiffness: 320, damping: 30, mass: 1 }              */
+  /* spring.snappy  = { stiffness: 500, damping: 30, mass: 1 }              */
+  /* spring.reward  = { stiffness: 180, damping: 14, mass: 1 }             */
+
+  /* ── Z-index stacking layers ────────────────────────────────────────────── */
+  --snak-z-base:      0;
+  --snak-z-sticky:   10;     /* sticky headers, sticky CTA */
+  --snak-z-nav:      20;     /* bottom nav */
+  --snak-z-sheet:    30;     /* bottom sheets */
+  --snak-z-popover:  40;     /* popovers, dropdowns */
+  --snak-z-modal:    50;     /* centered modals */
+  --snak-z-toast:    60;     /* toasts */
+  --snak-z-tooltip:  70;     /* tooltips (above everything except dev tools) */
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  DARK THEME
+ *  next-themes toggles `.dark` on <html>. We override only what needs to shift.
+ * ════════════════════════════════════════════════════════════════════════════ */
+.dark {
+  /* Brand ramps in dark mode — luminance flipped, chroma slightly softened
+     so vibrant gradients stay readable on dark surfaces. */
+  --teal-50:  oklch(0.225 0.048 178);
+  --teal-100: oklch(0.280 0.068 178);
+  --teal-200: oklch(0.345 0.090 178);
+  --teal-300: oklch(0.425 0.108 178);
+  --teal-400: oklch(0.535 0.124 178);
+  --teal-500: oklch(0.640 0.130 178);
+  --teal-600: oklch(0.715 0.118 178);   /* dark-mode CTA anchor */
+  --teal-700: oklch(0.785 0.100 178);
+  --teal-800: oklch(0.860 0.075 178);
+  --teal-900: oklch(0.920 0.045 178);
+  --teal-950: oklch(0.965 0.020 178);
+
+  --emerald-50:  oklch(0.240 0.060 150);
+  --emerald-100: oklch(0.300 0.080 150);
+  --emerald-200: oklch(0.380 0.105 150);
+  --emerald-300: oklch(0.470 0.130 150);
+  --emerald-400: oklch(0.580 0.150 150);
+  --emerald-500: oklch(0.670 0.160 152);
+  --emerald-600: oklch(0.735 0.150 152);
+  --emerald-700: oklch(0.810 0.125 152);
+  --emerald-800: oklch(0.880 0.090 152);
+  --emerald-900: oklch(0.930 0.055 152);
+  --emerald-950: oklch(0.965 0.025 152);
+
+  --gold-50:  oklch(0.255 0.065 55);
+  --gold-100: oklch(0.320 0.090 55);
+  --gold-200: oklch(0.400 0.115 58);
+  --gold-300: oklch(0.490 0.140 60);
+  --gold-400: oklch(0.590 0.155 65);
+  --gold-500: oklch(0.700 0.160 70);    /* gold coin shines brighter on dark */
+  --gold-600: oklch(0.770 0.155 75);
+  --gold-700: oklch(0.830 0.140 78);
+  --gold-800: oklch(0.890 0.110 80);
+  --gold-900: oklch(0.935 0.075 82);
+  --gold-950: oklch(0.970 0.040 85);
+
+  --violet-50:  oklch(0.225 0.085 300);
+  --violet-100: oklch(0.290 0.115 300);
+  --violet-200: oklch(0.365 0.145 300);
+  --violet-300: oklch(0.450 0.170 300);
+  --violet-400: oklch(0.550 0.190 300);
+  --violet-500: oklch(0.660 0.200 300);  /* social accent pops on dark */
+  --violet-600: oklch(0.735 0.180 300);
+  --violet-700: oklch(0.810 0.150 300);
+  --violet-800: oklch(0.875 0.115 300);
+  --violet-900: oklch(0.930 0.075 300);
+  --violet-950: oklch(0.970 0.035 300);
+
+  --rose-50:  oklch(0.245 0.085 12);
+  --rose-100: oklch(0.310 0.115 12);
+  --rose-200: oklch(0.390 0.150 12);
+  --rose-300: oklch(0.480 0.180 12);
+  --rose-400: oklch(0.585 0.200 12);
+  --rose-500: oklch(0.685 0.200 12);
+  --rose-600: oklch(0.760 0.180 12);
+  --rose-700: oklch(0.830 0.150 12);
+  --rose-800: oklch(0.895 0.115 12);
+  --rose-900: oklch(0.940 0.075 14);
+  --rose-950: oklch(0.970 0.040 15);
+
+  --danger-50:  oklch(0.220 0.070 22);
+  --danger-100: oklch(0.285 0.100 22);
+  --danger-200: oklch(0.355 0.130 22);
+  --danger-300: oklch(0.440 0.165 22);
+  --danger-400: oklch(0.540 0.200 22);
+  --danger-500: oklch(0.645 0.215 22);
+  --danger-600: oklch(0.725 0.200 22);
+  --danger-700: oklch(0.810 0.170 22);
+  --danger-800: oklch(0.885 0.130 22);
+  --danger-900: oklch(0.935 0.085 22);
+  --danger-950: oklch(0.970 0.045 22);
+
+  --success-50:  oklch(0.230 0.055 142);
+  --success-100: oklch(0.295 0.080 142);
+  --success-200: oklch(0.375 0.105 142);
+  --success-300: oklch(0.470 0.135 142);
+  --success-400: oklch(0.575 0.155 142);
+  --success-500: oklch(0.665 0.160 142);
+  --success-600: oklch(0.745 0.150 142);
+  --success-700: oklch(0.825 0.125 142);
+  --success-800: oklch(0.895 0.090 142);
+  --success-900: oklch(0.940 0.055 142);
+  --success-950: oklch(0.970 0.025 142);
+
+  /* Semantic accent tokens — dark mode */
+  --reward:               var(--gold-400);
+  --reward-foreground:    oklch(0.20 0.04 78);
+  --reward-muted:         oklch(0.32 0.09 55);
+
+  --social:               var(--violet-400);
+  --social-foreground:    oklch(0.16 0.02 300);
+  --social-muted:         oklch(0.32 0.12 300);
+
+  --group:                var(--rose-400);
+  --group-foreground:     oklch(0.16 0.02 12);
+  --group-muted:          oklch(0.32 0.12 12);
+
+  --success-token:        var(--success-400);
+  --success-foreground:   oklch(0.16 0.02 142);
+
+  --danger-token:         var(--danger-400);
+  --danger-foreground:    oklch(0.16 0.02 22);
+
+  --warning:              oklch(0.82 0.150 75);
+  --warning-foreground:   oklch(0.20 0.04 75);
+
+  --info:                 var(--teal-400);
+  --info-foreground:      oklch(0.16 0.02 178);
+
+  /* ── Refined shadcn base tokens for dark mode ──────────────────────────── */
+  /* (globals.css already sets --background/--card/--popover etc.; we keep
+     those and only override --primary and --ring for stronger contrast) */
+  --primary:             var(--teal-500);
+  --primary-foreground:  oklch(0.16 0.02 200);
+  --ring:                var(--teal-400);
+  --destructive:         var(--danger-400);
+
+  /* Dark-mode shadows — softer, with slight teal tint for cohesion */
+  --snak-shadow-card:
+    0 1px 2px oklch(0 0 0 / 0.30),
+    0 2px 8px oklch(0 0 0 / 0.25),
+    0 8px 24px oklch(0 0 0 / 0.30);
+  --snak-shadow-popover:
+    0 2px 4px oklch(0 0 0 / 0.35),
+    0 8px 16px oklch(0 0 0 / 0.35),
+    0 24px 48px oklch(0 0 0 / 0.45);
+  --snak-shadow-fab:
+    0 4px 12px oklch(0.640 0.130 178 / 0.40),
+    0 12px 32px oklch(0.640 0.130 178 / 0.30);
+  --snak-shadow-glow:
+    0 0 0 4px oklch(0.640 0.130 178 / 0.25);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  UTILITY CLASSES — premium effects
+ *  Apply directly: className="snak-glass" / "snak-gradient-mesh" / etc.
+ * ════════════════════════════════════════════════════════════════════════════ */
+
+/* Glassmorphism — for bottom sheets, app bar, sticky CTA */
+.snak-glass {
+  background: color-mix(in oklch, var(--background) 72%, transparent);
+  backdrop-filter: saturate(180%) blur(16px);
+  -webkit-backdrop-filter: saturate(180%) blur(16px);
+  border: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
+}
+.dark .snak-glass {
+  background: color-mix(in oklch, var(--background) 65%, transparent);
+}
+
+/* Gradient mesh — hero sections, onboarding, reward celebrations */
+.snak-gradient-mesh {
+  background-image:
+    radial-gradient(at 20% 20%,  oklch(0.680 0.120 178 / 0.28) 0px, transparent 50%),
+    radial-gradient(at 80% 0%,  oklch(0.755 0.160 72 / 0.18) 0px, transparent 50%),
+    radial-gradient(at 0% 80%,   oklch(0.645 0.180 300 / 0.16) 0px, transparent 50%),
+    radial-gradient(at 80% 80%,  oklch(0.685 0.170 12 / 0.14) 0px, transparent 50%);
+}
+.dark .snak-gradient-mesh {
+  background-image:
+    radial-gradient(at 20% 20%,  oklch(0.640 0.130 178 / 0.22) 0px, transparent 50%),
+    radial-gradient(at 80% 0%,  oklch(0.700 0.160 70 / 0.14) 0px, transparent 50%),
+    radial-gradient(at 0% 80%,   oklch(0.660 0.200 300 / 0.12) 0px, transparent 50%),
+    radial-gradient(at 80% 80%,  oklch(0.685 0.200 12 / 0.10) 0px, transparent 50%);
+}
+
+/* Primary brand gradient (teal → emerald) — used on hero, primary CTAs */
+.snak-gradient-primary {
+  background-image: linear-gradient(135deg, var(--teal-500) 0%, var(--emerald-600) 100%);
+}
+.snak-gradient-primary-soft {
+  background-image: linear-gradient(135deg, var(--teal-400) 0%, var(--emerald-500) 100%);
+}
+
+/* Reward gold gradient — for reward rings, points badges, celebration toasts */
+.snak-gradient-reward {
+  background-image: linear-gradient(135deg, var(--gold-300) 0%, var(--gold-500) 50%, var(--gold-600) 100%);
+}
+
+/* Social violet gradient — friend cards, social feed highlights */
+.snak-gradient-social {
+  background-image: linear-gradient(135deg, var(--violet-400) 0%, var(--violet-600) 100%);
+}
+
+/* Group rose gradient — group order bubbles */
+.snak-gradient-group {
+  background-image: linear-gradient(135deg, var(--rose-400) 0%, var(--rose-600) 100%);
+}
+
+/* Shimmer — skeleton loaders (uses background-position animation) */
+.snak-shimmer {
+  background: linear-gradient(
+    90deg,
+    var(--muted) 0%,
+    color-mix(in oklch, var(--muted) 60%, var(--background)) 50%,
+    var(--muted) 100%
+  );
+  background-size: 200% 100%;
+  animation: snak-shimmer 1.6s var(--ease-standard) infinite;
+}
+@keyframes snak-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Sparkle pulse — used on reward-earned toasts + active order status */
+@keyframes snak-sparkle {
+  0%, 100% { opacity: 0.55; transform: scale(1); }
+  50%      { opacity: 1;    transform: scale(1.08); }
+}
+.snak-sparkle { animation: snak-sparkle 1.8s var(--ease-standard) infinite; }
+
+/* Live status pulse — already in globals.css as .snak-live-dot; we add a
+   ring variant for "order READY_FOR_PICKUP" emphasis */
+.snak-pulse-ring {
+  box-shadow: 0 0 0 0 var(--success-token);
+  animation: snak-pulse-ring 1.8s var(--ease-standard) infinite;
+}
+@keyframes snak-pulse-ring {
+  0%   { box-shadow: 0 0 0 0 oklch(0.680 0.160 142 / 0.55); }
+  70%  { box-shadow: 0 0 0 12px oklch(0.680 0.160 142 / 0); }
+  100% { box-shadow: 0 0 0 0 oklch(0.680 0.160 142 / 0); }
+}
+
+/* Safe-area helpers — mobile bottom-nav + sticky CTA bars */
+.snak-pad-bottom-safe { padding-bottom: env(safe-area-inset-bottom, 0px); }
+.snak-pad-top-safe    { padding-top:    env(safe-area-inset-top, 0px); }
+.snak-h-bottom-safe   { height: var(--height-bottom-nav-safe); }
+.snak-h-top-safe      { height: var(--height-app-bar-safe); }
+
+/* Premium card surface — soft shadow + subtle border + slight inner highlight */
+.snak-card {
+  background: var(--card);
+  border-radius: var(--radius-2xl);
+  border: 1px solid color-mix(in oklch, var(--border) 80%, transparent);
+  box-shadow: var(--snak-shadow-card);
+}
+
+/* Focus ring — accessible, visible, brand-tinted */
+.snak-focus-ring:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Reduced motion — disable all snak-* animations */
+@media (prefers-reduced-motion: reduce) {
+  .snak-shimmer,
+  .snak-sparkle,
+  .snak-pulse-ring,
+  .snak-live-dot {
+    animation: none !important;
+  }
+  * {
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+ *  END design-tokens.css
+ *  Pair with DESIGN_SYSTEM.md for full spec.
+ * ════════════════════════════════════════════════════════════════════════════ */

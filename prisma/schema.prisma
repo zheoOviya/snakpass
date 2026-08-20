@@ -31,6 +31,18 @@ model User {
   orders          Order[]
   auditLogs       AuditLog[]
   sessions        Session[]
+
+  // --------------------------------------------------------------------
+  // PRODUCT FOUNDATION (PLAN-01) — additive nullable columns (backward-compat)
+  // Governance: blueprint §29, §50. These columns do NOT modify any existing
+  // field, constraint, or index. They are nullable with no default-required
+  // backfill — existing rows remain valid. New code (Wave 2+) reads these
+  // columns; absent code is unaffected (Prisma select/include defaults unchanged).
+  // --------------------------------------------------------------------
+  // Primary campus linkage — set during first-run onboarding (Wave 2 Task 2A).
+  // Nullable so existing demo users (created pre-onboarding) remain valid.
+  campusId         String?
+  campus           Campus?  @relation(fields: [campusId], references: [id])
 }
 
 // ----------------------------------------
@@ -103,6 +115,33 @@ model Restaurant {
   createdAt      DateTime   @default(now())
   menuItems      MenuItem[]
   orders         Order[]
+
+  // --------------------------------------------------------------------
+  // PRODUCT FOUNDATION (PLAN-01) — additive nullable columns + back-relations.
+  // Governance: blueprint §29, §50. No existing field/constraint/index modified.
+  // --------------------------------------------------------------------
+  // Primary campus — nullable so existing restaurants without a campus remain
+  // valid. The full many-to-many is via RestaurantCampus junction below; this
+  // column is the denormalized "primary" for fast UI display.
+  campusId           String?
+  campus             Campus?  @relation(fields: [campusId], references: [id])
+  // ownerUserId is a SOFT FK to User.id (no Prisma relation declared — avoids
+  // touching the User model). Used by vendor RBAC on the new
+  // POST /api/vendor/orders/[id]/accept endpoint (per plan Risk R10) to verify
+  // the calling vendor owns the restaurant before recording `acceptedAt`.
+  ownerUserId        String?
+  // Back-relations for new additive models (no columns added — Prisma relation
+  // fields are metadata only; FKs live on the child side).
+  restaurantCampuses RestaurantCampus[]
+  groupOrders        GroupOrder[]
+
+  // --------------------------------------------------------------------
+  // WAVE 4B (Vendor Menu Management) — additive back-relation for VendorDeal.
+  // No column added — Prisma relation field is metadata only; FK lives on the
+  // child side (VendorDeal.restaurantId). Preserved unchanged: all existing
+  // fields, relations, constraints, and indexes above.
+  // --------------------------------------------------------------------
+  deals VendorDeal[]
 }
 
 model MenuItem {
@@ -127,6 +166,66 @@ model MenuItem {
   category       String       @default("Mains") // Starters | Mains | Breads | Rice | Desserts | Beverages
   createdAt      DateTime     @default(now())
   orderItems     OrderItem[]
+
+  // --------------------------------------------------------------------
+  // PRODUCT FOUNDATION (PLAN-01) — additive back-relations for new models.
+  // No columns added — these are Prisma relation fields (metadata only).
+  // Required so Gift.menuItem and GroupOrderItem.menuItem relations compile.
+  // --------------------------------------------------------------------
+  gifts            Gift[]
+  groupOrderItems  GroupOrderItem[]
+
+  // --------------------------------------------------------------------
+  // WAVE 4B (Vendor Menu Management) — additive nullable columns.
+  // Governance: blueprint §23 (configure reward multiplier). These columns do
+  // NOT modify any existing field, constraint, or index. Both are nullable
+  // (rewardMultiplier has a @default(1.0) so existing rows backfill cleanly;
+  // deletedAt is null for all existing rows). New code (vendor-menu-manager +
+  // /api/vendor/menu/*) reads/writes these; absent legacy code is unaffected.
+  // --------------------------------------------------------------------
+  // Reward-points multiplier applied to orders containing this item
+  // (1.0 = base earn rate; 2.0 = double points; max 3.0 per blueprint §17).
+  rewardMultiplier Float       @default(1.0)
+  // Soft-delete timestamp — set by DELETE /api/vendor/menu/[id]. When non-null,
+  // the item is excluded from public catalog reads (filter: deletedAt IS NULL)
+  // but preserved for historical OrderItem references. NULL = not deleted.
+  deletedAt        DateTime?
+}
+
+// ----------------------------------------------------------------------------
+// WAVE 4B (Vendor Menu Management) — VendorDeal model.
+// Governance: blueprint §23 (create deal). Additive — no existing model
+// modified. Restaurant.deals back-relation added above (metadata only).
+// ----------------------------------------------------------------------------
+// Tracks vendor-created promotional deals (percentage off, fixed-amount off,
+// or free-item grant). Active deals surface on the consumer menu card
+// (DealBadge) and the vendor analytics dashboard (Task 4C).
+//
+// dealValue semantics (per `dealType`):
+//   - "percentage" → 0..100 (percent off, e.g., 20 = 20% off)
+//   - "fixed"      → paise amount off (e.g., 5000 = ₹50 off)
+//   - "free_item"  → menu item id (cast to Int via hash) — currently stores 0;
+//                    the actual menu-item ref lives in `menuItemId` (optional).
+// ----------------------------------------------------------------------------
+model VendorDeal {
+  id            String    @id @default(cuid())
+  restaurantId  String
+  title         String
+  description   String?
+  dealType      String    // "percentage" | "fixed" | "free_item"
+  dealValue     Int       // interpretation depends on dealType (see above)
+  validFrom     DateTime
+  validUntil    DateTime?
+  isActive      Boolean   @default(true)
+  // Optional scope to a specific menu item (e.g., "free samosa with thali").
+  // Nullable so a deal can apply restaurant-wide.
+  menuItemId    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id])
+
+  @@index([restaurantId, isActive])
 }
 
 // ----------------------------------------
@@ -684,5 +783,398 @@ model Fulfilment {
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 
+  // --------------------------------------------------------------------
+  // PRODUCT FOUNDATION (PLAN-01) — additive nullable timestamp (Decision #1).
+  //
+  // THIS IS NOT A STATE-MACHINE CHANGE.
+  //
+  // The Fulfilment.status enum remains exactly:
+  //   PREPARING → ALMOST_READY → READY_FOR_PICKUP → PICKED_UP
+  // (P0-06 boundary preserved — no new enum value, no transition added).
+  //
+  // `acceptedAt` is purely an informational timestamp set by the new
+  // POST /api/vendor/orders/[id]/accept endpoint (Wave 3 Task 3C) to record
+  // when the vendor acknowledged an incoming order — analogous to a "read
+  // receipt". It does NOT drive any state transition, does NOT unlock any
+  // downstream action, and does NOT modify the existing state invariant
+  // checks in src/lib/fulfilment-state.ts (governance: DO NOT TOUCH).
+  //
+  // Rationale (plan Risk R1): blueprint §14 mentions an "ACCEPTED" state,
+  // but adding it to the enum would trip P0-06 (state-machine immutability).
+  // Modeling it as an additive timestamp achieves the UX goal (vendor
+  // acknowledgement visible in the timeline) without the governance risk.
+  // --------------------------------------------------------------------
+  acceptedAt        DateTime?
+
   @@index([status])
+}
+
+// ============================================================================
+// PRODUCT FOUNDATION — ADDITIVE MODELS (PLAN-01 / Wave 1 Task 1A)
+// ============================================================================
+// All models below are NEW and ADDITIVE. No existing model is modified
+// except for the additive nullable columns + back-relations already appended
+// to User, Restaurant, MenuItem, Fulfilment above.
+//
+// Governance: blueprint §29, §50. Do NOT touch existing money-state tables
+// (Payment, Refund, LedgerEntry, Outbox, WebhookEvent, IdempotencyKey, AuditLog)
+// or the fulfilment state machine (Fulfilment.status enum — see acceptedAt
+// comment above: it is a timestamp, NOT a new enum value).
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// Campus context (blueprint §40)
+// ---------------------------------------------------------------------------
+// A Campus represents an academic institution (college/university) that
+// SnakZap serves. Users link to a campus during onboarding; restaurants link
+// to one or more campuses via the RestaurantCampus junction (a chain can
+// serve multiple campuses). The `domain` field is the email suffix used to
+// verify student affiliation (e.g. "iitb.ac.in").
+// ---------------------------------------------------------------------------
+model Campus {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  shortName   String?  // e.g. "IIT-B"
+  domain      String?  @unique // email suffix e.g. "iitb.ac.in"
+  city        String
+  state       String
+  pincode     String?
+  latitude    Float?
+  longitude   Float?
+  isActive    Boolean  @default(true)
+  // JSON: { defaultCurrency, commissionRate, mealPlanEnabled, studentDiscountPercent }
+  settings    String   @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  restaurants Restaurant[]
+  restaurantCampuses RestaurantCampus[]
+
+  @@index([city, state])
+  @@index([isActive])
+}
+
+// Many-to-many junction: a restaurant can serve multiple campuses
+// (e.g., a chain with 5 outlets near 3 campuses).
+model RestaurantCampus {
+  id           String   @id @default(cuid())
+  restaurantId String
+  campusId     String
+  isPrimary    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  campus       Campus     @relation(fields: [campusId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, campusId])
+  @@index([campusId])
+}
+
+// ---------------------------------------------------------------------------
+// Rewards context (blueprint §17)
+// ---------------------------------------------------------------------------
+// Rewards engine: 1 pt per ₹10 spent (10 pts per ₹100); 100 pts = ₹10 discount
+// (10% back). Ledger-based — RewardLedgerEntry is immutable + append-only.
+// RewardAccount.balance is a CACHED sum (refreshed after every ledger mutation
+// inside the same transaction — derived value, not authoritative).
+//
+// Idempotency: each issuance carries an idempotencyKey constructed as
+// `${ruleKey}:${eventId}` by src/lib/rewards-engine.ts. The unique constraint
+// on idempotencyKey prevents double-issuance on retry/duplicate event delivery.
+// ---------------------------------------------------------------------------
+model RewardAccount {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  // Balance is DERIVED from RewardLedgerEntry sum, but cached here for fast reads.
+  // Refreshed after every ledger mutation inside the same transaction.
+  balance         Int      @default(0) // points (positive integer)
+  lifetimeEarned  Int      @default(0) // points (sum of all EARN entries)
+  lifetimeRedeemed Int     @default(0) // points (sum of all REDEEM entries, positive number)
+  updatedAt       DateTime @updatedAt
+
+  ledgerEntries   RewardLedgerEntry[]
+
+  @@index([userId])
+}
+
+model RewardRule {
+  id            String   @id @default(cuid())
+  key           String   @unique // e.g. "EARN_BASE", "FIRST_ORDER", "STREAK_3"
+  name          String
+  description   String?
+  // JSON formula spec — interpreted by src/lib/rewards-engine.ts:
+  //   { "type": "perRupee", "rate": 0.1 } — 1 pt per ₹10
+  //   { "type": "fixed", "points": 50 }
+  //   { "type": "multiplier", "multiplier": 2 } — doubles base earn
+  pointsFormula  String
+  isActive      Boolean  @default(true)
+  // Optional window for time-bound rules (e.g., campus event)
+  startsAt      DateTime?
+  endsAt        DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  ledgerEntries RewardLedgerEntry[]
+  redemptions   RewardRedemption[]
+
+  @@index([isActive])
+}
+
+model RewardLedgerEntry {
+  id             String   @id @default(cuid())
+  userId         String
+  // EARN (positive) | REDEEM (negative) | EXPIRE (negative) | ADJUST (±)
+  type           String
+  points         Int      // signed: + for EARN, - for REDEEM/EXPIRE
+  // Optional context — set depending on rule type
+  orderId        String?
+  ruleId         String?
+  rule           RewardRule? @relation(fields: [ruleId], references: [id])
+  giftId         String?
+  groupOrderId   String?
+  referralUserId String? // for REFERRAL rule — the referee userId
+  // Idempotency: one entry per idempotencyKey. Constructed as
+  // `${ruleKey}:${eventId}` by src/lib/rewards-engine.ts.
+  // Single-column @unique is stricter than @@unique([userId, idempotencyKey])
+  // (globally unique, not per-user) — also satisfies the per-user requirement.
+  idempotencyKey String   @unique
+  // Optional expiry (EARN entries only) — when this timestamp passes,
+  // a cron job creates a matching EXPIRE entry.
+  expiresAt      DateTime?
+  createdAt      DateTime @default(now())
+
+  account        RewardAccount @relation(fields: [userId], references: [userId])
+  // 1:1 back-relation — RewardRedemption.ledgerEntryId is @unique, so at most
+  // one redemption per ledger entry (a REDEEM entry corresponds to exactly one
+  // redemption code).
+  redemption     RewardRedemption?
+
+  @@index([userId, createdAt])
+  @@index([type, createdAt])
+  @@index([orderId])
+  @@index([ruleId])
+}
+
+model RewardRedemption {
+  id            String   @id @default(cuid())
+  userId        String
+  ledgerEntryId String   @unique // the REDEEM ledger entry (1:1)
+  ledgerEntry   RewardLedgerEntry @relation(fields: [ledgerEntryId], references: [id])
+  // PERCENT_DISCOUNT | FIXED_DISCOUNT | FREE_ITEM | VENDOR_SPECIFIC
+  rewardType    String
+  // For PERCENT_DISCOUNT: percent value (e.g., 5 = 5% off)
+  // For FIXED_DISCOUNT: paise amount (e.g., 2000 = ₹20 off)
+  // For FREE_ITEM: menuItemId
+  // For VENDOR_SPECIFIC: dealId
+  discountValue String
+  // If redeemed against an order, the orderId; else null (generic redemption code)
+  orderId       String?
+  // Generated redemption code (e.g., "SNZ-RWD-AB12CD") — single-use
+  redemptionCode String @unique
+  redeemedAt    DateTime @default(now())
+
+  ruleRuleId    String?
+  rule          RewardRule? @relation(fields: [ruleRuleId], references: [id])
+
+  @@index([userId, redeemedAt])
+  @@index([orderId])
+}
+
+// ---------------------------------------------------------------------------
+// Gift context (blueprint §19)
+// ---------------------------------------------------------------------------
+// Food gifting lifecycle:
+//   CREATED → PAID → AVAILABLE → REDEEMED | EXPIRED | CANCELLED | REFUNDED
+//
+// Implementation uses the "ghost Order" pattern (plan Decision #6):
+//   - Sender pays for a normal Order via the EXISTING /api/payments route
+//     (governance: DO NOT modify payment routes). Order.note encodes
+//     `GIFT:${giftId}:for:${recipientId}` so the gift backend can correlate.
+//   - The ghost Order is filtered from "My Orders" UI via note-prefix filter.
+//   - Recipient's redemption creates a NEW zero-amount Order with note
+//     `GIFT_FROM:${senderId}:${giftId}`. ZERO modifications to Order model.
+//
+// Payment linkage (paymentId) is a soft FK — no Prisma relation to Payment
+// (governance: Payment is a money-state table, DO NOT TOUCH its relations).
+// ---------------------------------------------------------------------------
+model Gift {
+  id             String   @id @default(cuid())
+  senderId       String
+  recipientId    String
+  menuItemId     String
+  menuItem       MenuItem @relation(fields: [menuItemId], references: [id])
+  // Snapshot at creation time (price + name — protects against later menu edits)
+  menuItemName   String
+  menuItemPrice  Int      // paise
+  message        String?
+  // CREATED → PAID → AVAILABLE → REDEEMED | EXPIRED | CANCELLED | REFUNDED
+  status         String   @default("CREATED")
+  // Single-use code the recipient uses to redeem
+  redemptionCode String   @unique
+  // 30-day default expiry (set when status → AVAILABLE)
+  expiresAt      DateTime
+  // Soft FK to Payment.id — sender's payment (no Prisma relation; Payment is governance-protected)
+  paymentId      String?
+  // Recipient's order (set when recipient redeems) — soft FK to Order.id
+  recipientOrderId String?
+  // Lifecycle timestamps
+  paidAt         DateTime?
+  availableAt    DateTime?
+  redeemedAt     DateTime?
+  cancelledAt    DateTime?
+  refundedAt     DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([senderId, createdAt])
+  @@index([recipientId, status])
+  @@index([status, expiresAt])
+}
+
+// ---------------------------------------------------------------------------
+// Group ordering context (blueprint §20 — Model A: host pays)
+// ---------------------------------------------------------------------------
+// GroupOrder + GroupOrderMember + GroupOrderItem.
+//
+// Host creates → share code → friends join + add items to own cart →
+// host confirm creates a single merged Order via direct prisma call inside
+// withTransaction (NOT via /api/orders POST — avoids modifying that route).
+//
+// Concurrency: optimistic lock on GroupOrder.version (incremented on confirm;
+// mismatch returns HTTP 409).
+// ---------------------------------------------------------------------------
+model GroupOrder {
+  id            String   @id @default(cuid())
+  hostId        String
+  restaurantId  String
+  restaurant    Restaurant @relation(fields: [restaurantId], references: [id])
+  // OPEN (members joining) | CONFIRMED (host confirmed + paid) | CLOSED (auto-closed) | CANCELLED
+  status        String   @default("OPEN")
+  // 6-character human-readable share code (e.g., "AB12CD")
+  shareCode     String   @unique
+  // Auto-close time (default createdAt + 24h)
+  closesAt      DateTime
+  // Host's confirmation
+  confirmedAt   DateTime?
+  // The single Order created on confirm — soft FK to Order.id (no relation to avoid touching Order)
+  confirmedOrderId String?
+  // Optimistic lock — incremented on confirm; conditional UPDATE prevents race
+  version       Int      @default(0)
+  // Group name (optional — e.g., "Tuesday lunch")
+  name          String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  members       GroupOrderMember[]
+  items         GroupOrderItem[]
+
+  @@index([hostId, status])
+  @@index([restaurantId, status])
+  @@index([status, closesAt])
+}
+
+model GroupOrderMember {
+  id            String   @id @default(cuid())
+  groupOrderId  String
+  groupOrder    GroupOrder @relation(fields: [groupOrderId], references: [id], onDelete: Cascade)
+  userId        String
+  joinedAt      DateTime @default(now())
+
+  items         GroupOrderItem[]
+
+  @@unique([groupOrderId, userId])
+  @@index([userId])
+}
+
+model GroupOrderItem {
+  id            String   @id @default(cuid())
+  groupOrderId  String
+  groupOrder    GroupOrder @relation(fields: [groupOrderId], references: [id], onDelete: Cascade)
+  userId        String
+  // Composite FK to GroupOrderMember — enforces that the user adding the item
+  // is a member of the group (referential integrity at the DB layer).
+  // References the @@unique([groupOrderId, userId]) on GroupOrderMember.
+  member        GroupOrderMember @relation(fields: [groupOrderId, userId], references: [groupOrderId, userId])
+  menuItemId    String
+  menuItem      MenuItem @relation(fields: [menuItemId], references: [id])
+  name          String   // snapshot
+  price         Int      // paise snapshot
+  quantity      Int      @default(1)
+  addedAt       DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([groupOrderId, userId])
+  @@index([menuItemId])
+}
+
+// ---------------------------------------------------------------------------
+// Social context (blueprint §18)
+// ---------------------------------------------------------------------------
+// Bidirectional follow = friend request + accept. 2 rows per mutual friendship
+// (A→B + B→A) for clean queries.
+//
+// Activity feed verbs: ORDERED | ORDERED_ITEM (opt-in) | GIFTED | GROUP_ORDERED
+// | REWARDED | REDEEMED — NEVER payment amount. metadata JSON is validated by
+// Zod schema in src/lib/validation.ts (Wave 6) to forbid amount/total/price.
+// ---------------------------------------------------------------------------
+model SocialConnection {
+  id            String   @id @default(cuid())
+  followerId    String   // the user who initiated
+  followeeId    String   // the user being followed
+  // PENDING (request sent) | ACCEPTED | REJECTED | BLOCKED
+  status        String   @default("PENDING")
+  requestedAt   DateTime @default(now())
+  acceptedAt    DateTime?
+  // Optional message with friend request
+  message       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([followerId, followeeId])
+  @@index([followeeId, status])
+  @@index([followerId, status])
+}
+
+model SocialActivity {
+  id            String   @id @default(cuid())
+  actorId       String   // the user who performed the action
+  // ORDERED | ORDERED_ITEM | GIFTED | GROUP_ORDERED | REWARDED | REDEEMED
+  verb          String
+  // Restaurant | MenuItem | Gift | GroupOrder | RewardLedgerEntry | RewardRedemption
+  objectType   String
+  objectId      String
+  // JSON metadata — NEVER includes payment amount
+  // e.g., { restaurantName, itemName?, recipientName? }
+  metadata      String   @default("{}")
+  // FRIENDS (default) | PUBLIC | PRIVATE
+  visibility    String   @default("FRIENDS")
+  createdAt     DateTime @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([createdAt])
+  @@index([verb, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Notification context
+// ---------------------------------------------------------------------------
+// Simple notification store. Read by GET /api/notifications (Wave 2+).
+// readAt=null means unread; setting readAt marks as read.
+// ---------------------------------------------------------------------------
+model Notification {
+  id            String   @id @default(cuid())
+  userId        String   // recipient
+  // ORDER_READY | GIFT_RECEIVED | GIFT_REDEEMED | FRIEND_REQUEST |
+  // GROUP_ORDER_INVITE | REWARD_EARNED | REWARD_EXPIRING | ORDER_ACCEPTED | SYSTEM
+  type          String
+  title         String
+  body          String
+  // JSON: deep link + action buttons + context
+  data          String   @default("{}")
+  readAt        DateTime?
+  createdAt     DateTime @default(now())
+
+  @@index([userId, readAt])
+  @@index([type, createdAt])
 }

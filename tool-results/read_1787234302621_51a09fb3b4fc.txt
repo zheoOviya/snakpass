@@ -1,0 +1,751 @@
+     1→'use client'
+     2→
+     3→import { useCallback, useEffect, useMemo, useState } from 'react'
+     4→import dynamic from 'next/dynamic'
+     5→import { motion, useReducedMotion } from 'framer-motion'
+     6→
+     7→// Lazy-load the Vendor Analytics Widget (Task 4C) + Vendor Menu Manager (Task 4B).
+     8→// Dynamic imports keep vendor-view.tsx resilient if either component is mid-refactor.
+     9→const VendorAnalyticsWidget = dynamic(
+    10→  () => import('./vendor-analytics-widget').then((m) => m.VendorAnalyticsWidget),
+    11→  { ssr: false, loading: () => <Skeleton className="h-40 w-full rounded-xl" /> },
+    12→)
+    13→const VendorMenuManager = dynamic(
+    14→  () => import('./vendor-menu-manager').then((m) => m.VendorMenuManager),
+    15→  { ssr: false, loading: () => <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-lg" />)}</div> },
+    16→)
+    17→import {
+    18→  Store,
+    19→  Clock,
+    20→  CheckCircle2,
+    21→  ChefHat,
+    22→  Bell,
+    23→  X,
+    24→  UtensilsCrossed,
+    25→  Loader2,
+    26→  Check,
+    27→  Timer,
+    28→  AlarmClockCheck,
+    29→} from 'lucide-react'
+    30→import { Button } from '@/components/ui/button'
+    31→import { Card, CardContent } from '@/components/ui/card'
+    32→import { Badge } from '@/components/ui/badge'
+    33→import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+    34→import { Switch } from '@/components/ui/switch'
+    35→import { Input } from '@/components/ui/input'
+    36→import { Skeleton } from '@/components/ui/skeleton'
+    37→import { useToast } from '@/hooks/use-toast'
+    38→import { useRealtime, realtimeSocket } from '@/hooks/use-realtime'
+    39→import { csrfFetch } from '@/lib/csrf-client'
+    40→import { inr, timeAgo } from '@/lib/snack'
+    41→import {
+    42→  FULFILMENT_STATUS_META,
+    43→  NEXT_FULFILMENT_STATUS,
+    44→} from '@/lib/fulfilment-state'
+    45→import type { MenuItem, Order, Restaurant } from '@/lib/types'
+    46→import { VegBadge, SpiceDots } from './bits'
+    47→
+    48→// Vendor-facing order shape: the base Order from /api/orders plus cached
+    49→// P0-06 fulfilment state (status + pickupOtp) fetched via GET /fulfilment AND
+    50→// the additive `acceptedAt` timestamp (Task 3C) fetched via
+    51→// GET /api/orders/[id]/accepted.
+    52→//   - `fulfilmentStatus` is undefined while the fulfilment fetch is in flight
+    53→//     or if it failed; the card treats undefined as PREPARING (the lazy-create
+    54→//     baseline).
+    55→//   - `acceptedAt` is undefined while the accepted fetch is in flight, or null
+    56→//     once the fetch resolves + the order has NOT been accepted yet. The card
+    57→//     shows the Accept button only when `acceptedAt === null` (i.e. the fetch
+    58→//     resolved + acceptedAt is null).
+    59→//   - `prepTimeMins` is a client-side override (Task 4A MVP — no API yet).
+    60→type VendorOrder = Order & {
+    61→  fulfilmentStatus?: string
+    62→  fulfilmentOtp?: string
+    63→  acceptedAt?: string | null
+    64→  prepTimeMins?: number
+    65→}
+    66→
+    67→export function VendorView() {
+    68→  const [restaurants, setRestaurants] = useState<Restaurant[]>([])
+    69→  const [activeId, setActiveId] = useState<string>('')
+    70→  const [orders, setOrders] = useState<VendorOrder[]>([])
+    71→  const [menu, setMenu] = useState<MenuItem[]>([])
+    72→  const [loading, setLoading] = useState(true)
+    73→  const [busyOrderId, setBusyOrderId] = useState<string | null>(null)
+    74→  // Per-order prep-time input (Task 4A MVP — client-only). Keyed by orderId;
+    75→  // value is the vendor-entered minutes (or undefined = use restaurant default).
+    76→  // Future: a PATCH endpoint will persist this server-side.
+    77→  const [prepTimeDrafts, setPrepTimeDrafts] = useState<Record<string, string>>({})
+    78→  const [tab, setTab] = useState<'orders' | 'menu'>('orders')
+    79→  const { connected } = useRealtime(['vendor:all'])
+    80→  const { toast } = useToast()
+    81→
+    82→  // load restaurants
+    83→  useEffect(() => {
+    84→    fetch('/api/restaurants')
+    85→      .then((r) => r.json())
+    86→      .then((d) => {
+    87→        setRestaurants(d.restaurants ?? [])
+    88→        if (d.restaurants?.[0]) setActiveId(d.restaurants[0].id)
+    89→      })
+    90→  }, [])
+    91→
+    92→  // Fetch fulfilment status for every active order (Option A from the task spec).
+    93→  // GET /api/orders/[id]/fulfilment lazy-creates a Fulfilment row at PREPARING if
+    94→  // none exists yet — so newly-confirmed orders surface with `fulfilmentStatus`
+    95→  // = 'PREPARING' after the first load.
+    96→  const fetchFulfilmentForOrders = useCallback(
+    97→    async (orderList: VendorOrder[]): Promise<VendorOrder[]> => {
+    98→      const activeOrders = orderList.filter(
+    99→        (o) => o.status !== 'PICKED_UP' && o.status !== 'CANCELLED',
+   100→      )
+   101→      if (activeOrders.length === 0) return orderList
+   102→      const results = await Promise.allSettled(
+   103→        activeOrders.map(async (o) => {
+   104→          const r = await fetch(`/api/orders/${o.id}/fulfilment`)
+   105→          if (!r.ok) return null
+   106→          return r.json()
+   107→        }),
+   108→      )
+   109→      const fulfilmentById = new Map<string, { status: string; pickupOtp?: string }>()
+   110→      activeOrders.forEach((o, i) => {
+   111→        const r = results[i]
+   112→        if (r.status === 'fulfilled' && r.value?.fulfilment) {
+   113→          fulfilmentById.set(o.id, {
+   114→            status: r.value.fulfilment.status as string,
+   115→            pickupOtp: r.value.fulfilment.pickupOtp as string | undefined,
+   116→          })
+   117→        }
+   118→      })
+   119→      return orderList.map((o) => {
+   120→        const f = fulfilmentById.get(o.id)
+   121→        if (!f) return o
+   122→        return {
+   123→          ...o,
+   124→          fulfilmentStatus: f.status,
+   125→          fulfilmentOtp: f.pickupOtp ?? o.pickupOtp,
+   126→        }
+   127→      })
+   128→    },
+   129→    [],
+   130→  )
+   131→
+   132→  // Fetch the additive `acceptedAt` timestamp (Task 3C) for every active order.
+   133→  // Uses the additive GET /api/orders/[id]/accepted endpoint (Task 3C owns it).
+   134→  // Only fetches for non-terminal orders to minimize requests — acceptedAt is
+   135→  // meaningless for PICKED_UP / CANCELLED orders (no Accept button shows then).
+   136→  const fetchAcceptedForOrders = useCallback(
+   137→    async (orderList: VendorOrder[]): Promise<VendorOrder[]> => {
+   138→      const activeOrders = orderList.filter(
+   139→        (o) => o.status !== 'PICKED_UP' && o.status !== 'CANCELLED',
+   140→      )
+   141→      if (activeOrders.length === 0) return orderList
+   142→      const results = await Promise.allSettled(
+   143→        activeOrders.map(async (o) => {
+   144→          const r = await fetch(`/api/orders/${o.id}/accepted`)
+   145→          if (!r.ok) return null
+   146→          return r.json()
+   147→        }),
+   148→      )
+   149→      const acceptedByOrderId = new Map<string, string | null>()
+   150→      activeOrders.forEach((o, i) => {
+   151→        const r = results[i]
+   152→        if (r.status === 'fulfilled' && r.value) {
+   153→          acceptedByOrderId.set(o.id, (r.value.acceptedAt as string | null) ?? null)
+   154→        }
+   155→      })
+   156→      return orderList.map((o) => {
+   157→        if (!acceptedByOrderId.has(o.id)) return o
+   158→        return { ...o, acceptedAt: acceptedByOrderId.get(o.id) ?? null }
+   159→      })
+   160→    },
+   161→    [],
+   162→  )
+   163→
+   164→  const refreshOrders = useCallback(async () => {
+   165→    if (!activeId) return
+   166→    const res = await fetch(`/api/orders?role=vendor&restaurantId=${activeId}&limit=50`)
+   167→    const data = await res.json()
+   168→    const baseOrders: VendorOrder[] = (data.orders ?? []) as VendorOrder[]
+   169→    const withFulfilment = await fetchFulfilmentForOrders(baseOrders)
+   170→    const withAccepted = await fetchAcceptedForOrders(withFulfilment)
+   171→    setOrders(withAccepted)
+   172→  }, [activeId, fetchAcceptedForOrders, fetchFulfilmentForOrders])
+   173→
+   174→  const refreshMenu = useCallback(async () => {
+   175→    if (!activeId) return
+   176→    const res = await fetch(`/api/restaurants/${activeId}/menu`)
+   177→    const data = await res.json()
+   178→    setMenu(data.items ?? [])
+   179→  }, [activeId])
+   180→
+   181→  useEffect(() => {
+   182→    if (!activeId) return
+   183→    setLoading(true)
+   184→    Promise.all([refreshOrders(), refreshMenu()]).finally(() => setLoading(false))
+   185→  }, [activeId, refreshOrders, refreshMenu])
+   186→
+   187→  // realtime updates — refresh both orders and their fulfilment state
+   188→  useEffect(() => {
+   189→    const sock = realtimeSocket()
+   190→    const handler = (p: { restaurantId: string; orderId: string }) => {
+   191→      if (p.restaurantId === activeId) refreshOrders()
+   192→    }
+   193→    sock.on('order:updated', handler)
+   194→    sock.on('order:created', handler)
+   195→    return () => {
+   196→      sock.off('order:updated', handler)
+   197→      sock.off('order:created', handler)
+   198→    }
+   199→  }, [activeId, refreshOrders])
+   200→
+   201→  // advance: PATCH /api/orders/[id]/fulfilment — P0-06 parallel state machine.
+   202→  // csrfFetch auto-injects both the X-CSRF-Token and an Idempotency-Key header
+   203→  // (UUID v4) for PATCH requests, so retries from a network blip or a double
+   204→  // click are deduped server-side.
+   205→  const advance = useCallback(
+   206→    async (order: VendorOrder) => {
+   207→      const current = order.fulfilmentStatus ?? 'PREPARING'
+   208→      const next = NEXT_FULFILMENT_STATUS[current]
+   209→      if (!next) return
+   210→      setBusyOrderId(order.id)
+   211→      try {
+   212→        const res = await csrfFetch(`/api/orders/${order.id}/fulfilment`, {
+   213→          method: 'PATCH',
+   214→          headers: { 'content-type': 'application/json' },
+   215→          body: JSON.stringify({ status: next, actorRole: 'VENDOR_OWNER' }),
+   216→        })
+   217→        const data = await res.json().catch(() => null)
+   218→        if (!res.ok) {
+   219→          const msg =
+   220→            data?.error?.message ||
+   221→            data?.error ||
+   222→            `Failed to advance fulfilment (${res.status})`
+   223→          throw new Error(typeof msg === 'string' ? msg : 'Update failed')
+   224→        }
+   225→        const newStatus: string = data?.fulfilment?.status ?? next
+   226→        const newOtp: string | undefined =
+   227→          data?.fulfilment?.pickupOtp ?? order.fulfilmentOtp ?? order.pickupOtp
+   228→        // Optimistically update local state from the API response so the card
+   229→        // re-renders immediately (e.g. PREPARING → ALMOST_READY) without
+   230→        // waiting for the full list refresh.
+   231→        setOrders((prev) =>
+   232→          prev.map((o) =>
+   233→            o.id === order.id
+   234→              ? { ...o, fulfilmentStatus: newStatus, fulfilmentOtp: newOtp }
+   235→              : o,
+   236→          ),
+   237→        )
+   238→        const shortLabel = FULFILMENT_STATUS_META[next]?.short ?? next
+   239→        toast({ title: `${order.restaurant.name} → ${shortLabel}` })
+   240→      } catch (e) {
+   241→        toast({
+   242→          title: 'Update failed',
+   243→          description: (e as Error).message,
+   244→          variant: 'destructive',
+   245→        })
+   246→      } finally {
+   247→        setBusyOrderId(null)
+   248→      }
+   249→    },
+   250→    [toast],
+   251→  )
+   252→
+   253→  // accept: POST /api/vendor/orders/[id]/accept — Task 3C endpoint that records
+   254→  // Fulfilment.acceptedAt (additive nullable column — does NOT touch the P0-06
+   255→  // state machine). Idempotent server-side (returns 200 with alreadyAccepted:
+   256→  // true if already accepted), so retries from a network blip or a double click
+   257→  // are safe. csrfFetch auto-injects the X-CSRF-Token + Idempotency-Key.
+   258→  const accept = useCallback(
+   259→    async (order: VendorOrder) => {
+   260→      setBusyOrderId(order.id)
+   261→      try {
+   262→        const res = await csrfFetch(`/api/vendor/orders/${order.id}/accept`, {
+   263→          method: 'POST',
+   264→          headers: { 'content-type': 'application/json' },
+   265→          body: JSON.stringify({}),
+   266→        })
+   267→        const data = await res.json().catch(() => null)
+   268→        if (!res.ok) {
+   269→          const msg =
+   270→            data?.error?.message ||
+   271→            data?.error ||
+   272→            `Accept failed (${res.status})`
+   273→          throw new Error(typeof msg === 'string' ? msg : 'Accept failed')
+   274→        }
+   275→        const acceptedAtIso: string | undefined = data?.acceptedAt
+   276→        const alreadyAccepted: boolean = data?.alreadyAccepted === true
+   277→        // Optimistically update local state — the Accept button disappears and
+   278→        // the "Accepted ✓" badge appears immediately (no full list refresh
+   279→        // needed).
+   280→        setOrders((prev) =>
+   281→          prev.map((o) =>
+   282→            o.id === order.id
+   283→              ? { ...o, acceptedAt: acceptedAtIso ?? o.acceptedAt ?? null }
+   284→              : o,
+   285→          ),
+   286→        )
+   287→        toast({
+   288→          title: alreadyAccepted ? 'Already accepted' : 'Order accepted!',
+   289→          description: alreadyAccepted
+   290→            ? 'This order was already accepted.'
+   291→            : `${order.restaurant.name} accepted. Starting prep.`,
+   292→        })
+   293→      } catch (e) {
+   294→        toast({
+   295→          title: 'Accept failed',
+   296→          description: (e as Error).message,
+   297→          variant: 'destructive',
+   298→        })
+   299→      } finally {
+   300→        setBusyOrderId(null)
+   301→      }
+   302→    },
+   303→    [toast],
+   304→  )
+   305→
+   306→  // setPrepTime: Task 4A MVP — client-only update. Persists the vendor-entered
+   307→  // prep time on the order's local state + toast confirmation. Shows "Est.
+   308→  // ready: {createdAt + prepTime}" on the card. Future: a PATCH endpoint will
+   309→  // persist this server-side (the API does NOT exist yet — per task spec).
+   310→  const setPrepTime = useCallback(
+   311→    (order: VendorOrder, minutes: number) => {
+   312→      setOrders((prev) =>
+   313→        prev.map((o) =>
+   314→          o.id === order.id ? { ...o, prepTimeMins: minutes } : o,
+   315→        ),
+   316→      )
+   317→      // Clear the draft so the input shows the persisted value (mirroring the
+   318→      // order.prepTimeMins that was just set).
+   319→      setPrepTimeDrafts((prev) => {
+   320→        const next = { ...prev }
+   321→        delete next[order.id]
+   322→        return next
+   323→      })
+   324→      toast({
+   325→        title: 'Prep time set',
+   326→        description: `Estimated ${minutes} min. Customer will be notified via realtime.`,
+   327→      })
+   328→    },
+   329→    [toast],
+   330→  )
+   331→
+   332→  // cancel: still uses the legacy /status route with CANCELLED — this is the
+   333→  // Order.status path (not the fulfilment path) per the task spec.
+   334→  const cancel = useCallback(
+   335→    async (order: VendorOrder) => {
+   336→      setBusyOrderId(order.id)
+   337→      try {
+   338→        const res = await csrfFetch(`/api/orders/${order.id}/status`, {
+   339→          method: 'PATCH',
+   340→          headers: { 'content-type': 'application/json' },
+   341→          body: JSON.stringify({ status: 'CANCELLED', actorRole: 'VENDOR_OWNER' }),
+   342→        })
+   343→        if (!res.ok) {
+   344→          const data = await res.json().catch(() => null)
+   345→          const msg =
+   346→            data?.error?.message ||
+   347→            data?.error ||
+   348→            `Cancel failed (${res.status})`
+   349→          throw new Error(typeof msg === 'string' ? msg : 'Cancel failed')
+   350→        }
+   351→        toast({ title: 'Order cancelled' })
+   352→        refreshOrders()
+   353→      } catch (e) {
+   354→        toast({
+   355→          title: 'Cancel failed',
+   356→          description: (e as Error).message,
+   357→          variant: 'destructive',
+   358→        })
+   359→      } finally {
+   360→        setBusyOrderId(null)
+   361→      }
+   362→    },
+   363→    [refreshOrders, toast],
+   364→  )
+   365→
+   366→  const toggleAvailability = useCallback(
+   367→    async (item: MenuItem) => {
+   368→      const next = !item.isAvailable
+   369→      setMenu((m) => m.map((x) => (x.id === item.id ? { ...x, isAvailable: next } : x)))
+   370→      try {
+   371→        await csrfFetch(`/api/menu/${item.id}`, {
+   372→          method: 'PATCH',
+   373→          headers: { 'content-type': 'application/json' },
+   374→          body: JSON.stringify({ isAvailable: next }),
+   375→        })
+   376→        toast({ title: `${item.name} ${next ? 'available' : 'unavailable'}` })
+   377→      } catch (e) {
+   378→        setMenu((m) => m.map((x) => (x.id === item.id ? { ...x, isAvailable: !next } : x)))
+   379→        toast({ title: 'Update failed', variant: 'destructive' })
+   380→      }
+   381→    },
+   382→    [toast],
+   383→  )
+   384→
+   385→  const active = restaurants.find((r) => r.id === activeId)
+   386→  // Active = not cancelled, not picked-up on either the order or fulfilment side.
+   387→  // Completed = picked up on either side (covers legacy /status PICKED_UP and
+   388→  // new /fulfilment PICKED_UP).
+   389→  const activeOrders = orders.filter(
+   390→    (o) =>
+   391→      o.status !== 'CANCELLED' &&
+   392→      o.status !== 'PICKED_UP' &&
+   393→      o.fulfilmentStatus !== 'PICKED_UP',
+   394→  )
+   395→  const completed = orders.filter(
+   396→    (o) => o.status === 'PICKED_UP' || o.fulfilmentStatus === 'PICKED_UP',
+   397→  )
+   398→
+   399→  return (
+   400→    <div className="px-4 py-6">
+   401→      {/* Restaurant selector */}
+   402→      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+   403→        <div className="flex items-center gap-2">
+   404→          <Store className="h-5 w-5 text-teal-600" />
+   405→          <h2 className="text-lg font-semibold">Vendor Console</h2>
+   406→          <span className={`ml-2 inline-flex items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300`}>
+   407→            <span className={`h-1.5 w-1.5 rounded-full bg-emerald-500 ${connected ? 'snak-live-dot' : ''}`} /> {connected ? 'Live' : 'Offline'}
+   408→          </span>
+   409→        </div>
+   410→        <Tabs value={tab} onValueChange={(v) => setTab(v as 'orders' | 'menu')}>
+   411→          <TabsList>
+   412→            <TabsTrigger value="orders">Orders</TabsTrigger>
+   413→            <TabsTrigger value="menu">Menu</TabsTrigger>
+   414→          </TabsList>
+   415→        </Tabs>
+   416→      </div>
+   417→
+   418→      {restaurants.length > 1 && (
+   419→        <Tabs value={activeId} onValueChange={setActiveId}>
+   420→          <TabsList className="mb-4 flex h-auto flex-wrap">
+   421→            {restaurants.map((r) => (
+   422→              <TabsTrigger key={r.id} value={r.id} className="text-xs">
+   423→                {r.name}
+   424→              </TabsTrigger>
+   425→            ))}
+   426→          </TabsList>
+   427→        </Tabs>
+   428→      )}
+   429→
+   430→      {tab === 'orders' ? (
+   431→        <>
+   432→          {activeId && <VendorAnalyticsWidget restaurantId={activeId} />}
+   433→
+   434→          {loading ? (
+   435→            <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32 w-full rounded-xl" />)}</div>
+   436→          ) : activeOrders.length === 0 ? (
+   437→            <div className="rounded-xl border border-dashed py-16 text-center text-muted-foreground">
+   438→              <ChefHat className="mx-auto mb-2 h-8 w-8" /> No active orders right now.
+   439→            </div>
+   440→          ) : (
+   441→            <div className="space-y-3">
+   442→              {activeOrders.map((o) => (
+   443→                <VendorOrderCard
+   444→                  key={o.id}
+   445→                  order={o}
+   446→                  busy={busyOrderId === o.id}
+   447→                  restaurantPrepTimeMins={active?.prepTimeMins ?? 20}
+   448→                  prepTimeDraft={prepTimeDrafts[o.id]}
+   449→                  onPrepTimeDraftChange={(v) =>
+   450→                    setPrepTimeDrafts((prev) => ({ ...prev, [o.id]: v }))
+   451→                  }
+   452→                  onAccept={() => accept(o)}
+   453→                  onSetPrepTime={(mins) => setPrepTime(o, mins)}
+   454→                  onAdvance={() => advance(o)}
+   455→                  onCancel={() => cancel(o)}
+   456→                />
+   457→              ))}
+   458→              {completed.length > 0 && (
+   459→                <div className="mt-6">
+   460→                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Completed today ({completed.length})</h3>
+   461→                  <div className="space-y-2">
+   462→                    {completed.slice(0, 5).map((o) => (
+   463→                      <div key={o.id} className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+   464→                        <span className="text-muted-foreground">#{o.id.slice(-6).toUpperCase()} · {o.itemsCount} items</span>
+   465→                        <span className="font-medium">{inr(o.totalAmount)}</span>
+   466→                      </div>
+   467→                    ))}
+   468→                  </div>
+   469→                </div>
+   470→              )}
+   471→            </div>
+   472→          )}
+   473→        </>
+   474→      ) : (
+   475→        // Menu management — Task 4B VendorMenuManager (full CRUD)
+   476→        activeId ? (
+   477→          <VendorMenuManager restaurantId={activeId} />
+   478→        ) : (
+   479→          <div className="rounded-xl border border-dashed py-16 text-center text-muted-foreground">
+   480→            <UtensilsCrossed className="mx-auto mb-2 h-8 w-8" /> Select a restaurant to manage its menu.
+   481→          </div>
+   482→        )
+   483→      )}
+   484→    </div>
+   485→  )
+   486→}
+   487→
+   488→// ─────────────────────────────────────────────────────────────────────────────
+   489→// VendorOrderCard — single order in the queue.
+   490→// Task 4A enhancements (additive — preserves existing Advance + Cancel + OTP):
+   491→//   - Accept button: shown ONLY when acceptedAt === null (the additive GET
+   492→//     /api/orders/[id]/accepted endpoint resolved + the timestamp is null).
+   493→//     Calls POST /api/vendor/orders/[id]/accept (Task 3C endpoint) — idempotent
+   494→//     server-side. On success: optimistic local state update + "Order accepted!"
+   495→//     toast. framer-motion press feedback (tap-scale).
+   496→//   - Accepted ✓ sub-badge: shown when acceptedAt is set (replaces the Accept
+   497→//     button — Accept is inherently idempotent so the button disappears).
+   498→//   - Prep-time setter: number input (minutes) + Save button. Placeholder =
+   499→//     restaurant.prepTimeMins. On save: client-only update (Task 4A MVP —
+   500→//     no API yet) + "Prep time set to X min" toast + "Est. ready: {time}"
+   501→//     display below the setter.
+   502→//   - Better visual hierarchy: order # prominent, status + Accepted badge row,
+   503→//     items list, total + time ago on the right.
+   504→// ─────────────────────────────────────────────────────────────────────────────
+   505→function VendorOrderCard({
+   506→  order,
+   507→  busy,
+   508→  restaurantPrepTimeMins,
+   509→  prepTimeDraft,
+   510→  onPrepTimeDraftChange,
+   511→  onAccept,
+   512→  onSetPrepTime,
+   513→  onAdvance,
+   514→  onCancel,
+   515→}: {
+   516→  order: VendorOrder
+   517→  busy: boolean
+   518→  /** Restaurant-level default prep time (placeholder for the input). */
+   519→  restaurantPrepTimeMins: number
+   520→  /** Current draft value for the prep-time input (string for controlled input). */
+   521→  prepTimeDraft: string | undefined
+   522→  /** Update the draft when the vendor types. */
+   523→  onPrepTimeDraftChange: (value: string) => void
+   524→  /** Accept the order — POST /api/vendor/orders/[id]/accept (Task 3C). */
+   525→  onAccept: () => void
+   526→  /** Save the prep time (Task 4A MVP — client-only). */
+   527→  onSetPrepTime: (minutes: number) => void
+   528→  onAdvance: () => void
+   529→  onCancel: () => void
+   530→}) {
+   531→  const prefersReduced = useReducedMotion()
+   532→  // The fulfilment state is the source of truth for the vendor card. If the
+   533→  // fetch hasn't landed yet (or failed), default to PREPARING — the lazy-create
+   534→  // baseline — so the card always renders a sensible next-step button.
+   535→  const fulfilmentStatus = order.fulfilmentStatus ?? 'PREPARING'
+   536→  const meta = FULFILMENT_STATUS_META[fulfilmentStatus] ?? FULFILMENT_STATUS_META.PREPARING
+   537→  const next = NEXT_FULFILMENT_STATUS[fulfilmentStatus]
+   538→  const nextMeta = next ? FULFILMENT_STATUS_META[next] : null
+   539→  const isReady = fulfilmentStatus === 'READY_FOR_PICKUP'
+   540→  // Prefer the fulfilment OTP (lazy-copied from Order.pickupOtp) but fall back
+   541→  // to the order OTP if the fulfilment field is missing.
+   542→  const pickupOtp = order.fulfilmentOtp ?? order.pickupOtp
+   543→  const isTerminal = !next
+   544→
+   545→  // Accept button visibility: only when the additive acceptedAt fetch has
+   546→  // resolved AND the value is null (i.e. vendor hasn't accepted yet).
+   547→  // undefined (still loading) → hide the button (don't flash the button then
+   548→  // hide it). null → show Accept. string (set) → show Accepted ✓ badge.
+   549→  const acceptedAt = order.acceptedAt
+   550→  const showAcceptButton = acceptedAt === null
+   551→  const isAccepted = typeof acceptedAt === 'string' && acceptedAt.length > 0
+   552→
+   553→  // Prep time: vendor override (order.prepTimeMins) or restaurant default.
+   554→  const effectivePrepMins = order.prepTimeMins ?? restaurantPrepTimeMins
+   555→  // Est. ready = createdAt + effectivePrepMins (minutes). Format as HH:MM.
+   556→  const estReadyAt = useMemo(() => {
+   557→    const created = new Date(order.createdAt)
+   558→    const ready = new Date(created.getTime() + effectivePrepMins * 60_000)
+   559→    return ready.toLocaleTimeString('en-IN', {
+   560→      hour: '2-digit',
+   561→      minute: '2-digit',
+   562→      hour12: true,
+   563→    })
+   564→  }, [order.createdAt, effectivePrepMins])
+   565→
+   566→  // Prep-time draft handling: the input shows the draft if the vendor is
+   567→  // typing, otherwise the effective prep time (so the saved value is shown).
+   568→  const draftValue = prepTimeDraft ?? String(effectivePrepMins)
+   569→  const draftMinutes = Number(draftValue)
+   570→  const isDraftValid =
+   571→    Number.isFinite(draftMinutes) && draftMinutes > 0 && draftMinutes <= 180
+   572→  const isDraftDirty = prepTimeDraft !== undefined && prepTimeDraft !== String(effectivePrepMins)
+   573→
+   574→  const handleSavePrepTime = () => {
+   575→    if (!isDraftValid) return
+   576→    onSetPrepTime(draftMinutes)
+   577→  }
+   578→
+   579→  return (
+   580→    <motion.div
+   581→      layout
+   582→      initial={{ opacity: 0, y: 8 }}
+   583→      animate={{ opacity: 1, y: 0 }}
+   584→      transition={prefersReduced ? { duration: 0 } : undefined}
+   585→    >
+   586→      <Card className={isReady ? 'border-teal-400 shadow-md' : ''}>
+   587→        <CardContent className="p-4">
+   588→          {/* Header: order # + status badges */}
+   589→          <div className="flex items-start justify-between gap-3">
+   590→            <div className="flex-1">
+   591→              <div className="flex flex-wrap items-center gap-2">
+   592→                <span className="font-mono text-sm font-semibold tracking-wide text-foreground">
+   593→                  #{order.id.slice(-6).toUpperCase()}
+   594→                </span>
+   595→                {order.isCatering && (
+   596→                  <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-950 dark:text-purple-300">
+   597→                    Catering
+   598→                  </Badge>
+   599→                )}
+   600→                <Badge className={meta.tone} title={meta.label}>
+   601→                  {meta.emoji} {meta.short}
+   602→                </Badge>
+   603→                {isAccepted && (
+   604→                  <Badge
+   605→                    className="border-transparent bg-emerald-500/15 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300"
+   606→                    title={`Accepted ${timeAgo(acceptedAt as string)}`}
+   607→                  >
+   608→                    <Check className="h-3 w-3" /> Accepted
+   609→                  </Badge>
+   610→                )}
+   611→              </div>
+   612→              {order.isCatering && order.headcount && (
+   613→                <p className="mt-1 text-xs text-purple-600 dark:text-purple-400">
+   614→                  👥 Headcount: {order.headcount} · {order.note}
+   615→                </p>
+   616→              )}
+   617→              <div className="mt-2 space-y-0.5">
+   618→                {order.items.map((it, i) => (
+   619→                  <div key={i} className="text-sm">
+   620→                    <span className="font-medium">{it.quantity}×</span> {it.name}
+   621→                  </div>
+   622→                ))}
+   623→              </div>
+   624→            </div>
+   625→            <div className="text-right">
+   626→              <p className="text-lg font-bold">{inr(order.totalAmount)}</p>
+   627→              <p className="text-xs text-muted-foreground">
+   628→                <Clock className="mr-1 inline h-3 w-3" />
+   629→                {timeAgo(order.createdAt)}
+   630→              </p>
+   631→            </div>
+   632→          </div>
+   633→
+   634→          {/* Prep-time setter — Task 4A MVP (client-only). */}
+   635→          <div className="mt-3 rounded-lg border bg-muted/30 px-3 py-2">
+   636→            <div className="flex items-center gap-2">
+   637→              <Timer className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" aria-hidden />
+   638→              <label
+   639→                htmlFor={`prep-${order.id}`}
+   640→                className="text-xs font-medium text-muted-foreground"
+   641→              >
+   642→                Prep time
+   643→              </label>
+   644→              <Input
+   645→                id={`prep-${order.id}`}
+   646→                type="number"
+   647→                inputMode="numeric"
+   648→                min={1}
+   649→                max={180}
+   650→                step={1}
+   651→                value={draftValue}
+   652→                onChange={(e) => onPrepTimeDraftChange(e.target.value)}
+   653→                className="h-8 w-20"
+   654→                aria-label={`Prep time in minutes for order ${order.id.slice(-6).toUpperCase()}`}
+   655→                disabled={busy}
+   656→              />
+   657→              <span className="text-xs text-muted-foreground">min</span>
+   658→              <Button
+   659→                type="button"
+   660→                size="sm"
+   661→                variant={isDraftDirty ? 'default' : 'outline'}
+   662→                onClick={handleSavePrepTime}
+   663→                disabled={busy || !isDraftValid || !isDraftDirty}
+   664→                className="ml-auto h-8"
+   665→                aria-label={`Save prep time for order ${order.id.slice(-6).toUpperCase()}`}
+   666→              >
+   667→                {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+   668→                Save
+   669→              </Button>
+   670→            </div>
+   671→            <div className="mt-1.5 flex items-center gap-1 text-xs text-muted-foreground">
+   672→              <AlarmClockCheck className="h-3 w-3 text-teal-600 dark:text-teal-400" aria-hidden />
+   673→              <span>
+   674→                Est. ready: <span className="font-medium text-foreground">{estReadyAt}</span>
+   675→              </span>
+   676→            </div>
+   677→          </div>
+   678→
+   679→          {/* Pickup OTP — shown when status is READY_FOR_PICKUP */}
+   680→          {isReady && pickupOtp && (
+   681→            <div className="mt-3 flex items-center justify-between rounded-lg bg-teal-50 px-3 py-2 dark:bg-teal-950/40">
+   682→              <span className="text-xs text-muted-foreground">Pickup OTP</span>
+   683→              <span className="font-mono text-xl font-bold tracking-[0.25em] text-teal-700 dark:text-teal-300">
+   684→                {pickupOtp}
+   685→              </span>
+   686→            </div>
+   687→          )}
+   688→
+   689→          {/* Action row: Accept (when not yet accepted) + Advance + Cancel */}
+   690→          <div className="mt-3 space-y-2">
+   691→            {showAcceptButton && (
+   692→              <motion.div
+   693→                whileTap={prefersReduced ? undefined : { scale: 0.97 }}
+   694→                transition={prefersReduced ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
+   695→              >
+   696→                <Button
+   697→                  onClick={onAccept}
+   698→                  disabled={busy}
+   699→                  className="w-full bg-gradient-to-r from-teal-500 to-amber-500 text-white shadow-md hover:from-teal-600 hover:to-amber-600"
+   700→                  aria-label={`Accept order ${order.id.slice(-6).toUpperCase()}`}
+   701→                >
+   702→                  {busy ? (
+   703→                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+   704→                  ) : (
+   705→                    <Check className="mr-1 h-4 w-4" />
+   706→                  )}
+   707→                  Accept order
+   708→                </Button>
+   709→              </motion.div>
+   710→            )}
+   711→
+   712→            <div className="flex items-center gap-2">
+   713→              {next && (
+   714→                <Button
+   715→                  onClick={onAdvance}
+   716→                  disabled={busy}
+   717→                  className="flex-1 bg-teal-600 hover:bg-teal-700"
+   718→                >
+   719→                  {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+   720→                  {!busy && next === 'ALMOST_READY' && <Clock className="mr-1 h-4 w-4" />}
+   721→                  {!busy && next === 'READY_FOR_PICKUP' && <Bell className="mr-1 h-4 w-4" />}
+   722→                  {!busy && next === 'PICKED_UP' && <CheckCircle2 className="mr-1 h-4 w-4" />}
+   723→                  Mark {nextMeta?.short ?? next}
+   724→                </Button>
+   725→              )}
+   726→              {isTerminal && (
+   727→                // PICKED_UP — terminal handoff confirmation chip.
+   728→                <div className="flex-1 rounded-md bg-emerald-50 px-3 py-2 text-center text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+   729→                  <CheckCircle2 className="mr-1 inline h-3 w-3" /> Handed off to customer
+   730→                </div>
+   731→              )}
+   732→              {order.status !== 'CANCELLED' && order.status !== 'PICKED_UP' && !isTerminal && (
+   733→                <Button
+   734→                  variant="outline"
+   735→                  size="icon"
+   736→                  onClick={onCancel}
+   737→                  disabled={busy}
+   738→                  title="Cancel order"
+   739→                  aria-label={`Cancel order ${order.id.slice(-6).toUpperCase()}`}
+   740→                >
+   741→                  <X className="h-4 w-4" />
+   742→                </Button>
+   743→              )}
+   744→            </div>
+   745→          </div>
+   746→        </CardContent>
+   747→      </Card>
+   748→    </motion.div>
+   749→  )
+   750→}
+   751→

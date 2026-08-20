@@ -4,12 +4,19 @@ import { createContext, useContext, useEffect, useState, useCallback } from 'rea
 import type { SessionUser } from '@/lib/session'
 
 // Mirrors SessionUser shape (kept client-safe).
+//
+// ADDITIVE (Wave 2 Task 2A): `campusId` + `campusName` are populated by
+// GET /api/auth/me (which joins Campus). Both are null when the user hasn't
+// picked a campus yet — the consumer page reads `campusId` to redirect to
+// /onboarding/campus on first run.
 export interface AuthUser {
   userId: string
   role: string
   name: string | null
   phone: string
   email: string | null
+  campusId?: string | null
+  campusName?: string | null
 }
 
 interface AuthContextValue {

@@ -62,6 +62,66 @@ export async function GET() {
   // Avg order value
   const aov = totalOrders > 0 ? Math.round((revenueAgg._sum.totalAmount ?? 0) / totalOrders) : 0
 
+  // -------------------------------------------------------------------------
+  // Wave 8 Task 8 (additive) — rewards metrics
+  //   - totalIssued:    sum of points across all EARN ledger entries.
+  //   - totalRedeemed:  sum of |points| across all REDEEM ledger entries.
+  //   - activeAccounts: count of distinct reward accounts with a > 0 balance.
+  // -------------------------------------------------------------------------
+  const earnAgg = await db.rewardLedgerEntry.aggregate({
+    _sum: { points: true },
+    where: { type: 'EARN' },
+  }).catch(() => ({ _sum: { points: 0 } }))
+  const redeemAgg = await db.rewardLedgerEntry.aggregate({
+    _sum: { points: true },
+    where: { type: 'REDEEM' },
+  }).catch(() => ({ _sum: { points: 0 } }))
+  const activeAccounts = await db.rewardAccount.count({
+    where: { balance: { gt: 0 } },
+  }).catch(() => 0)
+
+  const rewards = {
+    totalIssued: Math.max(0, earnAgg._sum.points ?? 0),
+    totalRedeemed: Math.abs(redeemAgg._sum.points ?? 0),
+    activeAccounts,
+  }
+
+  // -------------------------------------------------------------------------
+  // Wave 8 Task 8 (additive) — gift metrics
+  //   - totalSent:       count of all Gift rows.
+  //   - totalRedeemed:   count where status === 'REDEEMED'.
+  //   - totalCancelled:  count where status === 'CANCELLED'.
+  // -------------------------------------------------------------------------
+  const [totalSent, totalGiftRedeemed, totalGiftCancelled] = await Promise.all([
+    db.gift.count().catch(() => 0),
+    db.gift.count({ where: { status: 'REDEEMED' } }).catch(() => 0),
+    db.gift.count({ where: { status: 'CANCELLED' } }).catch(() => 0),
+  ])
+
+  const gifts = {
+    totalSent,
+    totalRedeemed: totalGiftRedeemed,
+    totalCancelled: totalGiftCancelled,
+  }
+
+  // -------------------------------------------------------------------------
+  // Wave 8 Task 8 (additive) — group order metrics
+  //   - totalCreated:    count of all GroupOrder rows.
+  //   - totalConfirmed:  count where status === 'CONFIRMED'.
+  //   - totalCancelled:  count where status === 'CANCELLED'.
+  // -------------------------------------------------------------------------
+  const [totalGroupCreated, totalGroupConfirmed, totalGroupCancelled] = await Promise.all([
+    db.groupOrder.count().catch(() => 0),
+    db.groupOrder.count({ where: { status: 'CONFIRMED' } }).catch(() => 0),
+    db.groupOrder.count({ where: { status: 'CANCELLED' } }).catch(() => 0),
+  ])
+
+  const groupOrders = {
+    totalCreated: totalGroupCreated,
+    totalConfirmed: totalGroupConfirmed,
+    totalCancelled: totalGroupCancelled,
+  }
+
   return NextResponse.json({
     metrics: {
       totalOrders,
@@ -78,6 +138,10 @@ export async function GET() {
       completionRate: totalOrders > 0 ? Math.round((pickedUp / totalOrders) * 100) : 0,
       cancellationRate: totalOrders > 0 ? Math.round((cancelled / totalOrders) * 100) : 0,
     },
+    // Wave 8 Task 8 additive — new metric buckets.
+    rewards,
+    gifts,
+    groupOrders,
     statusBreakdown: statusBreakdown.map((s) => ({ status: s.status, count: s._count._all })),
     revenueByRestaurant,
     hourly,
