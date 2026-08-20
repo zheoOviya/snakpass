@@ -65,7 +65,7 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
         body: JSON.stringify({ phone, purpose }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      if (!res.ok) throw new Error(data?.error?.message ?? 'Failed to send OTP')
       setOtpId(data.otpId)
       setStep('otp')
       toast({
@@ -115,7 +115,7 @@ export function PhoneOtpLogin({ title, subtitle, purpose, demoPhone, accent, ico
           body: JSON.stringify({ otpId, code, phone, purpose }),
         })
         const data = await res.json()
-        if (!res.ok) throw new Error(data.error?.message || data.error)
+        if (!res.ok) throw new Error(data?.error?.message ?? 'Verification failed')
         await refresh()
         toast({ title: 'Welcome!', description: data.user?.name ?? 'Logged in' })
         onDone()

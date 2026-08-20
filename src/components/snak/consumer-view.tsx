@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, Leaf, ArrowLeft, ShoppingCart, Plus, Minus, Clock, MapPin, Loader2, Package, Receipt } from 'lucide-react'
+import { Search, Leaf, ArrowLeft, ShoppingCart, Plus, Minus, Clock, MapPin, Package, Receipt } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -11,14 +11,14 @@ import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
 import { useCart } from '@/lib/cart-store'
-import { csrfFetch } from '@/lib/csrf-client'
 import { useRealtime, realtimeSocket } from '@/hooks/use-realtime'
 import { inr, STATUS_META, timeAgo } from '@/lib/snack'
 import type { MenuItem, Order, Restaurant } from '@/lib/types'
 import { VegBadge, SpiceDots, StarRating, CuisineIcon, cuisineGradient } from './bits'
 import { OrderTracking } from './order-tracking'
+import { CheckoutView } from './checkout-view'
 
-type View = 'browse' | 'menu' | 'tracking' | 'orders'
+type View = 'browse' | 'menu' | 'checkout' | 'tracking' | 'orders'
 
 export function ConsumerView() {
   const [view, setView] = useState<View>('browse')
@@ -31,7 +31,6 @@ export function ConsumerView() {
   const [loadingMenu, setLoadingMenu] = useState(false)
   const [activeOrder, setActiveOrder] = useState<Order | null>(null)
   const [myOrders, setMyOrders] = useState<Order[]>([])
-  const [placing, setPlacing] = useState(false)
   const { toast } = useToast()
   const cart = useCart()
   const { connected } = useRealtime(['consumer:all'])
@@ -43,9 +42,24 @@ export function ConsumerView() {
   }, [])
 
   // Load consumer's own orders on mount so the "My Orders" badge is live.
+  // Note: fetchMyOrders is also called from realtime handlers + checkout success
+  // callback, so it stays memoized — but we inline the mount fetch so the
+  // setState happens in the async .then (not via a synchronous useCallback
+  // call which would trip react-hooks/set-state-in-effect).
   useEffect(() => {
-    fetchMyOrders()
-  }, [fetchMyOrders])
+    let cancelled = false
+    fetch('/api/orders?role=consumer&limit=20')
+      .then((r) => r.json())
+      .then((d) => {
+        if (!cancelled) setMyOrders(d.orders ?? [])
+      })
+      .catch(() => {
+        /* best-effort; user may be unauthenticated */
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   // fetch restaurants
   const fetchRestaurants = useCallback(async () => {
@@ -73,31 +87,13 @@ export function ConsumerView() {
     setLoadingMenu(false)
   }, [])
 
-  // place order
-  const placeOrder = useCallback(async () => {
-    if (!cart.restaurantId || cart.lines.length === 0) return
-    setPlacing(true)
-    try {
-      const res = await csrfFetch('/api/orders', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          restaurantId: cart.restaurantId,
-          items: cart.lines.map((l) => ({ menuItemId: l.menuItemId, name: l.name, price: l.price, quantity: l.quantity })),
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error ?? 'Failed to place order')
-      setActiveOrder(data.order)
-      cart.clear()
-      setView('tracking')
-      toast({ title: 'Order placed! 🎉', description: `Pickup OTP: ${data.order.pickupOtp}` })
-    } catch (e) {
-      toast({ title: 'Could not place order', description: (e as Error).message, variant: 'destructive' })
-    } finally {
-      setPlacing(false)
-    }
-  }, [cart, toast])
+  // Checkout success → order has been placed + payment captured. Switch to
+  // tracking so the consumer watches the order move PAID → PREPARING → …
+  const handleCheckoutSuccess = useCallback((order: Order) => {
+    setActiveOrder(order)
+    fetchMyOrders()
+    setView('tracking')
+  }, [fetchMyOrders])
 
   // realtime: refresh active order + my-orders list on update
   useEffect(() => {
@@ -189,6 +185,15 @@ export function ConsumerView() {
     )
   }
 
+  if (view === 'checkout') {
+    return (
+      <CheckoutView
+        onBack={() => setView('menu')}
+        onSuccess={handleCheckoutSuccess}
+      />
+    )
+  }
+
   if (view === 'menu' && selected) {
     return (
       <div className="px-4 py-6 pb-40">
@@ -257,9 +262,9 @@ export function ConsumerView() {
                     <p className="font-semibold">{inr(cartTotal)}</p>
                   </div>
                 </div>
-                <Button onClick={placeOrder} disabled={placing} className="bg-teal-600 hover:bg-teal-700">
-                  {placing ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : <ShoppingCart className="mr-1 h-4 w-4" />}
-                  Place Order
+                <Button onClick={() => setView('checkout')} className="bg-teal-600 hover:bg-teal-700">
+                  <ShoppingCart className="mr-1 h-4 w-4" />
+                  Proceed to Checkout
                 </Button>
               </div>
             </motion.div>

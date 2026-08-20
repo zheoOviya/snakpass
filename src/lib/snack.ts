@@ -2,6 +2,7 @@
 
 export const ORDER_STATUSES = [
   'CONFIRMED',
+  'PAID',
   'PREPARING',
   'ALMOST_READY',
   'READY_FOR_PICKUP',
@@ -11,8 +12,12 @@ export const ORDER_STATUSES = [
 export type OrderStatus = (typeof ORDER_STATUSES)[number]
 
 // Status -> next allowed status (fulfillment state machine)
+// PAID is set by POST /api/payments after a successful capture; the vendor
+// advances either a CONFIRMED (legacy unpaid) or PAID order to PREPARING once
+// the kitchen starts the order.
 export const NEXT_STATUS: Record<string, string | null> = {
   CONFIRMED: 'PREPARING',
+  PAID: 'PREPARING',
   PREPARING: 'ALMOST_READY',
   ALMOST_READY: 'READY_FOR_PICKUP',
   READY_FOR_PICKUP: 'PICKED_UP',
@@ -25,10 +30,11 @@ export const STATUS_META: Record<
   { label: string; short: string; tone: string; step: number; emoji: string }
 > = {
   CONFIRMED: { label: 'Order Confirmed', short: 'Confirmed', tone: 'bg-blue-500/15 text-blue-700 dark:text-blue-300', step: 1, emoji: '✓' },
-  PREPARING: { label: 'Preparing in Kitchen', short: 'Preparing', tone: 'bg-amber-500/15 text-amber-700 dark:text-amber-300', step: 2, emoji: '👨‍🍳' },
-  ALMOST_READY: { label: 'Almost Ready', short: 'Almost Ready', tone: 'bg-orange-500/15 text-orange-700 dark:text-orange-300', step: 3, emoji: '⏱️' },
-  READY_FOR_PICKUP: { label: 'Ready for Pickup', short: 'Ready', tone: 'bg-teal-500/15 text-teal-700 dark:text-teal-300', step: 4, emoji: '🔔' },
-  PICKED_UP: { label: 'Picked Up', short: 'Picked Up', tone: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', step: 5, emoji: '🎉' },
+  PAID: { label: 'Payment Confirmed', short: 'Paid', tone: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300', step: 2, emoji: '💳' },
+  PREPARING: { label: 'Preparing in Kitchen', short: 'Preparing', tone: 'bg-amber-500/15 text-amber-700 dark:text-amber-300', step: 3, emoji: '👨‍🍳' },
+  ALMOST_READY: { label: 'Almost Ready', short: 'Almost Ready', tone: 'bg-orange-500/15 text-orange-700 dark:text-orange-300', step: 4, emoji: '⏱️' },
+  READY_FOR_PICKUP: { label: 'Ready for Pickup', short: 'Ready', tone: 'bg-teal-500/15 text-teal-700 dark:text-teal-300', step: 5, emoji: '🔔' },
+  PICKED_UP: { label: 'Picked Up', short: 'Picked Up', tone: 'bg-green-500/15 text-green-700 dark:text-green-300', step: 6, emoji: '🎉' },
   CANCELLED: { label: 'Cancelled', short: 'Cancelled', tone: 'bg-red-500/15 text-red-700 dark:text-red-300', step: 0, emoji: '✕' },
 }
 

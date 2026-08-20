@@ -30,7 +30,7 @@ export function AdminLogin({ onDone }: { onDone: () => void }) {
         body: JSON.stringify({ email, password }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      if (!res.ok) throw new Error(data?.error?.message ?? 'Login failed')
       setOtpId(data.otpId)
       setDemoCode(data.code ?? '')
       setStep('twofactor')
@@ -55,7 +55,7 @@ export function AdminLogin({ onDone }: { onDone: () => void }) {
         body: JSON.stringify({ otpId, code }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error)
+      if (!res.ok) throw new Error(data?.error?.message ?? '2FA verification failed')
       await refresh()
       toast({ title: 'Admin authenticated', description: data.user?.name })
       onDone()

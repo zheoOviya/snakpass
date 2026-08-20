@@ -12,16 +12,30 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
 import { useRealtime, realtimeSocket } from '@/hooks/use-realtime'
 import { csrfFetch } from '@/lib/csrf-client'
-import { STATUS_META, NEXT_STATUS, inr, timeAgo } from '@/lib/snack'
+import { inr, timeAgo } from '@/lib/snack'
+import {
+  FULFILMENT_STATUS_META,
+  NEXT_FULFILMENT_STATUS,
+} from '@/lib/fulfilment-state'
 import type { MenuItem, Order, Restaurant } from '@/lib/types'
 import { VegBadge, SpiceDots } from './bits'
+
+// Vendor-facing order shape: the base Order from /api/orders plus cached
+// P0-06 fulfilment state (status + pickupOtp) fetched via GET /fulfilment.
+// `fulfilmentStatus` is undefined while the fulfilment fetch is in flight or
+// if it failed; the card treats undefined as PREPARING (the lazy-create baseline).
+type VendorOrder = Order & {
+  fulfilmentStatus?: string
+  fulfilmentOtp?: string
+}
 
 export function VendorView() {
   const [restaurants, setRestaurants] = useState<Restaurant[]>([])
   const [activeId, setActiveId] = useState<string>('')
-  const [orders, setOrders] = useState<Order[]>([])
+  const [orders, setOrders] = useState<VendorOrder[]>([])
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [loading, setLoading] = useState(true)
+  const [busyOrderId, setBusyOrderId] = useState<string | null>(null)
   const [tab, setTab] = useState<'orders' | 'menu'>('orders')
   const { connected } = useRealtime(['vendor:all'])
   const { toast } = useToast()
@@ -36,12 +50,54 @@ export function VendorView() {
       })
   }, [])
 
+  // Fetch fulfilment status for every active order (Option A from the task spec).
+  // GET /api/orders/[id]/fulfilment lazy-creates a Fulfilment row at PREPARING if
+  // none exists yet — so newly-confirmed orders surface with `fulfilmentStatus`
+  // = 'PREPARING' after the first load.
+  const fetchFulfilmentForOrders = useCallback(
+    async (orderList: VendorOrder[]): Promise<VendorOrder[]> => {
+      const activeOrders = orderList.filter(
+        (o) => o.status !== 'PICKED_UP' && o.status !== 'CANCELLED',
+      )
+      if (activeOrders.length === 0) return orderList
+      const results = await Promise.allSettled(
+        activeOrders.map(async (o) => {
+          const r = await fetch(`/api/orders/${o.id}/fulfilment`)
+          if (!r.ok) return null
+          return r.json()
+        }),
+      )
+      const fulfilmentById = new Map<string, { status: string; pickupOtp?: string }>()
+      activeOrders.forEach((o, i) => {
+        const r = results[i]
+        if (r.status === 'fulfilled' && r.value?.fulfilment) {
+          fulfilmentById.set(o.id, {
+            status: r.value.fulfilment.status as string,
+            pickupOtp: r.value.fulfilment.pickupOtp as string | undefined,
+          })
+        }
+      })
+      return orderList.map((o) => {
+        const f = fulfilmentById.get(o.id)
+        if (!f) return o
+        return {
+          ...o,
+          fulfilmentStatus: f.status,
+          fulfilmentOtp: f.pickupOtp ?? o.pickupOtp,
+        }
+      })
+    },
+    [],
+  )
+
   const refreshOrders = useCallback(async () => {
     if (!activeId) return
     const res = await fetch(`/api/orders?role=vendor&restaurantId=${activeId}&limit=50`)
     const data = await res.json()
-    setOrders(data.orders ?? [])
-  }, [activeId])
+    const baseOrders: VendorOrder[] = (data.orders ?? []) as VendorOrder[]
+    const withFulfilment = await fetchFulfilmentForOrders(baseOrders)
+    setOrders(withFulfilment)
+  }, [activeId, fetchFulfilmentForOrders])
 
   const refreshMenu = useCallback(async () => {
     if (!activeId) return
@@ -56,7 +112,7 @@ export function VendorView() {
     Promise.all([refreshOrders(), refreshMenu()]).finally(() => setLoading(false))
   }, [activeId, refreshOrders, refreshMenu])
 
-  // realtime updates
+  // realtime updates — refresh both orders and their fulfilment state
   useEffect(() => {
     const sock = realtimeSocket()
     const handler = (p: { restaurantId: string; orderId: string }) => {
@@ -70,39 +126,87 @@ export function VendorView() {
     }
   }, [activeId, refreshOrders])
 
+  // advance: PATCH /api/orders/[id]/fulfilment — P0-06 parallel state machine.
+  // csrfFetch auto-injects both the X-CSRF-Token and an Idempotency-Key header
+  // (UUID v4) for PATCH requests, so retries from a network blip or a double
+  // click are deduped server-side.
   const advance = useCallback(
-    async (order: Order) => {
-      const next = NEXT_STATUS[order.status]
+    async (order: VendorOrder) => {
+      const current = order.fulfilmentStatus ?? 'PREPARING'
+      const next = NEXT_FULFILMENT_STATUS[current]
       if (!next) return
+      setBusyOrderId(order.id)
       try {
-        const res = await csrfFetch(`/api/orders/${order.id}/status`, {
+        const res = await csrfFetch(`/api/orders/${order.id}/fulfilment`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ status: next, actorRole: 'VENDOR_OWNER' }),
         })
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error)
-        toast({ title: `${order.restaurant.name} → ${STATUS_META[next].short}` })
-        refreshOrders()
+        const data = await res.json().catch(() => null)
+        if (!res.ok) {
+          const msg =
+            data?.error?.message ||
+            data?.error ||
+            `Failed to advance fulfilment (${res.status})`
+          throw new Error(typeof msg === 'string' ? msg : 'Update failed')
+        }
+        const newStatus: string = data?.fulfilment?.status ?? next
+        const newOtp: string | undefined =
+          data?.fulfilment?.pickupOtp ?? order.fulfilmentOtp ?? order.pickupOtp
+        // Optimistically update local state from the API response so the card
+        // re-renders immediately (e.g. PREPARING → ALMOST_READY) without
+        // waiting for the full list refresh.
+        setOrders((prev) =>
+          prev.map((o) =>
+            o.id === order.id
+              ? { ...o, fulfilmentStatus: newStatus, fulfilmentOtp: newOtp }
+              : o,
+          ),
+        )
+        const shortLabel = FULFILMENT_STATUS_META[next]?.short ?? next
+        toast({ title: `${order.restaurant.name} → ${shortLabel}` })
       } catch (e) {
-        toast({ title: 'Update failed', description: (e as Error).message, variant: 'destructive' })
+        toast({
+          title: 'Update failed',
+          description: (e as Error).message,
+          variant: 'destructive',
+        })
+      } finally {
+        setBusyOrderId(null)
       }
     },
-    [refreshOrders, toast],
+    [toast],
   )
 
+  // cancel: still uses the legacy /status route with CANCELLED — this is the
+  // Order.status path (not the fulfilment path) per the task spec.
   const cancel = useCallback(
-    async (order: Order) => {
+    async (order: VendorOrder) => {
+      setBusyOrderId(order.id)
       try {
-        await csrfFetch(`/api/orders/${order.id}/status`, {
+        const res = await csrfFetch(`/api/orders/${order.id}/status`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ status: 'CANCELLED', actorRole: 'VENDOR_OWNER' }),
         })
+        if (!res.ok) {
+          const data = await res.json().catch(() => null)
+          const msg =
+            data?.error?.message ||
+            data?.error ||
+            `Cancel failed (${res.status})`
+          throw new Error(typeof msg === 'string' ? msg : 'Cancel failed')
+        }
         toast({ title: 'Order cancelled' })
         refreshOrders()
       } catch (e) {
-        toast({ title: 'Cancel failed', description: (e as Error).message, variant: 'destructive' })
+        toast({
+          title: 'Cancel failed',
+          description: (e as Error).message,
+          variant: 'destructive',
+        })
+      } finally {
+        setBusyOrderId(null)
       }
     },
     [refreshOrders, toast],
@@ -128,8 +232,18 @@ export function VendorView() {
   )
 
   const active = restaurants.find((r) => r.id === activeId)
-  const activeOrders = orders.filter((o) => o.status !== 'PICKED_UP' && o.status !== 'CANCELLED')
-  const completed = orders.filter((o) => o.status === 'PICKED_UP')
+  // Active = not cancelled, not picked-up on either the order or fulfilment side.
+  // Completed = picked up on either side (covers legacy /status PICKED_UP and
+  // new /fulfilment PICKED_UP).
+  const activeOrders = orders.filter(
+    (o) =>
+      o.status !== 'CANCELLED' &&
+      o.status !== 'PICKED_UP' &&
+      o.fulfilmentStatus !== 'PICKED_UP',
+  )
+  const completed = orders.filter(
+    (o) => o.status === 'PICKED_UP' || o.fulfilmentStatus === 'PICKED_UP',
+  )
 
   return (
     <div className="px-4 py-6">
@@ -172,7 +286,13 @@ export function VendorView() {
         ) : (
           <div className="space-y-3">
             {activeOrders.map((o) => (
-              <VendorOrderCard key={o.id} order={o} onAdvance={() => advance(o)} onCancel={() => cancel(o)} />
+              <VendorOrderCard
+                key={o.id}
+                order={o}
+                busy={busyOrderId === o.id}
+                onAdvance={() => advance(o)}
+                onCancel={() => cancel(o)}
+              />
             ))}
             {completed.length > 0 && (
               <div className="mt-6">
@@ -227,11 +347,29 @@ export function VendorView() {
   )
 }
 
-function VendorOrderCard({ order, onAdvance, onCancel }: { order: Order; onAdvance: () => void; onCancel: () => void }) {
-  const meta = STATUS_META[order.status] ?? STATUS_META.CONFIRMED
-  const next = NEXT_STATUS[order.status]
-  const nextMeta = next ? STATUS_META[next] : null
-  const isReady = order.status === 'READY_FOR_PICKUP'
+function VendorOrderCard({
+  order,
+  busy,
+  onAdvance,
+  onCancel,
+}: {
+  order: VendorOrder
+  busy: boolean
+  onAdvance: () => void
+  onCancel: () => void
+}) {
+  // The fulfilment state is the source of truth for the vendor card. If the
+  // fetch hasn't landed yet (or failed), default to PREPARING — the lazy-create
+  // baseline — so the card always renders a sensible next-step button.
+  const fulfilmentStatus = order.fulfilmentStatus ?? 'PREPARING'
+  const meta = FULFILMENT_STATUS_META[fulfilmentStatus] ?? FULFILMENT_STATUS_META.PREPARING
+  const next = NEXT_FULFILMENT_STATUS[fulfilmentStatus]
+  const nextMeta = next ? FULFILMENT_STATUS_META[next] : null
+  const isReady = fulfilmentStatus === 'READY_FOR_PICKUP'
+  // Prefer the fulfilment OTP (lazy-copied from Order.pickupOtp) but fall back
+  // to the order OTP if the fulfilment field is missing.
+  const pickupOtp = order.fulfilmentOtp ?? order.pickupOtp
+  const isTerminal = !next
 
   return (
     <motion.div layout initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}>
@@ -242,7 +380,7 @@ function VendorOrderCard({ order, onAdvance, onCancel }: { order: Order; onAdvan
               <div className="flex items-center gap-2">
                 <span className="font-mono text-xs text-muted-foreground">#{order.id.slice(-6).toUpperCase()}</span>
                 {order.isCatering && <Badge className="bg-purple-100 text-purple-700 hover:bg-purple-200 dark:bg-purple-950 dark:text-purple-300">Catering</Badge>}
-                <Badge className={meta.tone}>{meta.emoji} {meta.short}</Badge>
+                <Badge className={meta.tone} title={meta.label}>{meta.emoji} {meta.short}</Badge>
               </div>
               {order.isCatering && order.headcount && (
                 <p className="mt-1 text-xs text-purple-600 dark:text-purple-400">👥 Headcount: {order.headcount} · {order.note}</p>
@@ -264,25 +402,42 @@ function VendorOrderCard({ order, onAdvance, onCancel }: { order: Order; onAdvan
             </div>
           </div>
 
-          {isReady && (
+          {isReady && pickupOtp && (
             <div className="mt-3 flex items-center justify-between rounded-lg bg-teal-50 px-3 py-2 dark:bg-teal-950/40">
               <span className="text-xs text-muted-foreground">Pickup OTP</span>
-              <span className="font-mono text-xl font-bold tracking-[0.25em] text-teal-700 dark:text-teal-300">{order.pickupOtp}</span>
+              <span className="font-mono text-xl font-bold tracking-[0.25em] text-teal-700 dark:text-teal-300">{pickupOtp}</span>
             </div>
           )}
 
           <div className="mt-3 flex items-center gap-2">
             {next && (
-              <Button onClick={onAdvance} className="flex-1 bg-teal-600 hover:bg-teal-700">
-                {next === 'PREPARING' && <ChefHat className="mr-1 h-4 w-4" />}
-                {next === 'ALMOST_READY' && <Clock className="mr-1 h-4 w-4" />}
-                {next === 'READY_FOR_PICKUP' && <Bell className="mr-1 h-4 w-4" />}
-                {next === 'PICKED_UP' && <CheckCircle2 className="mr-1 h-4 w-4" />}
-                Mark {nextMeta?.short}
+              <Button
+                onClick={onAdvance}
+                disabled={busy}
+                className="flex-1 bg-teal-600 hover:bg-teal-700"
+              >
+                {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+                {!busy && next === 'ALMOST_READY' && <Clock className="mr-1 h-4 w-4" />}
+                {!busy && next === 'READY_FOR_PICKUP' && <Bell className="mr-1 h-4 w-4" />}
+                {!busy && next === 'PICKED_UP' && <CheckCircle2 className="mr-1 h-4 w-4" />}
+                Mark {nextMeta?.short ?? next}
               </Button>
             )}
-            {order.status !== 'CANCELLED' && order.status !== 'PICKED_UP' && (
-              <Button variant="outline" size="icon" onClick={onCancel} title="Cancel order">
+            {isTerminal && (
+              // PICKED_UP — terminal handoff confirmation chip.
+              <div className="flex-1 rounded-md bg-emerald-50 px-3 py-2 text-center text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
+                <CheckCircle2 className="mr-1 inline h-3 w-3" /> Handed off to customer
+              </div>
+            )}
+            {order.status !== 'CANCELLED' && order.status !== 'PICKED_UP' && !isTerminal && (
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={onCancel}
+                disabled={busy}
+                title="Cancel order"
+                aria-label={`Cancel order ${order.id.slice(-6).toUpperCase()}`}
+              >
                 <X className="h-4 w-4" />
               </Button>
             )}

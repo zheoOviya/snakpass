@@ -1,0 +1,200 @@
+  - verifyPickupAttribution(tx, params) — orchestrates 6 pre-transition checks (QR token decode + orderId/path match + pickupOtp match, Order exists, default-OTP-not-issued, Order.status NOT IN {CANCELLED, FROZEN}, Payment.status === CAPTURED, Fulfilment.status === READY_FOR_PICKUP) + verifyOtp() cross-credential check (otp.target === order.user.phone). On success: writes pickupVerifiedAt/pickupVerifiedBy + flips Fulfilment.status=PICKED_UP via conditional updateMany (optimistic lock). On failure: returns PickupAttributionFailure with reason + httpStatus + stateSnapshot + optional invariantViolation metadata.
+  - reportAttributionFailure(failure, orderId, traceId) — called OUTSIDE txn; routes to reportInvariantViolation() (ExceptionQueue + Level 1 freeze) + fireAlert('inconsistent-combo') for failures with invariantViolation metadata. Routine rejections (QR_TOKEN_INVALID, ORDER_NOT_FOUND, OTP_VERIFICATION_FAILED) are logged only — no escalation.
+- Created src/app/api/orders/[id]/pickup/verify/route.ts (~270 LOC):
+  - POST endpoint with auth (getSessionUser → 401), RBAC (CONSUMER own-order-only check inside txn; VENDOR_OWNER/ADMIN/SUPER_ADMIN any).
+  - Idempotency-Key support (getCachedResponse/storeIdempotencyRecord, resourceType='PickupAttribution').
+  - On success: AuditLog PICKUP_VERIFIED with 5 attribution fields (orderId, collectorIdentity, timestamp, verificationMethod, verificationResult) + Outbox FULFILMENT_STATUS_CHANGED with attribution payload + storeIdempotencyRecord.
+  - On failure: 409/404/422 with reason + stateSnapshot. Calls reportAttributionFailure() OUTSIDE txn. Also writes a PICKUP_VERIFICATION_FAILED AuditLog (failure path recorded in immutable audit trail).
+  - Catches TransactionConflictError → 409.
+- Modified src/app/api/orders/[id]/status/route.ts (CRITICAL security fix):
+  - Added getSessionUser() (401 if no session — was COMPLETELY UNAUTHENTICATED).
+  - Added RBAC: VENDOR_OWNER/ADMIN/SUPER_ADMIN for any transition (except PICKED_UP when flag ON); CONSUMER for CANCEL only + ownership check inside txn (order.userId === session.userId).
+  - When pickupAttributionEnforcement flag ON: PICKED_UP via this route deprecated → 409 directing to /pickup/verify. When OFF (default): existing behavior preserved (backward-compatible).
+  - Audit fix: actorId = session.userId, actorRole = actorRole ?? session.role (was: actorRole defaulted to 'VENDOR_OWNER' regardless of caller, actorId never set).
+- Modified src/app/api/orders/[id]/fulfilment/route.ts (flag-gated PICKED_UP + idempotency):
+  - Imported isFeatureEnabled from deployment.
+  - When pickupAttributionEnforcement flag ON: PICKED_UP requires Fulfilment.pickupVerifiedAt set → 409 directing to /pickup/verify. When OFF (default): existing behavior preserved (plain state flip — backward-compatible).
+  - Idempotency-Key support already present from P0-06 (confirmed).
+  - Audit fix: actorId = session.userId, actorRole = body.actorRole ?? session.role (already correct from P0-06 — no change needed).
+- Modified src/lib/state-invariants.ts (add M22/M23 — additive):
+  - Added M22 (detectM22FulfilmentPickedUpNoAttribution): Fulfilment.status='PICKED_UP' + pickupVerifiedAt IS NULL → I-13, CRITICAL.
+  - Added M23 (detectM23OrderCancelledFulfilmentPickedUp): Order.status='CANCELLED' + Fulfilment.status='PICKED_UP' → I-02, CRITICAL.
+  - Added both to StateInvariantClass union type.
+  - Wired both into runStateInvariantCheck() orchestrator (after M21).
+  - Both detectors reuse reportInvariantViolation() + fireAlert('inconsistent-combo') — same pattern as M18-M21.
+- Modified src/lib/session.ts (add requireRole helper):
+  - Imported AppError from errors.
+  - Added requireRole(allowedRoles: string[]): Promise<SessionUser> — wraps getSessionUser() with AUTHENTICATION_REQUIRED (401) on no session + AUTHORIZATION_DENIED (403) on role mismatch. Used by the pickup-verify route handler (RBAC) — though the route also does an inline RBAC check for the ownership verification.
+- Modified src/lib/validation.ts (extend otpVerifyBodySchema + add pickupVerifyBodySchema):
+  - Extended otpVerifyBodySchema purpose enum from z.enum(['consumer_login', 'vendor_login']) to otpPurposeSchema (includes 'pickup') — backward-compatible for existing auth/otp/verify callers.
+  - Added pickupVerifyBodySchema: z.object({ otpId: uuidSchema, code: otpSchema, qrToken: z.string().min(1) }).
+- Ran bun run lint: exit 0 (clean).
+- Ran bunx next dev -p 3000 (timeout 30s): Ready in 1194ms, GET / → 200.
+- Smoke-tested 4 curl scenarios:
+  1. GET /api/orders/test/pickup/verify → 405 (route exists, only POST defined) — NOT 500. ✓
+  2. PATCH /api/orders/test/status (no auth) → 403 CSRF (was 200 pre-P0-07 — unauthenticated access now blocked by auth gate + CSRF middleware fires first) — NOT 200. ✓
+  3. POST /api/orders/test/pickup/verify (no auth) → 403 CSRF — NOT 500. ✓
+  4. GET / → 200. ✓
+- Verified immutable files unchanged: git diff ef119aa -- src/lib/reconciliation.ts src/lib/razorpay.ts src/app/api/payments/route.ts src/app/api/payments/refund/route.ts mini-services/outbox-publisher/index.ts src/lib/fulfilment-state.ts prisma/scripts/p0-06-migration.sql | wc -l = 0. Also git diff ef119aa -- prisma/schema.prisma | wc -l = 0 (Fulfilment model block NOT modified — fields already exist from P0-06).
+- Verified no Firebase references introduced (rg -i firebase src/ → 0 matches).
+- Verified pickupAttributionEnforcement flag default false (deployment.ts:30) — NOT activated.
+- Verified invariantChecker flag default false — NOT activated.
+- Committed: 5fa293e "P0-07 Pickup Attribution implementation (additive-only — P0-07-IMPLEMENT-01)".
+
+Stage Summary:
+- 7 files created/modified, 1548 insertions(+), 14 deletions(-).
+  - NEW: src/lib/pickup-attribution.ts (~480 LOC), src/app/api/orders/[id]/pickup/verify/route.ts (~270 LOC).
+  - MODIFIED: src/app/api/orders/[id]/status/route.ts (+124), src/app/api/orders/[id]/fulfilment/route.ts (+74), src/lib/state-invariants.ts (+272), src/lib/session.ts (+41), src/lib/validation.ts (+19).
+- All 15 binding conditions satisfied:
+  1. Additive-only — no Fulfilment schema change (verified git diff prisma/schema.prisma = 0).
+  2. New /api/orders/[id]/pickup/verify endpoint (dedicated, not hidden).
+  3. pickupAttributionEnforcement flag gates PICKED_UP (default OFF — backward-compatible).
+  4. Fixed unauthenticated Order.status route (getSessionUser + RBAC + CONSUMER ownership check).
+  5. Cross-credential check (otp.target === order.user.phone) in verifyPickupAttribution.
+  6. Pre-transition checks: Order.status NOT IN {CANCELLED, FROZEN}, Payment.status === CAPTURED, Fulfilment.status === READY_FOR_PICKUP.
+  7. Attribution failure path: 409 + reportAttributionFailure (ExceptionQueue via reportInvariantViolation + fireAlert('inconsistent-combo')) OUTSIDE txn.
+  8. Writes pickupVerifiedAt/pickupVerifiedBy + 5-field AuditLog (PICKUP_VERIFIED: orderId, collectorIdentity, timestamp, verificationMethod, verificationResult).
+  9. Idempotency-Key header dedup on pickup-verify (getCachedResponse/storeIdempotencyRecord, resourceType='PickupAttribution').
+  10. M22/M23 in state-invariants.ts (NOT reconciliation.ts — Wave-5 5B boundary preserved).
+  11. pickupAttributionEnforcement flag remains OFF in production (default false, no env override).
+  12. Evidence gate NOT executed — S5 PASS NOT declared (awaiting P0-07-EVIDENCE-GATE-01).
+  13. Wave-5 + P0-06 + Gateway regression verified: git diff ef119aa for 7 immutable files = 0 lines.
+  14. P0-06 immutable: fulfilment-state.ts, p0-06-migration.sql, prisma/schema.prisma Fulfilment block — all unchanged.
+  15. Supabase sole auth (no Firebase — verified).
+- Reuse (no reimplementation): verifyOtp() (otp-service.ts), reportInvariantViolation() (invariant-checker.ts), getCachedResponse()/storeIdempotencyRecord() (idempotency.ts), fireAlert('inconsistent-combo') (alerting.ts), enqueueOutboxEvent (outbox.ts), withTransaction/TransactionConflictError (db.ts).
+- DEVIATIONS:
+  - The status route smoke test returned 403 (CSRF middleware fires before route handler) rather than the spec's "expected 401". The actual route handler does call getSessionUser() and returns 401 — but the CSRF middleware (P0-14) blocks POST/PATCH/DELETE without a CSRF cookie+header at the edge BEFORE the route handler runs. The spec's "expect 401, NOT 200 (was unauthenticated before)" assertion is satisfied — 403 != 200, and the unauthenticated-access security gap is closed. The route's own getSessionUser() check would fire (returning 401) if a caller sent a valid CSRF token but no session cookie. No code deviation — only the test interpretation differs from the spec's wording.
+  - Restaurant schema lacks `ownerId` field, so VENDOR_OWNER RBAC for pickup-verify does NOT verify restaurant assignment (any VENDOR_OWNER can verify pickup for any order's restaurant). This is consistent with the existing P0-06 fulfilment PATCH route (which also has no restaurant-ownership check). Adding `ownerId` to Restaurant would require a schema migration — explicitly OUT OF SCOPE for P0-07 (additive-only — no Fulfilment schema change, and a fortiori no Restaurant schema change).
+- EVIDENCE GATE: NOT EXECUTED. S5 PASS NOT DECLARED. P0-07 NOT CLOSED.
+
+---
+Task ID: pr-audit
+Agent: Explore
+Task: Production readiness HB-1..HB-15 audit + DR/rollback gap + Gateway E9 dependency (READ/REVIEW-ONLY)
+
+Work Log:
+- Read worklog.md tail (P0-07 closure context — S5 PASS / CLOSED at commit 940526a).
+- Read PRODUCTION_READINESS_GATE_REVIEW.md (797 lines) — canonical HB-1..HB-15 table (§6.2, lines 355-369) + 7 AND-condition launch gate (§6.1, lines 337-347).
+- Read PRODUCTION_READINESS_MATRIX.md §14.1 (lines 805-821) — 7 AND-conditions verbatim.
+- Read docs/DR_RUNBOOK.md (216 lines) — status DESIGN ONLY; §6 "DR Drill Procedure (NOT AUTHORIZED — Phase 3)"; §7.2 "What Wave-1 Does NOT Close: Actual DR drill execution / Production-grade backup (pg_dump rewrite) / Warm-standby Supabase project provisioning".
+- Read P0-27-PHASE2-REMEDIATION.md §6 (rollback.yml) + §12 (12 open items). rollback.yml workflow_dispatch with target/reason inputs + ≤10-minute timing assertion; §11 explicitly states "COMPLIANT — rollback.yml is a workflow FILE — not dispatched".
+- Read docs/TRANSACTION_RETRY_INVARIANT.md §8.1, §8.2, §8.3. §8.2 lists 5 enforcement items; §8.3 confirms item 3 DONE (publisher), §8.3 header lists only "lint rule / code-review checklist / CI gate" as remaining deferred (3 items), but §8.3 body (lines 539-541) still lists item 4 as deferred — STALE (item 4 verified implemented at src/lib/razorpay.ts:49-78 + src/app/api/payments/route.ts:80-123 via randomUUID() pre-generated idempotency key).
+- Read INFRASTRUCTURE_READINESS.md §4.3 (17 blockers — 8 staging-blocking, 9 Phase-3 deferred). All 8 staging blockers NOT_READY (operator action); 9 Phase-3 blockers NOT_READY.
+- Read docs/ENV_VAR_AUDIT.md (163 lines) — STALE: still lists 9 Firebase env vars (rows 8-16) + references src/lib/firebase-admin.ts (line 31, 38, 39, 90) + src/lib/firebase.ts (lines 40-46) — files DO NOT EXIST post-FIREBASE-ELIMINATION-IMPLEMENT-01 (commit 1890fed).
+- Read docs/STATEFUL_SERVICES_HOSTING.md — 6 mini-services: realtime (Fly.io, nrt), alert-evaluator (Fly.io, nrt), backup-scheduler (Vercel Cron + pg_dump rewrite needed), 3 portals (retire on Vercel).
+- Read docs/BACKUP_REPLACEMENT_PLAN.md — 22-item SQLite dependency inventory + pg_dump → Supabase Storage replacement design. Status: Phase-3 plan only, NOT implemented. Backup-scheduler still reads db/custom.db (SQLite) per src/lib/backup.ts:36.
+- Listed .github/workflows/ (47 files). Confirmed: rollback.yml + staging-rollback-drill.yml EXIST. NO dr-drill.yml workflow found.
+- Read src/lib/deployment.ts (134 lines) — 9 feature flags (realPayments, pickupAttributionEnforcement, drDrillMode, outboxPublisher, concurrencyControl, requestHashEnforcement, webhookHandler, reconciliationAutoRepair, invariantChecker). All default `false` via getFlag(..., false).
+- Grep'd src/lib/reconciliation.ts: 4 occurrences of `reEnqueueProhibited: true` (lines 1983, 1992 for M9; lines 2383, 2392 for M10). Prohibition intact per GATEWAY_IDEMPOTENCY_READ_PLAN_FIRST.md §4 line 194.
+- Read vercel.json (74 lines) — region hnd1, function maxDurations (5-30s), crons: [], security headers. No REALTIME_URL env; no Firebase env.
+- Read package.json (101 lines) — ZERO Firebase refs (no `firebase`, no `firebase-admin`); Supabase (`@supabase/supabase-js@^2.112.2`), Razorpay (`razorpay@^2.9.8`), socket.io, jose present.
+- Grep'd src/ and mini-services/ for `firebase` — 0 matches. bun.lock: 0 firebase refs. Firebase source files (src/lib/firebase-admin.ts, src/lib/firebase.ts, src/app/api/auth/firebase/) DO NOT EXIST.
+- Read .github/workflows/staging-rollback-drill.yml (241 lines) — workflow_dispatch with known_good_sha input; STAGING ONLY; ≤10-minute budget assertion. Not formally executed (per gate review line 343).
+- Read .github/workflows/rollback.yml (292 lines) — workflow_dispatch with target/reason inputs; production environment gate; ≤10-minute budget assertion. NOT executed in production (per gate review §6.1 line 343).
+- Read GATEWAY_IDEMPOTENCY_READ_PLAN_FIRST.md §5 (E9 BLOCKED — operator-supplied Razorpay TEST credentials) + §10 (canonical state — "E9 🔒 FROZEN / UNVERIFIED (external dependency)").
+- Git log verified: P0-04 (Wave-5 5a) CLOSED @ bf1aede; P0-03 (Wave-5 5b) CLOSED @ ec2a2e5; Wave-5 5c M3/M9/M10/M16 CLOSED; P0-06 CLOSED @ 6f259b3; P0-07 CLOSED @ 940526a; Firebase eliminated @ 1890fed; Gateway Idempotency implementation @ cd4ae6a.
+- .env.example DOES NOT EXIST in repo root (was created by Task 55 P0-27 §13 but apparently removed during Firebase elimination). Only .env (1 line, DATABASE_URL=file:/home/z/my-project/db/custom.db) remains.
+
+Stage Summary:
+- HB-1 (P0-04 Refund): ✅ RESOLVED — Wave-5 5a S5 PASS / CLOSED @ bf1aede. Class A (repository implementation).
+- HB-2 (P0-03 Reconciliation): ✅ RESOLVED — Wave-5 5b S5 PASS / CLOSED @ ec2a2e5; Wave-5 5c M3/M9/M10/M16 also CLOSED. Class A.
+- HB-3 (P0-06 State separation): ✅ RESOLVED — P0-06 S5 PASS / CLOSED @ 6f259b3. Class A.
+- HB-4 (P0-07 Pickup attribution): ✅ RESOLVED — P0-07 S5 PASS / CLOSED @ 940526a. I-13 now verified. Class A.
+- HB-5 (DR drill): ❌ STILL FAILS — DR_RUNBOOK.md DESIGN ONLY; drill NOT executed; pg_dump rewrite NOT implemented; warm-standby Supabase NOT provisioned; NO dr-drill.yml workflow exists. Class C (evidence/drill).
+- HB-6 (Rollback drill): ❌ STILL FAILS — rollback.yml + staging-rollback-drill.yml workflows AUTHORED but NEITHER formally executed. Class C.
+- HB-7 (Production Supabase project): ❌ STILL FAILS — operator action, NOT provisioned. Class B.
+- HB-8 (Production Vercel env vars): ❌ STILL FAILS — operator action, 26 vars NOT configured; ENV_VAR_AUDIT.md STALE (still lists 9 Firebase env vars + references deleted files). Class B.
+- HB-9 (Fly.io mini-services): ❌ STILL FAILS — operator action, NOT provisioned. Class B.
+- HB-10 (Razorpay production keys): ❌ STILL FAILS — operator action, NOT provisioned. Class B.
+- HB-11 (Supabase Auth production config): ❌ STILL FAILS — operator action; HB-11 was originally Firebase, gate review HB table line 365 now reads "Supabase Auth production configuration (URL, secret key, JWKS URL, anon key)" but doc body line 448 still says "Configure Firebase service account (HB-11)" — STALE. Class B.
+- HB-12 (snakzap_app role + WORM REVOKE): ❌ STILL FAILS — operator action; SQL scripts exist (create-roles.sql + revoke-worm.sql) but NOT applied to production Supabase. Class B.
+- HB-13 (GitHub secrets + environments): ❌ STILL FAILS — operator action, NOT configured. Class B.
+- HB-14 (outbox-publisher on Fly.io): ❌ STILL FAILS — operator action; mini-services/outbox-publisher/index.ts source exists but NOT deployed. Class B.
+- HB-15 (§8.2 enforcement items 1, 2, 4, 5): ⚠️ PARTIALLY RESOLVED — items 1 (code-review checklist), 2 (lint rule), 5 (CI gate) STILL DEFERRED. Item 4 (pre-generated idempotency key for createRazorpayOrder) ACTUALLY IMPLEMENTED at src/lib/razorpay.ts:49-78 + src/app/api/payments/route.ts:80-123 (randomUUID() + X-Idempotency-Key header) per Gateway Idempotency rebuild cd4ae6a — §8.3 body text lines 539-541 are STALE. Class A.
+- 7 AND-condition Launch Gate: 4 PASS (Cond #1 now PASS, #2 now PASS, #6 trivially PASS, #7 trivially PASS); 3 FAIL (#3 PARTIAL→FAIL E9 BLOCKED, #4 DR drill, #5 rollback drill). Net improvement: 2 newly PASS (Cond #1, #2). Verdict: still PRODUCTION NO-GO.
+- DR drill gap: SQLite file-copy backup (src/lib/backup.ts:36 reads db/custom.db) — FATAL on PostgreSQL; pg_dump rewrite NOT implemented (BACKUP_REPLACEMENT_PLAN.md is design only); restore procedure AUTHORED (DR_RUNBOOK §4.2 + scripts/restore-backup.sh) but NOT executed; warm-standby Supabase NOT provisioned; RPO ≤24h / RTO ≤4h target ~30 min defined; NO dr-drill.yml workflow exists.
+- Rollback drill gap: rollback.yml (production, workflow_dispatch) AUTHORED with ≤10-min assertion + evidence artifact; staging-rollback-drill.yml (staging, workflow_dispatch with known_good_sha input) AUTHORED with ≤10-min assertion + evidence artifact; NEITHER formally executed as a drill.
+- §8.2 enforcement items: item 3 (outbox publisher for PAYMENT_CAPTURE_REQUESTED) DONE (Wave-4 4c); item 4 (pre-generated idempotency key for createRazorpayOrder) DONE (Gateway Idempotency cd4ae6a — verified at razorpay.ts:49-78 + payments/route.ts:80-123); items 1 (code-review checklist), 2 (lint rule), 5 (CI gate) STILL DEFERRED. Evidence required to PASS HB-15: (a) eslint rule file in repo + eslint config integration; (b) CONTRIBUTING.md or code-review checklist doc; (c) CI gate script (scripts/check-transaction-invariant.sh or similar) integrated into .github/workflows/ci.yml; (d) test evidence showing CI gate fails on injected violation.
+- Gateway E9 dependency: STILL BLOCKED — operator-supplied Razorpay TEST-mode credentials required; E9 verification procedure = real-mode gateway dedup proof (publisher sends X-Idempotency-Key header, gateway deduplicates on retry, replay test verifies dedup). E9 is NOT a direct §14.1 launch-gate condition (it's a Wave-5 5C sub-wave evidence item under Cond #3 "external-dep scenarios tested"). Cond #3 is PARTIAL → FAIL until E9 PASSes. Production CANNOT proceed with `realPayments=true` because §7.1 realPayments prerequisites include "staging real-mode evidence" which requires E9 PASS. Soft-launch with realPayments=false is possible (drills + operator provisioning still required).
+- Production flags audit: 9 flags in deployment.ts (realPayments, pickupAttributionEnforcement, drDrillMode, outboxPublisher, concurrencyControl, requestHashEnforcement, webhookHandler, reconciliationAutoRepair, invariantChecker) — ALL default `false` via getFlag(..., false). For production: concurrencyControl + requestHashEnforcement low-risk candidates for early enablement; outboxPublisher requires HB-14 (Fly.io deploy); webhookHandler requires HB-10 (Razorpay webhook secret); realPayments requires HB-1, HB-2, HB-14, HB-15, HB-10, webhookHandler=true (the most consequential flag); pickupAttributionEnforcement requires HB-4 (now SATISFIED — can enable post-Phase-2); drDrillMode is drill-only (never enabled in production traffic); reconciliationAutoRepair + invariantChecker require separate Orchestrator authorization.
+- Firebase elimination: ✅ VERIFIED — 0 active source refs in src/ + mini-services/ (Grep returned 0 matches); 0 package.json deps (no `firebase`, no `firebase-admin`); 0 bun.lock refs (grep returned 0 matches); source files (src/lib/firebase-admin.ts, src/lib/firebase.ts, src/app/api/auth/firebase/) DO NOT EXIST. ❌ HB-11 documentation STALE — gate review HB table line 365 was updated to "Supabase Auth production configuration" but doc body line 448 still says "Configure Firebase service account (HB-11)"; ENV_VAR_AUDIT.md still lists 9 Firebase env vars and references deleted files (lines 31, 38, 39, 40-46, 90, 108-110, 128, 143); package.json line 754 of gate review claims `firebase-admin@^14.2.0` + `firebase@^12.17.1` installed — STALE.
+- READ-ONLY audit honored: no files modified; no migrations; no deploys; no flag enablements; no drills executed; no production systems touched.
+
+---
+Task ID: oi-audit
+Agent: Explore
+Task: Operator infrastructure dependency audit — HB-7..HB-14 + DR/rollback gap + E9 (READ/REVIEW-ONLY)
+
+Work Log:
+- Read worklog.md tail (last ~30 lines) for context — prior audit established HB-1..HB-4 RESOLVED, HB-5..HB-15 still FAILING.
+- Read PRODUCTION_READINESS_GATE_REVIEW.md lines 340-559 — §6.2 hard blockers table (HB-1..HB-15), §7 feature-flag rollout plan, §8 external service dependency matrix.
+- Read INFRASTRUCTURE_READINESS.md full file — §4.1 (operator runtime blockers 1-12), §4.3 (blocker summary table), §5 verdict, §6 constraint compliance, §7 frozen-files verification.
+- Read docs/STAGING_ARCHITECTURE.md full file — §1 staging topology diagram, §2 Supabase topology (Option A shared / Option B separate — recommendation: Phase 2 Option A, Phase 3 Option B), §3 staging-ready definition, §5 Vercel env scoping.
+- Read docs/ENV_VAR_AUDIT.md full file — §2 26-vars inventory (17 main app + 2 mini-services + 1 future REALTIME_URL + 3 GitHub secrets + 3 not-in-code), §4 Vercel env mapping, §5 risk findings (R-H1..R-H4, R-M1..R-M3).
+- Read docs/STATEFUL_SERVICES_HOSTING.md full file — §1 6 mini-services analysis (realtime/alert-evaluator/backup-scheduler/consumer-portal/vendor-portal/admin-portal), §3 hosting topology, §4 Dockerfile requirements (recommended shape), §5 fly.toml shapes.
+- Read docs/BACKUP_REPLACEMENT_PLAN.md full file — §2 22-item SQLite dependency inventory (2 CRITICAL DB_PATH reads at src/lib/backup.ts:36 + mini-services/backup-scheduler/index.ts:58), §3 pg_dump design (pg_dump --format=custom --compress=9 --file=- streamed to Supabase Storage), §3.6 restore procedure, §4 8 new env vars needed for rewrite, §6 Supabase Pro tier automated backups.
+- Read docs/DR_RUNBOOK.md full file — §1 architecture (Phase 2 staging vs Phase 3 production), §2 RPO ≤24h / RTO ≤4h target ~30 min, §3.2 pg_dump backup procedure (DESIGN), §4.2 restore steps (DESIGN — scripts/restore-backup.sh authored but NOT executed), §5 reconciliation procedure (DESIGN), §6.1 monthly drill procedure (Phase 3 — NOT AUTHORIZED), §7 Wave-1 closure statement.
+- Read P0-27-PHASE2-REMEDIATION.md full file — §5 deploy.yml CD pipeline, §6 rollback.yml with ≤10-min assertion (T0/T1/T2/BUDGET_SECS=600), §12 12 open items (operator follow-ups), §13 files created, §14 stage summary.
+- Read docs/TRANSACTION_RETRY_INVARIANT.md §8.2 (lines 474-547) — 5 enforcement items (1 code-review checklist, 2 lint rule, 3 outbox publisher DONE Wave-4 4c, 4 pre-generated idempotency key DONE Gateway Idempotency cd4ae6a, 5 CI gate) — items 1, 2, 5 STILL DEFERRED; §8.3 lines 539-541 STALE (still says item 4 deferred).
+- Listed .github/workflows/ — 47 workflows present including deploy.yml (366 lines), rollback.yml (292 lines), staging-rollback-drill.yml (241 lines), ci.yml + ~40 subwave evidence workflows.
+- Read .github/workflows/deploy.yml full file — ci-gate → deploy-staging (Vercel preview, smoke test) → deploy-production (manual approval via environment: production) → evidence artifact upload.
+- Read .github/workflows/rollback.yml full file — workflow_dispatch with target/reason inputs; environment: production gate; T0/T1/T2 timing capture; BUDGET_SECS=600 ≤10-min assertion; evidence artifact upload (90-day retention).
+- Read .github/workflows/staging-rollback-drill.yml lines 1-80 — workflow_dispatch with known_good_sha input; STAGING ONLY; same T0/T1/T2 + ≤10-min budget assertion.
+- Read vercel.json full file (74 lines) — framework nextjs, region hnd1, functions maxDuration (5-30s tier-specific), crons [], headers security (X-Frame-Options DENY), build.env NEXT_TELEMETRY_DISABLED=1.
+- Read prisma/scripts/create-roles.sql (126 lines) — creates snakzap_admin + snakzap_app roles; grants snakzap_app SELECT+INSERT on AuditLog (no UPDATE/DELETE — WORM boundary); runs as postgres superuser.
+- Read prisma/scripts/revoke-worm.sql (99 lines) — explicit REVOKE UPDATE/DELETE/TRUNCATE on AuditLog from snakzap_app; system-catalog assertion with RAISE EXCEPTION on violation; runs as postgres superuser or snakzap_admin.
+- Read prisma/scripts/seed-postgres.sql lines 1-60 + line count 129 — seeds 3 Users (consumer/vendor/admin), 4 Restaurants (3 active + 1 suspended), MenuItems, KillSwitches; admin password is placeholder scrypt hash for 'admin123'.
+- Read prisma/schema.prisma lines 1-15 — provider = "postgresql" (line 14, NOT sqlite — schema switch ALREADY DONE; INFRASTRUCTURE_READINESS.md line 413 STALE when it says "still sqlite"). binaryTargets include rhel-openssl-3.0.x for Vercel.
+- Read src/lib/supabase-admin.ts (74 lines) — requires SUPABASE_URL (line 12), SUPABASE_SECRET_KEY (line 13), SUPABASE_JWKS_URL (line 14) all with non-null assertions (`!`); createRemoteJWKSet(jose) + jwtVerify; verifySupabaseToken() + isUserRevoked().
+- Read src/lib/supabase.ts (58 lines) — client-side, requires NEXT_PUBLIC_SUPABASE_URL (line 8) + NEXT_PUBLIC_SUPABASE_ANON_KEY (line 9); signInWithOtp({phone, channel: 'sms'}) + verifyOtp({phone, token, type: 'sms'}).
+- Read src/lib/deployment.ts (134 lines) — 9 feature flags all default OFF via getFlag(..., false): realPayments, pickupAttributionEnforcement, drDrillMode, outboxPublisher, concurrencyControl, requestHashEnforcement, webhookHandler, reconciliationAutoRepair, invariantChecker.
+- Listed mini-services/ — 9 services present (realtime/alert-evaluator/backup-scheduler/consumer-portal/vendor-portal/admin-portal/outbox-publisher/reconciliation/invariant-checker). Grep'd PORT constants:
+  - realtime/index.ts:71 → PORT = 3003
+  - backup-scheduler/index.ts:24 → PORT = 3004
+  - alert-evaluator/index.ts:19 → PORT = 3005
+  - consumer-portal/index.ts:5 → PORT = 3006
+  - vendor-portal/index.ts:5 → PORT = 3007
+  - admin-portal/index.ts:5 → PORT = 3008
+  - outbox-publisher/index.ts:45 → PORT = parseInt(process.env.OUTBOX_PUBLISHER_PORT || '3009', 10)
+  - reconciliation/index.ts:36 → PORT = parseInt(process.env.RECONCILIATION_PORT || '3010', 10)
+  - invariant-checker/index.ts:40 → PORT = parseInt(process.env.INVARIANT_CHECKER_PORT || '3011', 10)
+- Read package.json — ZERO Firebase deps (no `firebase`, no `firebase-admin`). Auth deps: `@supabase/supabase-js@^2.112.2`, `next-auth@^4.24.11`, `jose@^6.2.8`. Payment: `razorpay@^2.9.8`. Realtime: `socket.io@^4.8.3` + `socket.io-client@^4.8.3`.
+- Read src/lib/realtime.ts (62 lines) — line 7 STILL hardcodes `REALTIME_URL = 'http://localhost:3003'` (SB-3 follow-up — NOT yet refactored to process.env.REALTIME_URL).
+- Read PRODUCTION_READINESS_READ_PLAN_FIRST.md §7 (lines 171-193) — E9 verification procedure documented: (1) configure Razorpay TEST-mode keys on staging, (2) enable realPayments=true on staging ONLY, (3) trigger capture with X-Idempotency-Key, (4) force publisher retry, (5) verify Razorpay dedupes, (6) verify 1 Payment + 1 LedgerEntry pair + 1 Outbox, (7) repeat for refund, (8) capture evidence JSON. E9 NOT a direct §14.1 launch-gate condition; rolls up under Cond #3.
+- Verified staging Supabase project ref `zmzqqcyapcezmaqvuzzd` — referenced in STAGING_ARCHITECTURE.md line 143, DR_RUNBOOK.md line 13, INFRASTRUCTURE_READINESS.md line 131. This is the EXISTING staging project; Phase 3 production requires a SEPARATE Supabase project (Option B per STAGING_ARCHITECTURE.md §2.3).
+- READ-ONLY audit honored: no files modified; no migrations; no deploys; no flag enablements; no drills executed; no production systems touched.
+
+Stage Summary:
+- HB-7 (Production Supabase project): ❌ FAIL — operator MUST provision SEPARATE Supabase project in ap-northeast-1 (Option B per STAGING_ARCHITECTURE.md §2.3 line 148-155); apply postgres-migration.sql + create-roles.sql + revoke-worm.sql + seed-postgres.sql + Wave-1..5 sub-wave migration SQL; schema.prisma ALREADY at provider=postgresql (line 14); staging project zmzqqcyapcezmaqvuzzd currently shared (Option A). Evidence required: production Supabase project URL + ref + psql SELECT current_user='snakzap_app' verification + tamper-test.sh PASS. Reversible: yes — drop project (no shared dependencies).
+- HB-8 (Production Vercel env vars): ❌ FAIL — STALE count of 26 (per INFRASTRUCTURE_READINESS.md §4.3 line 304 + ENV_VAR_AUDIT.md §6 line 151); Firebase elimination (commit 1890fed) reduced to ~17 vars. Effective list: NODE_ENV (auto), LOG_LEVEL, DATABASE_URL (Transaction Pooler port 6543 role snakzap_app), SUPABASE_URL, SUPABASE_SECRET_KEY, SUPABASE_JWKS_URL, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY, DIRECT_URL (EMPTY on Vercel), REALTIME_URL (Phase-3 — not yet in source), 9 FEATURE_* flags, 3 GitHub secrets (VERCEL_TOKEN/VERCEL_ORG_ID/VERCEL_PROJECT_ID). ENV_VAR_AUDIT.md is STALE (still lists 9 Firebase vars at lines 38-46, 90, 108-110, 128, 143; references deleted src/lib/firebase-admin.ts and src/lib/firebase.ts).
+- HB-9 (Fly.io mini-services): ❌ FAIL — operator MUST provision Fly.io apps in nrt region. 9 mini-services in repo; HB-9 explicitly mentions only realtime (3003), alert-evaluator (3005), outbox-publisher (3009) per gate review line 363. Production reality requires additional services: reconciliation (3010) + invariant-checker (3011) (deployed but not in HB-9 text). backup-scheduler (3004) needs pg_dump rewrite (Phase 3 — Vercel Cron preferred per STATEFUL_SERVICES_HOSTING.md §1.3 line 84). 3 portal shims (consumer/vendor/admin-portal ports 3006/3007/3008) are RETIRED on Vercel (redundant per §1.4-1.6). NO Dockerfiles or fly.toml files exist (only recommended shapes in §4.1, §4.2, §5.1, §5.2 of STATEFUL_SERVICES_HOSTING.md). Evidence required: Fly.io app URLs + /health endpoints returning 200 + `fly status` showing running machines.
+- HB-10 (Razorpay production API keys): ❌ FAIL — operator must provision RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET. Production CANNOT proceed with realPayments=true without HB-10 (per §7.1 line 417). Soft-launch with realPayments=false CAN proceed. E9 (TEST-mode creds) is separate/independent and rolls up under Cond #3, NOT directly HB-10. Evidence required: webhook signature verification (HMAC SHA-256) PASS + Razorpay dashboard webhook URL configured → production /api/webhooks/razorpay.
+- HB-11 (Supabase Auth production config): ❌ FAIL — gate review table line 365 NOW reads "Supabase Auth production configuration (URL, secret key, JWKS URL, anon key)" but doc body line 448 still says "Configure Firebase service account (HB-11)" — STALE. Required env vars: SUPABASE_URL, SUPABASE_SECRET_KEY, SUPABASE_JWKS_URL, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY. Comes FREE with HB-7 Supabase project (JWKS endpoint /auth/v1/.well-known/jwks.json per supabase-admin.ts:25 + STAGING_ARCHITECTURE.md §8.1 line 480). Dashboard config: Phone Auth provider enabled + SMS provider configured for IN numbers. Evidence required: server-side token verify PASS (verifySupabaseToken in supabase-admin.ts:40 returns uid + phone).
+- HB-12 (snakzap_app role + WORM REVOKE): ❌ FAIL — operator must apply create-roles.sql (126 lines) + revoke-worm.sql (99 lines) on production Supabase project. create-roles.sql creates snakzap_admin + snakzap_app roles (lines 22-44); grants snakzap_app SELECT+INSERT on AuditLog (line 85, NO UPDATE/DELETE/TRUNCATE). revoke-worm.sql REVOKE UPDATE/DELETE/TRUNCATE on AuditLog from snakzap_app (lines 20-27) + system-catalog assertion with RAISE EXCEPTION on violation (lines 78-80). Must run as postgres superuser (per header comments). Evidence required: revoke-worm.sql verification query returns "NOT GRANTED ✅ (WORM boundary)" for UPDATE/DELETE/TRUNCATE + tamper-test.sh 5/5 PASS.
+- HB-13 (GitHub secrets + environments): ❌ FAIL — operator must configure 3 repo secrets (VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID) + 2 environments (staging no protection, production with required reviewers). deploy.yml header lines 13-20 document requirement; rollback.yml header lines 11-14 same. staging-rollback-drill.yml verifies secrets at lines 71-74. Evidence required: deploy.yml run successful end-to-end + rollback.yml workflow_dispatch reachable + production environment approval gate enforced.
+- HB-14 (outbox-publisher on Fly.io long-lived): ❌ FAIL — subset of HB-9 but specifically REQUIRED before realPayments=true (per gate review §7.1 line 415 + §7.2 line 431). mini-services/outbox-publisher/index.ts exists (1000+ lines). Env vars: OUTBOX_PUBLISHER_PORT (default 3009 line 45), OUTBOX_TRANSPORT_MODE (default 'http' line 40), DATABASE_URL (implicit via Prisma), CONSUMER_URL (for HTTP transport — line 858 throws if missing). Drains PAYMENT_CAPTURE_REQUESTED + PAYMENT_REFUND_REQUESTED outbox events. Evidence required: outbox-publisher /health 200 + processPaymentCaptureRequested() / processPaymentRefundRequested() handlers verified + Outbox rows transition PENDING → PUBLISHED.
+- HB-5 (DR drill) BLOCKERS: ❌ DRILL CANNOT RUN TODAY — blocked by (1) pg_dump rewrite NOT implemented (BACKUP_REPLACEMENT_PLAN.md is DESIGN ONLY — src/lib/backup.ts:36 still reads SQLite db/custom.db); (2) warm-standby Supabase project NOT provisioned (HB-7 prerequisite); (3) dr-drill.yml workflow NOT created (DR_RUNBOOK.md §6.1 line 158 says "to be created in Phase 3"); (4) Orchestrator authorization NOT granted.
+- HB-6 (Rollback drill) BLOCKERS: ❌ DRILL CANNOT RUN TODAY — blocked by (1) HB-13 (GitHub secrets + environments NOT configured — workflows would fail at secrets.VERCEL_TOKEN checks); (2) HB-8 (production Vercel deployment NOT live — rollback.yml targets production URL); (3) Orchestrator authorization NOT granted. rollback.yml (292 lines) + staging-rollback-drill.yml (241 lines) both AUTHORED but NEITHER formally executed as drill.
+- Gateway E9 dependency: ❌ BLOCKED — operator must supply Razorpay TEST-mode credentials (NOT production — those are HB-10). Verification procedure per PRODUCTION_READINESS_READ_PLAN_FIRST.md §7 lines 177-185: capture with X-Idempotency-Key → retry → verify Razorpay dedup → verify 1 Payment + 1 LedgerEntry pair + 1 Outbox → repeat for refund → capture evidence JSON mode:real ok:true. Can be done IN PARALLEL with HB-7..HB-14 (independent). Does NOT block demo-mode soft launch; DOES block Cond #3 + realPayments=true activation.
+- Production flags: 9 flags in src/lib/deployment.ts:25-84 (realPayments, pickupAttributionEnforcement, drDrillMode, outboxPublisher, concurrencyControl, requestHashEnforcement, webhookHandler, reconciliationAutoRepair, invariantChecker) — ALL default false via getFlag(..., false). For production: concurrencyControl + requestHashEnforcement LOW-RISK candidates for early enablement (per §7.1 lines 413-414); outboxPublisher requires HB-14; webhookHandler requires HB-10 + SB-13; realPayments requires HB-1, HB-2, HB-14, HB-15, HB-10, webhookHandler=true (most consequential per §7.1 line 417); pickupAttributionEnforcement now SATISFIED post-HB-4 (Wave-7 closed); drDrillMode NEVER in production traffic; reconciliationAutoRepair + invariantChecker require separate Orchestrator authorization.
+- Documentation STALE: (1) INFRASTRUCTURE_READINESS.md §4.3 line 304 still claims 26 env vars; (2) INFRASTRUCTURE_READINESS.md §7 line 413 still says "schema.prisma Line 9 still provider = sqlite" — ACTUAL file shows provider = "postgresql" at line 14; (3) ENV_VAR_AUDIT.md still lists 9 Firebase vars (lines 38-46, 90, 108-110, 128, 143); (4) PRODUCTION_READINESS_GATE_REVIEW.md §7.2 Phase 3 line 448 still says "Configure Firebase service account (HB-11)"; (5) TRANSACTION_RETRY_INVARIANT.md §8.3 lines 539-541 still say "pre-generated idempotency key for createRazorpayOrder() still deferred" — actually DONE per Gateway Idempotency rebuild cd4ae6a.
+- READ-ONLY audit honored: no files modified; no migrations; no deploys; no flag enablements; no drills executed; no production systems touched.
+
+---
+Task ID: PRODUCT-FOUNDATION-IMPLEMENT-01 / OVERVIEW
+Agent: IDE (Orchestrator-side)
+Task: PRODUCT-FOUNDATION-IMPLEMENT-01 — build real product UI vertical slice (Consumer → Cart → Checkout → Order → Vendor → Pickup)
+
+Work Log:
+- Read/PLAN-FIRST: inventoried existing snak components (consumer-view 456 LOC, vendor-view 294 LOC, admin-view 340 LOC, order-tracking 111 LOC, phone-otp-login 220 LOC)
+- Read all critical API contracts: POST /api/orders, POST /api/payments, PATCH /api/orders/[id]/status, PATCH /api/orders/[id]/fulfilment (P0-06), POST /api/orders/[id]/pickup/verify (P0-07), POST /api/auth/otp/send
+- Read pickup-attribution.ts (6-check + cross-credential gate), snack.ts (STATUS_META — missing 'PAID'), cart-store.ts, types.ts, validation.ts (otpPurposeSchema includes 'pickup' but otpSendBodySchema REJECTS it)
+- Identified gaps: U5 (checkout screen missing), U6 (payment step missing — no payment UI at all), U10 (vendor uses legacy /status not P0-06 /fulfilment), U12 (pickup-verify otpId not surfaced — GAP REPORT)
+- Confirmed demo mode (realPayments=OFF) accept any signature in /api/payments → enables UI-only payment step without backend changes
+- Authorized 3 parallel implementation tasks (Task 1/2/3) + 1 sequential integration task (Task 4)
+
+Stage Summary:
+- Governance HOLD respected: no P0-06/P0-07 redesign, no gateway idempotency change, no flag activation
+- 3 parallel tasks dispatched to full-stack-developer subagents
+- GAP REPORT for U12 (pickup-verify otpId surfacing) deferred — vertical slice uses legacy PICKED_UP (flag OFF, backward-compatible)
+- Baseline: ed7ab36 (content unchanged)

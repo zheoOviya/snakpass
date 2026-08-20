@@ -6,7 +6,11 @@ import { Badge } from '@/components/ui/badge'
 import { STATUS_META, inr, statusHistoryArray, timeAgo } from '@/lib/snack'
 import type { Order } from '@/lib/types'
 
-const FLOW = ['CONFIRMED', 'PREPARING', 'ALMOST_READY', 'READY_FOR_PICKUP', 'PICKED_UP']
+// PAID appears between CONFIRMED and PREPARING — the consumer flow is now
+// browse → cart → checkout → pay (status becomes PAID) → PREPARING …
+// Legacy unpaid orders that are still CONFIRMED will render with the first
+// step as "done" (since indexOf('CONFIRMED') === 0).
+const FLOW = ['CONFIRMED', 'PAID', 'PREPARING', 'ALMOST_READY', 'READY_FOR_PICKUP', 'PICKED_UP']
 
 export function OrderTracking({ order }: { order: Order }) {
   const meta = STATUS_META[order.status] ?? STATUS_META.CONFIRMED

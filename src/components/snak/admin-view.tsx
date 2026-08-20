@@ -35,33 +35,52 @@ export function AdminView() {
   const { toast } = useToast()
 
   const refreshMetrics = useCallback(async () => {
-    const res = await fetch('/api/admin/metrics')
-    const d = await res.json()
-    setData(d)
-  }, [])
+    try {
+      const res = await fetch('/api/admin/metrics', { cache: 'no-store' })
+      if (!res.ok) throw new Error(`Failed to load metrics (${res.status})`)
+      const d = await res.json()
+      setData(d)
+    } catch (e) {
+      toast({ title: 'Metrics load failed', description: (e as Error).message, variant: 'destructive' })
+    }
+  }, [toast])
 
   const refreshOrders = useCallback(async () => {
-    const res = await fetch('/api/orders?role=admin&limit=100')
-    const d = await res.json()
-    setOrders(d.orders ?? [])
-  }, [])
+    try {
+      const res = await fetch('/api/orders?role=admin&limit=100', { cache: 'no-store' })
+      if (!res.ok) throw new Error(`Failed to load orders (${res.status})`)
+      const d = await res.json()
+      setOrders(d.orders ?? [])
+    } catch (e) {
+      toast({ title: 'Orders load failed', description: (e as Error).message, variant: 'destructive' })
+    }
+  }, [toast])
 
   const refreshSwitches = useCallback(async () => {
-    const res = await fetch('/api/kill-switches')
-    const d = await res.json()
-    setSwitches(d.switches ?? [])
-  }, [])
+    try {
+      const res = await fetch('/api/kill-switches', { cache: 'no-store' })
+      if (!res.ok) throw new Error(`Failed to load kill switches (${res.status})`)
+      const d = await res.json()
+      setSwitches(d.switches ?? [])
+    } catch (e) {
+      toast({ title: 'Kill switches load failed', description: (e as Error).message, variant: 'destructive' })
+    }
+  }, [toast])
 
   const refreshLogs = useCallback(async () => {
-    const res = await fetch('/api/audit-logs?limit=30')
-    const d = await res.json()
-    setLogs(d.logs ?? [])
-  }, [])
+    try {
+      const res = await fetch('/api/audit-logs?limit=30', { cache: 'no-store' })
+      if (!res.ok) throw new Error(`Failed to load audit logs (${res.status})`)
+      const d = await res.json()
+      setLogs(d.logs ?? [])
+    } catch (e) {
+      toast({ title: 'Audit logs load failed', description: (e as Error).message, variant: 'destructive' })
+    }
+  }, [toast])
 
   useEffect(() => {
     let active = true
     // Initial data load — fetch helpers call setState; this is intentional.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     Promise.all([refreshMetrics(), refreshOrders(), refreshSwitches(), refreshLogs()]).finally(() => {
       if (active) setLoading(false)
     })
@@ -101,10 +120,11 @@ export function AdminView() {
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify({ enabled: next }),
         })
-        toast({ title: `${sw.label} ${next ? 'ENABLED' : 'disabled'}`, variant: next ? 'destructive' : 'default' })
-        refreshLogs()
-      } catch {
+        toast({ title: `${sw.label} ${next ? 'enabled' : 'disabled'}`, variant: next ? 'destructive' : 'default' })
+        void refreshLogs()
+      } catch (e) {
         setSwitches((s) => s.map((x) => (x.key === sw.key ? { ...x, enabled: !next } : x)))
+        toast({ title: 'Toggle failed', description: (e as Error).message, variant: 'destructive' })
       }
     },
     [toast, refreshLogs],
@@ -135,7 +155,7 @@ export function AdminView() {
             <span className={`h-1.5 w-1.5 rounded-full bg-emerald-500 ${connected ? 'snak-live-dot' : ''}`} /> {connected ? 'Live' : 'Offline'}
           </span>
         </div>
-        <Button variant="ghost" size="sm" onClick={() => { refreshMetrics(); refreshOrders(); refreshLogs() }}>
+        <Button variant="ghost" size="sm" onClick={() => { void refreshMetrics(); void refreshOrders(); void refreshSwitches(); void refreshLogs() }}>
           <Activity className="mr-1 h-4 w-4" /> Refresh
         </Button>
       </div>
@@ -257,8 +277,8 @@ export function AdminView() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="max-h-96 overflow-y-auto snak-scroll">
-            <table className="w-full text-sm">
+          <div className="max-h-96 overflow-auto snak-scroll">
+            <table className="w-full min-w-[640px] text-sm">
               <thead className="sticky top-0 bg-card">
                 <tr className="border-b text-left text-xs text-muted-foreground">
                   <th className="py-2 pr-2 font-medium">Order</th>
