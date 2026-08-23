@@ -137,6 +137,23 @@ export const GET = (req: NextRequest) =>
     // -------------------------------------------------------------------------
     // Step 4 — compose + sanitize each activity row.
     // -------------------------------------------------------------------------
+    // S2: batch-fetch likeCount + likedByMe for all feed activities
+    const activityIds = rows.map((r) => r.id)
+    let likeCountMap = new Map<string, number>()
+    let likedByMeSet = new Set<string>()
+    if (activityIds.length > 0) {
+      const allLikes = await db.like.findMany({
+        where: { activityId: { in: activityIds } },
+        select: { activityId: true, userId: true },
+      })
+      for (const like of allLikes) {
+        likeCountMap.set(like.activityId, (likeCountMap.get(like.activityId) ?? 0) + 1)
+        if (like.userId === session.userId) {
+          likedByMeSet.add(like.activityId)
+        }
+      }
+    }
+
     const activities = rows.map((r) => {
       const actor = actorMap.get(r.actorId)
       // Parse the stored metadata JSON, then re-sanitize on READ (defense-in-depth).
@@ -166,6 +183,9 @@ export const GET = (req: NextRequest) =>
         targetUserName: typeof sanitizedMetadata.targetUserName === 'string' ? sanitizedMetadata.targetUserName : undefined,
         metadata: sanitizedMetadata,
         visibility: r.visibility,
+        // S2: authoritative like state from DB
+        likeCount: likeCountMap.get(r.id) ?? 0,
+        likedByMe: likedByMeSet.has(r.id),
         createdAt: r.createdAt.toISOString(),
       }
     })

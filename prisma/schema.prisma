@@ -1157,6 +1157,24 @@ model SocialActivity {
 }
 
 // ---------------------------------------------------------------------------
+// GJ-02 S2: Persistent Likes
+// ---------------------------------------------------------------------------
+// A Like is a user's endorsement of a SocialActivity. Exactly one Like per
+// user per activity (enforced by @@unique([userId, activityId])). The likeCount
+// for an activity is derived via COUNT(*) on this table.
+// ---------------------------------------------------------------------------
+model Like {
+  id          String   @id @default(cuid())
+  userId      String   // the user who liked (always from session, never client-supplied)
+  activityId  String   // the SocialActivity being liked
+  createdAt   DateTime @default(now())
+
+  @@unique([userId, activityId])
+  @@index([activityId])
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
 // Notification context
 // ---------------------------------------------------------------------------
 // Simple notification store. Read by GET /api/notifications (Wave 2+).

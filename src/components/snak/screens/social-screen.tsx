@@ -85,6 +85,7 @@ export function SocialScreen({ initialSubTab = 'feed', className }: SocialScreen
 
   // ── social-store hooks (Task 1C) ─────────────────────────────────────────
   const feed = useSocial((s) => s.feed)
+  const setFeed = useSocial((s) => s.setFeed)
   const connections = useSocial((s) => s.connections)
   const isLoading = useSocial((s) => s.isLoading)
   const error = useSocial((s) => s.error)
@@ -138,16 +139,49 @@ export function SocialScreen({ initialSubTab = 'feed', className }: SocialScreen
   }
 
   async function handleLike(activity: SocialActivity) {
-    // S1 Reconstruction: Like persistence is NOT implemented at S1 (S2 wave
-    // owns the Like model + API). The old handler showed a false "Liked"/"Unliked"
-    // toast implying persistence — that was a FALSE_SUCCESS_STATE. Now we
-    // truthfully tell the user likes are coming soon (no persistence implied).
+    // S2: Real persistent Like via POST/DELETE /api/social/activities/[id]/like
     if (likingId) return
     setLikingId(activity.id)
+
+    const wasLiked = !!activity.likedByMe
+    const oldCount = activity.likeCount ?? 0
+
+    // Optimistic update
+    setFeed((prev) =>
+      prev.map((a) =>
+        a.id === activity.id
+          ? { ...a, likedByMe: !wasLiked, likeCount: wasLiked ? oldCount - 1 : oldCount + 1 }
+          : a,
+      ),
+    )
+
     try {
+      const csrfFetch = (await import('@/lib/csrf-client')).csrfFetch
+      const method = wasLiked ? 'DELETE' : 'POST'
+      const res = await csrfFetch(`/api/social/activities/${activity.id}/like`, { method })
+      if (!res.ok) throw new Error(`Failed (${res.status})`)
+      const data = await res.json()
+      // Reconcile with server truth
+      setFeed((prev) =>
+        prev.map((a) =>
+          a.id === activity.id
+            ? { ...a, likedByMe: data.liked, likeCount: data.likeCount }
+            : a,
+        ),
+      )
+    } catch {
+      // Rollback to pre-optimistic state
+      setFeed((prev) =>
+        prev.map((a) =>
+          a.id === activity.id
+            ? { ...a, likedByMe: wasLiked, likeCount: oldCount }
+            : a,
+        ),
+      )
       toast({
-        title: 'Likes coming soon',
-        description: `You'll be able to like ${activity.actorName}'s activity in a future release.`,
+        title: 'Could not update like',
+        description: 'Please try again.',
+        variant: 'destructive',
       })
     } finally {
       setLikingId(null)

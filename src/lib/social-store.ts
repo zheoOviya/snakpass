@@ -37,6 +37,9 @@ export interface SocialState {
   isLoading: boolean
   error: string | null
 
+  /** S2: Allow direct feed updates (optimistic + reconcile for likes). */
+  setFeed: (updater: (prev: SocialActivity[]) => SocialActivity[]) => void
+
   /** Re-fetch connections + feed. Idempotent read; safe to call repeatedly. */
   refresh: () => Promise<void>
 
@@ -62,6 +65,8 @@ export const useSocial = create<SocialState>()((set, get) => ({
   feed: [],
   isLoading: false,
   error: null,
+
+  setFeed: (updater) => set((state) => ({ feed: updater(state.feed) })),
 
   refresh: async () => {
     set({ isLoading: true, error: null })
