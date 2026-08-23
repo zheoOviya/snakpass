@@ -1,0 +1,240 @@
+SESS_A=9a1ea01c8bbc.. CSRF_A=265f7ceb.. DBUID_A=cmt61ykoq000lqp86mumxi2oh
+SESS_B=fd2cff65042d.. CSRF_B=044b7973.. DBUID_B=cmt61ykw7000qqp861z73s3oz
+A_ACT_ID=cmt628ejg001dqp8612h96lom (FRIENDS)
+A_PUB_ID=cmt628ekk001eqp86rd2jkm5m (PUBLIC)
+
+=============================================================================
+PHASE 2 — BROWSER AUTHENTICATION
+=============================================================================
+  Auth A:
+  --- Browser auth A ---
+✓ Cookies cleared
+✓ Done
+✓ Done
+  http://localhost:3000/consumer
+    /api/auth/me: "cmt61ykoq000" (expected cmt61ykoq000)
+    Consumer DOM: "APP"
+  http://localhost:3000/consumer
+    Reload: "cmt61ykoq000"
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P2-A-auth.png
+  Auth B:
+  --- Browser auth B ---
+✓ Cookies cleared
+✓ Done
+✓ Done
+  http://localhost:3000/consumer
+    /api/auth/me: "cmt61ykw7000" (expected cmt61ykw7000)
+    Consumer DOM: "APP"
+  http://localhost:3000/consumer
+    Reload: "cmt61ykw7000"
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P2-B-auth.png
+
+=============================================================================
+PHASE 3 — ACCEPTED-FRIEND POSITIVE CONTROL
+=============================================================================
+  --- Browser auth A ---
+✓ Cookies cleared
+✓ Done
+✓ Done
+  http://localhost:3000/consumer
+    /api/auth/me: "cmt61ykoq000" (expected cmt61ykoq000)
+    Consumer DOM: "APP"
+  http://localhost:3000/consumer
+    Reload: "cmt61ykoq000"
+  Navigate Social → Friends:
+"CLICKED"
+    Friends: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P3-01-friends-accepted.png
+  B visible (User 5002): "VISIBLE"
+  Block control: "FOUND:Block User 5002"
+  Unfriend control: "FOUND"
+  Network GET /api/social/connections: 200
+  http://localhost:3000/consumer
+"CLICKED"
+    Friends: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P3-02-after-reload.png
+  Reload B visible: "VISIBLE"
+  DB A→B: ACCEPTED
+  DB B→A: ACCEPTED
+
+=============================================================================
+PHASE 4 — A BLOCKS B
+=============================================================================
+"OVERRIDE"
+  Click Block B:
+"CLICKED:Block User 5002"
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P4-01-after-block.png
+  DOM: Unblock control visible: "NOT_FOUND"
+  DOM: ordinary Block absent: "ABSENT"
+  DB A→B: BLOCKED blockedBy=cmt61ykoq000
+  DB B→A: BLOCKED blockedBy=cmt61ykoq000
+  DB PENDING: 0
+  Connection row IDs:
+    id=cmt61yl09000.. A→B status=BLOCKED blockedBy=cmt61ykoq000
+    id=cmt61yljc000.. B→A status=BLOCKED blockedBy=cmt61ykoq000
+  http://localhost:3000/consumer
+"CLICKED"
+    Friends: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P4-02-after-reload.png
+  Reload: Unblock visible: "NOT_FOUND"
+  Reload DB: BLOCKED blockedBy=cmt61ykoq000
+  CONN_ID=cmt61yl09000tqp86v0kvbazl
+
+=============================================================================
+PHASE 5 — B RECONNECT BLOCKED
+=============================================================================
+  --- Browser auth B ---
+✓ Cookies cleared
+✓ Done
+✓ Done
+  http://localhost:3000/consumer
+    /api/auth/me: "cmt61ykw7000" (expected cmt61ykw7000)
+    Consumer DOM: "APP"
+  http://localhost:3000/consumer
+    Reload: "cmt61ykw7000"
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P5-01-B-auth.png
+"CLICKED"
+    Friends: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P5-02-B-friends.png
+  Search for A (+919999995001):
+"TYPED"
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P5-03-B-search.png
+  DOM: A in results: "FOUND"
+  DOM: Add friend control: "NOT_FOUND"
+  API: POST B→A (expect 403):
+    Status: 403 (expected 403)
+  Pair still BLOCKED: BLOCKED blockedBy=cmt61ykoq000
+  PENDING delta (expected 0): 0
+  New FRIEND_REQUEST_RECEIVED for A (expected 0): 0
+
+=============================================================================
+PHASE 6 — FRIENDS PRIVACY ISOLATION
+=============================================================================
+"CLICKED"
+    Feed: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P6-01-B-feed.png
+  DOM: A's FRIENDS activity (S4A-Closure09-Secret-Dosa): "ABSENT(OK)"
+  DOM: positive-control PUBLIC (S4A-Closure09-Public-Samosa): "ABSENT"
+  Network GET /api/social/feed: 200
+  API: A's FRIENDS activity in B feed (expected 0): 0 found
+  API: PUBLIC activity in B feed (expected 1): 0 found
+  http://localhost:3000/consumer
+"CLICKED"
+    Feed: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P6-02-after-reload.png
+  Reload: A's FRIENDS activity: "ABSENT(OK)"
+  DB: pair BLOCKED: BLOCKED
+
+=============================================================================
+PHASE 7 — BLOCKED LIKE PROTECTION
+=============================================================================
+  Browser: target FRIENDS activity absent: "ABSENT(OK)"
+  Browser: Like control absent: "ABSENT"
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P7-01-like-absent.png
+  API: POST B likes A's FRIENDS activity (expect 403):
+    Status: 403 (expected 403)
+  Like rows delta (expected 0): 0
+  SOCIAL_ACTIVITY_LIKED notif for A (expected 0): 0
+  http://localhost:3000/consumer
+"CLICKED"
+    Feed: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P7-02-after-reload.png
+  Reload: A's activity: "ABSENT(OK)"
+
+=============================================================================
+PHASE 8 — B CANNOT REMOVE A'S BLOCK
+=============================================================================
+  --- Browser auth B ---
+✓ Cookies cleared
+✓ Done
+✓ Done
+  http://localhost:3000/consumer
+    /api/auth/me: "cmt61ykw7000" (expected cmt61ykw7000)
+    Consumer DOM: "APP"
+  http://localhost:3000/consumer
+    Reload: "cmt61ykw7000"
+"CLICKED"
+    Friends: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P8-01-B-friends.png
+  DOM: Unblock A absent: "ABSENT(OK)"
+  DOM: Unfriend A absent: "ABSENT"
+  API: DELETE blocked (expect 403):
+    Status: 403 (expected 403)
+  API: PATCH UNBLOCK by B (expect 403):
+    Status: 403 (expected 403)
+  DB: pair BLOCKED intact: BLOCKED blockedBy=cmt61ykoq000
+  http://localhost:3000/consumer
+"CLICKED"
+    Friends: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P8-02-after-reload.png
+  Reload: Unblock absent: "ABSENT(OK)"
+  Reload DB: BLOCKED blockedBy=cmt61ykoq000
+
+=============================================================================
+PHASE 9 — A UNBLOCKS B
+=============================================================================
+  --- Browser auth A ---
+✓ Cookies cleared
+✓ Done
+✓ Done
+  http://localhost:3000/consumer
+    /api/auth/me: "cmt61ykoq000" (expected cmt61ykoq000)
+    Consumer DOM: "APP"
+  http://localhost:3000/consumer
+    Reload: "cmt61ykoq000"
+"CLICKED"
+    Friends: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P9-01-A-friends-blocked.png
+  Unblock B visible: "NOT_FOUND"
+  Click Unblock B:
+"NOT_FOUND"
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P9-02-after-unblock.png
+  DOM: blocked relationship gone: "UNBLOCKED(OK)"
+  DB pair rows (expected 0): 2
+  DB PENDING (expected 0): 0
+  DB ACCEPTED (expected 0): 0
+  DB BLOCKED (expected 0): 2
+  http://localhost:3000/consumer
+"CLICKED"
+    Friends: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P9-03-after-reload.png
+  Reload: no B visible: "ABSENT(OK)"
+  Reload DB: pair rows = 0: 2
+
+=============================================================================
+PHASE 10 — POST-UNBLOCK RECOVERY
+=============================================================================
+  A's notification count pre-request: 1
+  --- Browser auth B ---
+✓ Cookies cleared
+✓ Done
+✓ Done
+  http://localhost:3000/consumer
+    /api/auth/me: "cmt61ykw7000" (expected cmt61ykw7000)
+    Consumer DOM: "APP"
+  http://localhost:3000/consumer
+    Reload: "cmt61ykw7000"
+"CLICKED"
+    Friends: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P10-01-B-friends.png
+  Search for A (+919999995001):
+"TYPED"
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P10-02-B-search.png
+  DOM: A in results: "FOUND"
+  Add friend control visible: "NOT_FOUND"
+  Click Send friend request to A:
+"NOT_FOUND"
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P10-03-after-request.png
+  DOM: Pending state: "NO_PENDING"
+  DB B→A: BLOCKED
+  DB PENDING (expected 1): 0
+  http://localhost:3000/consumer
+"CLICKED"
+    Friends: found at 1s
+✓ Screenshot saved to /home/z/my-project/evidence/gj02-s4a-closure09/P10-04-after-reload.png
+  Reload: B→A: BLOCKED
+  New FRIEND_REQUEST_RECEIVED for A: 0 new (expected 1)
+
+=============================================================================
+BROWSER PHASES COMPLETE
+=============================================================================

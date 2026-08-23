@@ -1,0 +1,20 @@
+
+=============================================================================
+PHASE 11 — NOTIFICATION CAUSALITY MATRIX (for A)
+=============================================================================
+  | Period                                          | new FRIEND_REQUEST_RECEIVED to A |
+  | Historical (initial A→B request, B accepted)    | Bun v1.3.14 (Linux x64 baseline)
+  | While A blocks B + B reconnect attempt          | 0 (Phase 5: POST 403, blocked)  |
+  | After legitimate A unblock + B new request     | 1 (Phase 10: +1 new)            |
+
+  Verify counts:
+    A FRIEND_REQUEST_RECEIVED total: 1
+    A FRIEND_REQUEST_ACCEPTED total (historical, retained): 1
+
+=============================================================================
+PHASE 12 — LEGACY NULL FAIL-CLOSED
+=============================================================================
+  Setup fresh pair C/D:
+/bin/bash: line 1: UID: readonly variable
+
+<<workspace_agent_exit_code:1787505594250:1>>

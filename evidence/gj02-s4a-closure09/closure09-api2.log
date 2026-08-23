@@ -1,0 +1,44 @@
+=============================================================================
+PHASE 12 — LEGACY NULL FAIL-CLOSED
+=============================================================================
+  Setup fresh pair C/D:
+    C: dbuid=cmt62ofx7001..
+    D: dbuid=cmt62puj5001..
+  C sends request to D, D accepts:
+  C↔D ACCEPTED. CONN_CD=cmt62pula0021qp86654qcn14
+  Set legacy NULL state (BLOCKED, blockedBy=NULL):
+  State: BLOCKED blockedBy=NULL
+  Challenges (all expected 403):
+    C request → D: 403
+    D request → C: 403
+    C DELETE blocked: 403
+    D DELETE blocked: 403
+    C UNBLOCK: 403
+    D UNBLOCK: 403
+  DB unchanged: BLOCKED blockedBy=NULL
+
+=============================================================================
+PHASE 13 — CLOSED-WAVE REGRESSION SMOKE
+=============================================================================
+  --- S1: fresh pair E/F ---
+    E: dbuid=cmt62pv54002..
+    F: dbuid=cmt62pveh002..
+  E sends request to F: 201
+  F accepts: 200
+  E→F: ACCEPTED
+  F→E: ACCEPTED
+  E's FRIENDS activity: cmt62pvkg002rqp86fzozl6p6
+  F sees E's FRIENDS activity (expected 1): 1 found
+  C (unrelated) sees E's FRIENDS activity (expected 0): 0 found
+  --- S2: Like/unlike on E's activity (by F) ---
+  F likes E's activity: 200
+  Like persists (expected 1): 1
+  Duplicate like (status): 200
+  Like count still 1: 1
+  F unlikes: 200
+  Like count now 0: 0
+  --- S3: deterministic FRIEND_REQUEST_RECEIVED ---
+  F's FRIEND_REQUEST_RECEIVED count (expected 1): 1
+  F's FRIEND_REQUEST_RECEIVED dedupKey: FRIEND_REQUEST_RECEIVED:cmt62pvgd002jqp86k1qfxvn3
+
+=== PHASES 12-13 COMPLETE ===
