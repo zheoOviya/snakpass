@@ -113,6 +113,11 @@ export const GET = () =>
         message: r.message ?? null,
         createdAt: r.createdAt.toISOString(),
         acceptedAt: r.acceptedAt ? r.acceptedAt.toISOString() : null,
+        // S4A Unblock-UI-Reachability: expose blockedBy so the FriendsScreen can
+        // determine whether the current user is the blocker (and thus should see
+        // the Unblock control). This is a data-exposure addition only — it does
+        // NOT change any authorization logic (PATCH/DELETE still enforce ownership).
+        blockedBy: r.blockedBy ?? null,
       }
     })
 

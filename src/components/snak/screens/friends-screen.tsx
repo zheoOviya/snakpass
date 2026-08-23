@@ -38,6 +38,7 @@ import {
   Clock,
   Loader2,
   AlertCircle,
+  Ban,
 } from 'lucide-react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
@@ -46,6 +47,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/hooks/use-toast'
 import { useSocial } from '@/lib/social-store'
+import { useAuth } from '@/hooks/use-auth'
 import { EmptyState } from '@/components/snak/empty-state'
 import { SocialFeedSkeleton } from '@/components/snak/skeleton-loader'
 import type { SocialConnection } from '@/lib/types'
@@ -145,6 +147,22 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
     () => new Set(connections.map((c) => c.userId)),
     [connections],
   )
+
+  // S4A Unblock-UI-Reachability: blocked connections surfaced in a dedicated
+  // "Blocked" section. Deduplicated by peer userId (the API returns 2 rows per
+  // blocked pair — both have the same blockedBy, so the first is representative).
+  const { user } = useAuth()
+  const blocked = React.useMemo(() => {
+    const seen = new Set<string>()
+    const result: SocialConnection[] = []
+    for (const c of connections) {
+      if (c.status === 'BLOCKED' && !seen.has(c.userId)) {
+        seen.add(c.userId)
+        result.push(c)
+      }
+    }
+    return result
+  }, [connections])
 
   // ── Search state (local — not in social-store by design) ───────────────────
   const [query, setQuery] = React.useState('')
@@ -541,6 +559,38 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
               </motion.ul>
             )}
           </section>
+
+          {/* S4A Unblock-UI-Reachability: Blocked users section.
+              Surfaces persisted BLOCKED connections so the blocker can reach
+              the Unblock control. Only the blocker (blockedBy === current user)
+              gets an enabled Unblock button; the blocked party sees a read-only
+              "Blocked" label with no action controls. Legacy NULL blockedBy is
+              fail-closed — no Unblock button for anyone. */}
+          {blocked.length > 0 && (
+            <section aria-labelledby="friends-blocked">
+              <h2
+                id="friends-blocked"
+                className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+              >
+                <Ban className="h-3 w-3 text-red-500" aria-hidden="true" />
+                Blocked
+                <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-bold text-red-700 dark:bg-red-950/60 dark:text-red-300">
+                  {blocked.length}
+                </span>
+              </h2>
+              <motion.ul variants={LIST_CONTAINER} className="space-y-2">
+                {blocked.map((c) => (
+                  <motion.li key={c.id} variants={LIST_ITEM}>
+                    <BlockedRow
+                      conn={c}
+                      isBlocker={!!user && c.blockedBy === user.userId}
+                      onUnblock={() => handleUnblock(c)}
+                    />
+                  </motion.li>
+                ))}
+              </motion.ul>
+            </section>
+          )}
         </motion.div>
       )}
     </div>
@@ -720,6 +770,76 @@ function FriendRow({ conn, onMessage, onUnfriend, onBlock, onUnblock }: FriendRo
             </Button>
           )}
         </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// S4A Unblock-UI-Reachability: BlockedRow
+//
+// Renders a BLOCKED connection in the "Blocked" section. Only the blocker
+// (blockedBy === current user) gets an enabled Unblock control. The blocked
+// party sees a read-only "Blocked" label — no Unblock, no Unfriend, no Message.
+// Legacy NULL blockedBy is fail-closed (no Unblock for anyone).
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface BlockedRowProps {
+  conn: SocialConnection
+  /** True when the current user is the blocker (blockedBy === user.userId). */
+  isBlocker: boolean
+  onUnblock: () => void
+}
+
+function BlockedRow({ conn, isBlocker, onUnblock }: BlockedRowProps) {
+  const [busy, setBusy] = React.useState(false)
+  return (
+    <Card className="overflow-hidden border-red-200/60 dark:border-red-900/40">
+      <CardContent className="flex items-center gap-3 p-3">
+        <Avatar className="h-10 w-10 ring-2 ring-red-300 ring-offset-2 ring-offset-background">
+          <AvatarFallback className="bg-gradient-to-br from-red-400 to-red-600 text-xs font-bold text-white">
+            {initials(conn.name) || '?'}
+          </AvatarFallback>
+        </Avatar>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-semibold text-foreground">{conn.name}</p>
+          {conn.phone && (
+            <p className="truncate text-xs text-muted-foreground">{conn.phone}</p>
+          )}
+        </div>
+        {isBlocker ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            onClick={async () => {
+              setBusy(true)
+              try {
+                await onUnblock()
+              } finally {
+                setBusy(false)
+              }
+            }}
+            disabled={busy}
+            className="h-8 px-2.5 text-xs text-muted-foreground hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/30 dark:hover:text-red-300"
+            aria-label={`Unblock ${conn.name}`}
+          >
+            {busy ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+            ) : (
+              <Ban className="h-3.5 w-3.5" aria-hidden="true" />
+            )}
+            <span className="sr-only sm:inline">Unblock</span>
+          </Button>
+        ) : (
+          <span
+            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-100 px-2.5 py-1 text-[11px] font-medium text-red-700 dark:bg-red-950/60 dark:text-red-300"
+            aria-label="Blocked by them"
+          >
+            <Ban className="h-3 w-3" aria-hidden="true" />
+            Blocked
+          </span>
+        )}
       </CardContent>
     </Card>
   )
