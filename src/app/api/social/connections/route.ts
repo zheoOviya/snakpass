@@ -113,11 +113,20 @@ export const GET = () =>
         message: r.message ?? null,
         createdAt: r.createdAt.toISOString(),
         acceptedAt: r.acceptedAt ? r.acceptedAt.toISOString() : null,
-        // S4A Unblock-UI-Reachability: expose blockedBy so the FriendsScreen can
-        // determine whether the current user is the blocker (and thus should see
-        // the Unblock control). This is a data-exposure addition only — it does
-        // NOT change any authorization logic (PATCH/DELETE still enforce ownership).
-        blockedBy: r.blockedBy ?? null,
+        // S4B Privacy/Abuse Repair-03 (P2): Replace raw `blockedBy` userId with
+        // a server-derived `canUnblock` boolean. This preserves the S4A UI
+        // reachability repair (blocker sees Unblock button) WITHOUT disclosing
+        // the blocker's raw userId to the blocked party.
+        //
+        // canUnblock = true ONLY when:
+        //   - row.status === 'BLOCKED'
+        //   - row.blockedBy === session.userId (current user is the blocker)
+        //
+        // Legacy NULL blockedBy → canUnblock = false (fail-closed).
+        // The raw `blockedBy` field is NO LONGER exposed in the external API.
+        // Backend S4A PATCH/DELETE authorization remains unchanged.
+        canUnblock:
+          r.status === 'BLOCKED' && r.blockedBy === session.userId,
       }
     })
 

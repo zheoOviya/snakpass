@@ -22,6 +22,8 @@ const RATE_LIMITS = {
   otpVerify: { limit: 5, windowMs: 10 * 60_000, mode: 'fail-closed' as LimiterMode },
   payment: { limit: 10, windowMs: WINDOW_MS, mode: 'fail-closed' as LimiterMode },
   adminWrite: { limit: 30, windowMs: WINDOW_MS, mode: 'fail-closed' as LimiterMode },
+  // S4B Privacy/Abuse Repair-03 (P4-C): search gets its own fail-closed bucket
+  search: { limit: 30, windowMs: WINDOW_MS, mode: 'fail-closed' as LimiterMode },
   general: { limit: 100, windowMs: WINDOW_MS, mode: 'fail-open' as LimiterMode },
 } as const
 
@@ -57,14 +59,26 @@ function classifyPath(pathname: string): keyof typeof RATE_LIMITS {
   if (pathname.startsWith('/api/payments')) return 'payment'
   if (pathname.startsWith('/api/kill-switches')) return 'adminWrite'
   if (pathname.startsWith('/api/menu')) return 'adminWrite'
+  // S4B Privacy/Abuse Repair-03 (P4-C): search is enumeration-sensitive →
+  // dedicated fail-closed bucket (30/min/IP at the middleware layer).
+  // A route-local per-user limiter is ALSO applied inside the route handler
+  // (P4-B) because middleware (Edge) cannot read the authenticated session.
+  if (pathname.startsWith('/api/social/search')) return 'search'
   return 'general'
 }
 
+// S4B Privacy/Abuse Repair-03 (P4-A): Extract client IP.
+//
+// SECURITY: NO LONGER trust client-supplied `x-forwarded-for`.
+// Previously an attacker could rotate XFF values to get fresh rate-limit
+// buckets (proven at runtime — Remaining reset from 95 to 99 on XFF change).
+//
+// New contract: trust `x-real-ip` (set by trusted reverse proxy like Caddy)
+// ONLY. Ignore `x-forwarded-for` entirely. Fallback: 'unknown' bucket.
 function getClientIP(req: NextRequest): string {
-  const forwarded = req.headers.get('x-forwarded-for')
-  if (forwarded) return forwarded.split(',')[0].trim()
   const realIP = req.headers.get('x-real-ip')
-  if (realIP) return realIP
+  if (realIP) return realIP.trim()
+  // Intentionally DO NOT read x-forwarded-for — it's client-spoofable.
   return 'unknown'
 }
 

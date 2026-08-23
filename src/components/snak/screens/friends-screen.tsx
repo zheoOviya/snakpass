@@ -47,7 +47,6 @@ import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/hooks/use-toast'
 import { useSocial } from '@/lib/social-store'
-import { useAuth } from '@/hooks/use-auth'
 import { EmptyState } from '@/components/snak/empty-state'
 import { SocialFeedSkeleton } from '@/components/snak/skeleton-loader'
 import type { SocialConnection } from '@/lib/types'
@@ -74,11 +73,15 @@ const LIST_ITEM: Variants = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** A user result from GET /api/social/search?q=. The backend may evolve the
- *  shape; we tolerate missing fields and only require `id` + `name`. */
+ *  shape; we tolerate missing fields and only require `id` + `name`.
+ *
+ *  S4B Privacy/Abuse Repair-03 (P1-A): `phone` removed from the response.
+ *  The server may still match by phone internally, but never echoes the stored
+ *  phone back. UI renders a neutral "SnakZap user" label instead. */
 export interface SocialSearchUser {
   id: string
   name: string
-  phone?: string
+  avatarColor?: string
   avatarUrl?: string
   campusName?: string
 }
@@ -148,10 +151,10 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
     [connections],
   )
 
-  // S4A Unblock-UI-Reachability: blocked connections surfaced in a dedicated
-  // "Blocked" section. Deduplicated by peer userId (the API returns 2 rows per
-  // blocked pair — both have the same blockedBy, so the first is representative).
-  const { user } = useAuth()
+  // S4B Privacy/Abuse Repair-03 (P2): blocked connections surfaced in a
+  // dedicated "Blocked" section. Deduplicated by peer userId (the API returns
+  // 2 rows per blocked pair). The server now derives `canUnblock` boolean —
+  // only the blocker receives canUnblock=true. No raw blockedBy userId.
   const blocked = React.useMemo(() => {
     const seen = new Set<string>()
     const result: SocialConnection[] = []
@@ -560,12 +563,12 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
             )}
           </section>
 
-          {/* S4A Unblock-UI-Reachability: Blocked users section.
-              Surfaces persisted BLOCKED connections so the blocker can reach
-              the Unblock control. Only the blocker (blockedBy === current user)
-              gets an enabled Unblock button; the blocked party sees a read-only
-              "Blocked" label with no action controls. Legacy NULL blockedBy is
-              fail-closed — no Unblock button for anyone. */}
+          {/* S4B Privacy/Abuse Repair-03 (P2): Blocked users section.
+              Surfaces persisted BLOCKED connections. The server derives
+              `canUnblock` — only the blocker (canUnblock=true) gets an enabled
+              Unblock button. The blocked party sees a read-only "Blocked" label
+              with no action controls. Legacy NULL blockedBy → canUnblock=false
+              (fail-closed — no Unblock button for anyone). */}
           {blocked.length > 0 && (
             <section aria-labelledby="friends-blocked">
               <h2
@@ -583,7 +586,7 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
                   <motion.li key={c.id} variants={LIST_ITEM}>
                     <BlockedRow
                       conn={c}
-                      isBlocker={!!user && c.blockedBy === user.userId}
+                      canUnblock={c.canUnblock === true}
                       onUnblock={() => handleUnblock(c)}
                     />
                   </motion.li>
@@ -776,22 +779,22 @@ function FriendRow({ conn, onMessage, onUnfriend, onBlock, onUnblock }: FriendRo
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// S4A Unblock-UI-Reachability: BlockedRow
+// S4B Privacy/Abuse Repair-03 (P2): BlockedRow
 //
 // Renders a BLOCKED connection in the "Blocked" section. Only the blocker
-// (blockedBy === current user) gets an enabled Unblock control. The blocked
-// party sees a read-only "Blocked" label — no Unblock, no Unfriend, no Message.
-// Legacy NULL blockedBy is fail-closed (no Unblock for anyone).
+// (canUnblock === true, server-derived) gets an enabled Unblock control. The
+// blocked party sees a read-only "Blocked" label — no Unblock, no Unfriend,
+// no Message. Legacy NULL blockedBy → canUnblock=false (fail-closed).
 // ─────────────────────────────────────────────────────────────────────────────
 
 interface BlockedRowProps {
   conn: SocialConnection
-  /** True when the current user is the blocker (blockedBy === user.userId). */
-  isBlocker: boolean
+  /** Server-derived: true only when the current user is the blocker. */
+  canUnblock: boolean
   onUnblock: () => void
 }
 
-function BlockedRow({ conn, isBlocker, onUnblock }: BlockedRowProps) {
+function BlockedRow({ conn, canUnblock, onUnblock }: BlockedRowProps) {
   const [busy, setBusy] = React.useState(false)
   return (
     <Card className="overflow-hidden border-red-200/60 dark:border-red-900/40">
@@ -807,7 +810,7 @@ function BlockedRow({ conn, isBlocker, onUnblock }: BlockedRowProps) {
             <p className="truncate text-xs text-muted-foreground">{conn.phone}</p>
           )}
         </div>
-        {isBlocker ? (
+        {canUnblock ? (
           <Button
             type="button"
             size="sm"
@@ -865,7 +868,7 @@ function SearchResultRow({ user, pending, onAdd }: SearchResultRowProps) {
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
           <p className="truncate text-xs text-muted-foreground">
-            {user.phone ?? user.campusName ?? 'SnakZap user'}
+            {user.campusName ?? 'SnakZap user'}
           </p>
         </div>
         {pending ? (

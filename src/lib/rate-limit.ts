@@ -56,6 +56,12 @@ export const RATE_LIMITS = {
   payment: { limit: 10, windowMs: WINDOW_MS, mode: 'fail-closed' as LimiterMode }, // 10 payment attempts/min
   adminWrite: { limit: 30, windowMs: WINDOW_MS, mode: 'fail-closed' as LimiterMode }, // 30 admin writes/min
 
+  // S4B Privacy/Abuse Repair-03 (P4-C): Search endpoint gets its own
+  // fail-closed bucket because it is an enumeration-sensitive surface.
+  // If the limiter backend is unavailable, search returns 503 (controlled
+  // failure) rather than allowing unrestricted enumeration.
+  search: { limit: 30, windowMs: WINDOW_MS, mode: 'fail-closed' as LimiterMode }, // 30 search req/min
+
   // Fail-open paths: general API
   general: { limit: 100, windowMs: WINDOW_MS, mode: 'fail-open' as LimiterMode }, // 100 req/min
 } as const
@@ -65,11 +71,26 @@ export function rateLimitKey(ip: string, pathType: keyof typeof RATE_LIMITS): st
   return `rl:${pathType}:${ip}`
 }
 
-// Extract client IP from request (handles proxy headers).
+// S4B Privacy/Abuse Repair-03 (P4-A): Extract client IP from request.
+//
+// SECURITY: We NO LONGER trust client-supplied `x-forwarded-for` directly.
+// Previously, an attacker could rotate XFF values to obtain fresh rate-limit
+// buckets (proven at runtime — X-RateLimit-Remaining reset from 95 to 99
+// when only XFF changed).
+//
+// New contract:
+//   - In production behind a trusted proxy (e.g. Caddy/Cloudflare), the proxy
+//     sets `x-real-ip` from the actual connection. We trust x-real-ip ONLY.
+//   - We IGNORE `x-forwarded-for` entirely — it is client-spoofable.
+//   - Fallback: 'unknown' (which gets its own bucket — fail-safe).
+//
+// This is the safer behavior per the directive: "ignore X-Forwarded-For for
+// rate-limit identity rather than trusting attacker input."
 export function getClientIP(req: Request): string {
-  const forwarded = req.headers.get('x-forwarded-for')
-  if (forwarded) return forwarded.split(',')[0].trim()
+  // Trust x-real-ip (set by trusted reverse proxy like Caddy)
   const realIP = req.headers.get('x-real-ip')
-  if (realIP) return realIP
+  if (realIP) return realIP.trim()
+  // Intentionally DO NOT read x-forwarded-for — it's client-spoofable.
+  // Fallback to 'unknown' bucket (fail-safe — all unknowns share a bucket).
   return 'unknown'
 }

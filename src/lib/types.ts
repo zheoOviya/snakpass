@@ -276,11 +276,13 @@ export interface SocialConnection {
   createdAt: string
   /** ISO date — connection accepted (if status === 'ACCEPTED'). */
   acceptedAt?: string | null
-  /** S4A Unblock-UI-Reachability: The userId of the user who initiated the
-   *  block (null for non-blocked or legacy rows). Exposed by GET
-   *  /api/social/connections so the UI can determine whether the current user
-   *  is the blocker (and thus authorized to see the Unblock control). */
-  blockedBy?: string | null
+  /** S4B Privacy/Abuse Repair-03 (P2): Server-derived boolean indicating
+   *  whether the current user can unblock this connection. True ONLY when
+   *  status === 'BLOCKED' AND the current user is the blocker (blockedBy ===
+   *  session.userId). Replaces the raw `blockedBy` userId field to prevent
+   *  block-ownership disclosure to the blocked party. Legacy NULL blockedBy →
+   *  canUnblock = false (fail-closed). */
+  canUnblock?: boolean
 }
 
 /**
