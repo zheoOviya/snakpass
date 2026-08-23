@@ -12445,3 +12445,41 @@ Per-scenario results:
 - Wave-6/7 LOCKED. M9/M10 re-enqueue NOT authorized.
 - PostgreSQL evidence NOT run. Evidence gate NOT authorized.
 - IDE is STOPPING after commit + push.
+
+---
+Task ID: SNAKZAP-REMOTE-HISTORY-CONFLICT-RESOLVE-EXECUTE-07
+Agent: IDE Git Conflict Resolution Operator
+Task: SNAKZAP-REMOTE-HISTORY-CONFLICT-RESOLVE-EXECUTE-07 — Re-run merge, resolve exactly 4 known conflicts, prove no executable/payment behavior changes, complete merge commit, push, establish remote checkpoint. TARGETED MERGE RESOLUTION ONLY.
+
+Work Log:
+- STEP 0 (Baseline): HEAD=b7bc979, origin/main=afef005b, merge-base=a6cbbba, tree clean, MERGE_HEAD absent. S1 fingerprints recorded (12 files).
+- STEP 1 (Re-run merge): git merge origin/main → exactly 4 conflicts (matches expected): WAVE5_5C_CONSOLIDATED_CLOSURE_REVIEW.md, outbox-publisher/index.ts, razorpay.ts, worklog.md.
+- STEP 2 (Razorpay conflict — STRICT SEMANTIC PROOF): Inspected all 4 conflict hunks. ALL are comment-only differences (one-line vs two-line comments, comment wording "Wave-9" vs "Wave-5"). ZERO executable code differences. RAZORPAY_CONFLICT = COMMENT_ONLY_VERIFIED. Resolved by keeping LOCAL comments. Verified: createRazorpayOrder has idempotencyKey (line 52), captureRazorpayPayment has idempotencyKey (line 124), refundRazorpayPayment has idempotencyKey. Order-creation idempotency (local superset) PRESERVED.
+- STEP 3 (Outbox publisher conflict): 2 conflict hunks, both comment-only ("Wave-9 rebuild" vs "Wave-5 Gateway Idempotency workstream"). OUTBOX_CONFLICT = COMMENT_ONLY_VERIFIED. Resolved by keeping LOCAL. Verified: payload.gatewayIdempotencyKey read at lines 266, 598; captureRazorpayPayment called OUTSIDE transaction (line 269); publisher passes key to gateway.
+- STEP 4 (WAVE5 doc conflict): Content IDENTICAL (same blob SHA 819032b on both sides). Only difference was file mode (local 100755 vs remote 100644). Resolved: kept content, normalized mode to 100644 (regular file).
+- STEP 5 (Worklog conflict): 1 conflict block (local=3916 lines Wave-9+S1 work, remote=177 lines 5C CLASS-C close). Resolution: lossless merge — kept BOTH sides, separated by marker. Verified: w9-audit present, 5c-class-c-consolidated-close present, merged-from-remote separator present.
+- STEP 6 (Scope check): Only 4 files manually resolved. No unauthorized source drift.
+- STEP 7 (Stage + commit): git add 4 files + git commit → merge commit fd1e1d5 "merge: reconcile remote Wave-5 history with recovered main".
+- STEP 8 (Ancestry): 682a4b1 (S1) ancestor of HEAD=YES ✅. afef005b (remote) ancestor of HEAD=YES ✅. Both histories reconciled.
+- STEP 9 (S1 fingerprint): All 12 S1 source files UNCHANGED after merge. Before==After for all. S1 source PRESERVED.
+- STEP 10 (Gateway regression): captureRazorpayPayment idempotencyKey PASS, refundRazorpayPayment idempotencyKey PASS, createRazorpayOrder idempotencyKey PASS (local superset), gatewayIdempotencyKey in outbox PASS, publisher reads key PASS, external calls outside txn PASS. ALL GATEWAY INVARIANTS INTACT.
+- STEP 11 (Governance): P0-06 intact, P0-07 intact, I-13 intact, M9/M10 4×, Firebase=0, Supabase sole auth, all 4 flags OFF (realPayments, pickupAttributionEnforcement, invariantChecker, requestHashEnforcement). ALL GOVERNANCE INVARIANTS INTACT.
+- STEP 12 (Static): Lint 0 errors, typecheck 0 new errors in modified files.
+- STEP 13 (Push): git push origin main → FAILED "fatal: could not read Username for 'https://github.com'". Reason: repo is PUBLIC (anonymous read works for fetch), but push requires write authentication (PAT with repo scope). No write credentials configured.
+- STEP 14 (Remote checkpoint): Remote SHA still afef005b (push failed). Local SHA fd1e1d5. MISMATCH. Remote-backed checkpoint NOT established.
+- STEP 15 (Credential hygiene): CLEAN — no PAT values printed, persisted, or stored anywhere.
+
+Stage Summary:
+- VERDICT: BLOCKED: REMOTE_PUSH_REJECTED
+- Merge completed SUCCESSFULLY locally (commit fd1e1d5):
+  ✅ All 4 conflicts resolved (all comment-only, verified)
+  ✅ Both ancestors (682a4b1 + afef005b) verified
+  ✅ All S1 files unchanged
+  ✅ All gateway invariants intact
+  ✅ All governance invariants intact
+  ✅ Lint 0 errors, typecheck 0 new errors
+  ✅ Credential hygiene clean
+- Push FAILED — no GitHub write credentials (repo is public for read, but push needs PAT)
+- Local merge commit fd1e1d5 is ready and correct, but cannot be pushed to establish remote-backed checkpoint
+- To unblock: provide GitHub PAT with repo scope → git push origin main → git ls-remote verification
+- NO UNAUTHORIZED CODE CHANGES. Only merge-derived comment/mode/doc resolutions. GIT MUTATIONS: git merge (completed), git commit (merge commit fd1e1d5).
