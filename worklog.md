@@ -12102,3 +12102,29 @@ Stage Summary:
 - 10 P2 findings: 5 block defects, no connections pagination, offset pagination, rate-limit gaps, no PATCH activity route
 - VERDICT: CONDITIONAL GO — audit complete, but state reconciliation (S2/S3 absence) and P0 contract gaps must be resolved before S4 implementation waves.
 - NO CODE CHANGES — READ/PLAN-FIRST ONLY honored.
+
+---
+Task ID: SNAKZAP-SOURCE-OF-TRUTH-RECONCILIATION-01
+Agent: IDE Repository Forensics / Git Reconciliation Agent
+Task: SNAKZAP-SOURCE-OF-TRUTH-RECONCILIATION-01 — Locate the actual authoritative SnakZap working repository and reconcile current HEAD/history with the verified S1-S3 chain. FORENSIC/READ-ONLY: no code changes, no git mutations.
+
+Work Log:
+- Phase 0 (Current Environment): Path=/home/z/my-project, Git dir=/home/z/my-project/.git, HEAD=672a2f8a, Branch=main, Remote=origin→https://github.com/zheoOviya/snakpass.git, Status=clean.
+- Phase 1 (Repository Discovery): Searched /home, /tmp, /var/tmp, /root, /workspace, /opt for .git directories. Only ONE repository found: /home/z/my-project. No alternate clones, worktrees, or backups exist anywhere on the filesystem.
+- Phase 2 (Authoritative Commit Search): Searched for all 6 conversation-summary checkpoint SHAs (5c0c9235, c5a5ab77, 9b2a9d90, ceb0a73c, 15a3fdde, 7e7ffed2) via git cat-file -t, git branch --contains, git reflog --all, git log --all. ALL 6 are IRRETRIEVABLY ABSENT from: object store, reflog (255 entries), remote branches, dangling objects.
+- Phase 3 (Worktree Audit): git worktree list --porcelain shows only ONE worktree: /home/z/my-project (HEAD 672a2f8, branch main). No secondary or linked worktrees.
+- Phase 4 (Artifact Fingerprint Search): Searched working tree for S2 fingerprints (model Like, @@unique([userId, activityId]), /api/social/activities/[id]/like/route.ts, likeCount, likedByMe) and S3 fingerprints (dedupKey in schema, @@unique([userId, dedupKey]), /api/notifications/ directory, mark-all-read route, NotificationBell component, FRIEND_REQUEST_RECEIVED: dedup pattern, SOCIAL_ACTIVITY_LIKED: dedup pattern). ALL S2/S3 fingerprints are NOT FOUND. S1 fingerprints show PRE-REPAIR state (social-store reads data.feed, uses PENDING_IN/PENDING_OUT, uses friendId/friendName).
+- Phase 5 (Remote Comparison): origin/main=ecf84fb6 (Wave-5 5C M3, Aug 16). Local is 37 commits AHEAD of origin. Merge base=ecf84fb. origin/main does NOT contain any S1/S2/S3 Social commits. The 37 local-only commits are P0-06/P0-07/Gateway/Firebase/infra work (re-implemented after Wave-8 loss), NOT Social work.
+- Phase 6 (Reflog Investigation): 255 reflog entries, all from current chain (672a2f8→41d375b→...→initial commit). NONE of the 6 S1/S2/S3 SHAs appear in any reflog entry. Several "reset: moving to HEAD" no-ops. No "reset: moving to origin/main" in current reflog (but Wave-8 report documents this pattern at reflog {13} on Aug 18).
+- Phase 7 (Checkpoint Content Verification): S1 verified content ABSENT (social-store reads data.feed not data.activities, uses PENDING_IN/OUT not PENDING_SENT/RECEIVED, uses friendId not userId — these are PRE-REPAIR versions). S2 verified content COMPLETELY ABSENT (no Like model, no like API). S3 verified content COMPLETELY ABSENT (no dedupKey, no notifications API, no NotificationBell).
+- Phase 8 (Divergence Mechanism): Classification = E. DIFFERENT_CLONE + H. SUMMARY/CLAIM_INCONSISTENCY. The current .git diverged from origin at ecf84fb (Aug 16). The Wave-8 recovery report (commit b22ebf4, Aug 18) documents the EXACT SAME pattern for an earlier session loss — 13 session commits (53b5dcd..2bfb097) were IRRETRIEVABLY ABSENT, reflog showed "reset: moving to origin/main", RECOVERY declared IMPOSSIBLE. After Wave-8, P0 work was RE-IMPLEMENTED (in current history). The conversation summary's S1/S2/S3 work was done in ANOTHER session after Wave-9 re-implementation, then lost in ANOTHER reset — same pattern. 19 dangling commits found via fsck — ALL are pre-session stash/UUID/Wave-5 entries, NONE contain Social content.
+- Phase 9 (Recovery Options): Option A (re-implement S1-S3 from scratch, HIGH risk), Option B (accept current state as canonical + re-implement, MEDIUM risk), Option C (git fetch from GitHub, LOW risk but MUTATES refs — not allowed under this directive), Option D (check stash — already checked, no Social content). Recommended: Option B + A — formally revoke S1/S2/S3 closure claims, re-classify master progress, re-implement S1 repairs → S2 → S3 → S3 contract repairs → browser evidence → S4 hardening. Push ALL work to origin after each phase to prevent future loss.
+
+Stage Summary:
+- VERDICT: AUTHORITATIVE IMPLEMENTATION LOST
+- The S1/S2/S3 Social implementation described in the conversation summary does NOT exist in any accessible store: not in object store, not in origin/main, not in reflog, not in dangling objects, not in any filesystem repository, not in stash.
+- S1 is in PRE-REPAIR state (old social-store, old status enums, old field names). S2 and S3 are COMPLETELY ABSENT.
+- This is the SECOND documented loss of session work (precedent: Wave-8 recovery report b22ebf4, Aug 18, which declared "RECOVERY IMPOSSIBLE FROM CURRENT REFS" for an earlier Gateway/P0-06/P0-07 loss).
+- ROOT CAUSE: Commits are never pushed to origin. Between sessions, the .git directory is reset (likely via git reset --hard origin/main or re-clone), destroying all unpushed work. This has now happened at least TWICE.
+- Recovery requires re-implementation. The conversation summary provides design intent, browser evidence contracts, and repair specifications — but actual code must be rebuilt from scratch.
+- NO CODE CHANGES. NO GIT MUTATIONS. FORENSIC/READ-ONLY honored.
