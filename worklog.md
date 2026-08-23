@@ -12590,3 +12590,28 @@ Stage Summary:
 - S1/S2/S3 regression smoke PASS
 - Lint: 0 errors
 - Evidence checkpoint: cc99b8e on origin/main
+
+---
+Task ID: S4B-CHALLENGE-01
+Agent: Social Privacy & Abuse Boundary Auditor (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4B-PRIVACY-ABUSE-CHALLENGE-01 — READ/TRACE/RUNTIME challenge of S4B privacy/abuse findings. NO code changes. Four clusters: P1 phone exposure, P2 block metadata disclosure, P3 search input abuse, P4 rate-limit identity.
+
+Work Log:
+- Phase 0: Baseline locked — HEAD=fb5341d, source diff=0 since cc99b8e (S4A checkpoint)
+- Code-traced: src/app/api/social/search/route.ts (MIN_QUERY_LENGTH=2, MAX_RESULTS=20, returns phone field), src/lib/rate-limit.ts (IP-only key, fail-open general), src/middleware.ts (XFF trusted blindly, EVIDENCE_TEST_MODE skips rate limiting)
+- Created 4 fresh users: ALICE(8001), BOB(8002), CAROL(8003), DAVE(8004). Established ALICE-BOB ACCEPTED + ALICE blocked CAROL.
+- P1 (Search phone exposure): Runtime-tested 9 scenarios. DAVE's full phone exposed (+919999998004) to unrelated ALICE. Partial phone (98004) returns DAVE. 2-char query "98" returns 7 users with phones. "999" returns 20 (cap). Empty/1-char queries return empty array (200). Unauthenticated = 401. Classification: CONFIRMED API_PII_EXPOSURE + ENUMERATION_CAPABILITY.
+- P2 (Block metadata disclosure): CAROL (blocked party) GET /api/social/connections returns 2 rows with blockedBy=cmt64k0lb004 (ALICE's userId). CAROL learns ALICE's userId. Classification: CONFIRMED BLOCK_METADATA_DISCLOSURE.
+- P3 (Search input abuse): 10,000-char query → 200, 0.028s, empty results (harmless). Unicode → 200. SQL-injection-like → 200, no error. 20 rapid queries all 200 (0.012-0.019s each). Classification: DOWNGRADE — oversized queries harmlessly bounded by MAX_RESULTS=20 + SQLite contains match.
+- P4 (Rate-limit identity): Code-traced getClientIP trusts XFF first value. classifyPath('/api/social/search') → 'general' (fail-open, IP-only key). Attempted runtime XFF-spoof + 100-request flood tests, but dev server repeatedly crashed under rapid sequential load (sandbox limitation). With EVIDENCE_TEST_MODE=true active, rate limiting is skipped entirely (X-RateLimit-Skipped: evidence-test-mode). Classification: CONFIRMED via code-trace (XFF trust + IP-only + fail-open + no authenticated-user identity).
+- Note: EVIDENCE_TEST_MODE=true was set in process env by prior evidence runs, causing rate-limit skip. Confirmed via /proc/<pid>/environ + X-RateLimit-Skipped header.
+
+Stage Summary:
+- P1: CONFIRMED — phone PII exposed in API, partial-phone enumeration possible, 20-result cap mitigates but doesn't prevent
+- P2: CONFIRMED — blockedBy raw userId exposed to blocked party (S4A repair-10 side effect). Recommended S4B contract: canUnblock boolean instead of raw blockedBy
+- P3: DOWNGRADE — oversized/unicode/special-char queries harmlessly bounded, no DoS
+- P4: CONFIRMED via code-trace — XFF trusted blindly, IP-only key, fail-open general bucket, no per-user identity. Runtime spoof test inconclusive due to server instability + EVIDENCE_TEST_MODE skip
+- All findings are privacy/abuse hardening concerns, NOT authorization defects
+- S4A security contract remains intact
+- No code changes made (challenge-only)
+- Implementation plan ready for S4B repair contracts
