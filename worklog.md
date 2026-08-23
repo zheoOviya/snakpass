@@ -12075,3 +12075,30 @@ Stage Summary:
 Overall Verdict: PARTIAL PASS — consumer journey verified through checkout;
 payment execution + post-payment tracking deferred to stable environment.
 The application surface (per Waves 1-8) is in place and functional.
+
+---
+Task ID: GJ02-SOCIAL-S4-HARDENING-READ-PLAN-FIRST-01
+Agent: IDE Social Security + Product Hardening Auditor
+Task: PRODUCT-GJ02-SOCIAL-S4-HARDENING-READ-PLAN-FIRST-01 — Audit S1-S3 Social subsystem for security, abuse, scale, UX-integrity, pagination, and lifecycle gaps before S4 hardening. READ/PLAN ONLY: no code changes.
+
+Work Log:
+- Phase 0: Recorded baseline HEAD=41d375b on main, tree clean. CRITICAL DISCOVERY: the conversation summary's S1/S2/S3 closure claims reference commit SHAs (9b2a9d9, ceb0a73, 15a3fdd) that DO NOT EXIST in this repository's git history. The actual tree contains only S1-level Social infrastructure (Wave 6 Tasks 6A-6D). S2 (Like model, like API) and S3 (notifications API, NotificationBell, dedupKey) are ABSENT. The worklog confirms Social work was done under "Wave 6" not "S1/S2/S3 subwaves". This audit is grounded in the actual source tree, not the conversation summary's closure claims.
+- Phase 1 (Authorization Matrix): Audited all 7 Social actions (13 including sub-actions). Authorization is server-enforced everywhere — NO authorization relies solely on UI hiding. All routes use getSessionUser() → 401. All mutations require CSRF (middleware double-submit). Ownership checks are solid on connections (party check) and activities (actorId hardcoded). However, activities POST has no objectType/objectId FK validation — users can record activities referencing non-existent entities.
+- Phase 2 (Block Semantics): Audited 8 block scenarios. Found 5 block defects: (1) block bypass via re-POST (findFirst returns one row, deletes block + creates PENDING), (2) blockee can DELETE block (no blockedBy check), (3) no unblock endpoint (comments promise it), (4) no blockedBy column (schema can't disambiguate initiator), (5) re-POST leaves stale reverse-edge BLOCKED. Proposed canonical asymmetric block contract with blockedBy column.
+- Phase 3 (Abuse/Rate-Limit): Audited 8 endpoints. All 5 Social routes fall under 'general' (100/min/IP, fail-open). No per-user throttling anywhere. Identified 6 spam vectors: mass friend requests (HIGH), activity flooding (HIGH), search enumeration (MEDIUM), notification amplification (MEDIUM), block bypass (HIGH), IP spoofing via X-Forwarded-For (HIGH). Recommended 4 new rate-limit tiers.
+- Phase 4 (Pagination/Scale): Audited all GET routes. GET /connections has NO pagination (returns ALL rows — CODE DEFECT). Feed uses offset pagination (count + skip-scan). Search uses LIKE '%q%' (full table scan). Identified 6 missing indexes. recordActivity idempotency uses metadata substring scan (no DB uniqueness — will leak duplicates on Postgres).
+- Phase 5 (Notification UX): S3 notifications API does NOT EXIST. notification-store.ts is dead code (zero imports). Notifications ARE written to DB by connection routes but no GET/PATCH/POST API exists. UX hardening plan deferred to when S3 is actually built.
+- Phase 6 (Feed Integrity): Audited 9 scenarios. Feed NEVER crashes (defensive try/catch). But verb vocabulary mismatch (server UPPERCASE vs client snake_case) makes EVERY activity render as fallback "ordered from a restaurant". Legacy metadata passes through unchecked (no allowlist). No FK relations on Social models → orphan rows accumulate forever.
+- Phase 7 (Concurrency): Audited 8 race scenarios. SQLite single-writer lock protects all mutations today. State-machine guards (409) correctly handle duplicate accept/reject. BUT: dual friend requests (A→B + B→A) create two PENDING rows with implicit auto-accept later. recordActivity idempotency via metadata substring is not DB-safe for Postgres. All read-then-write patterns need SELECT FOR UPDATE on Postgres.
+- Phase 8 (Privacy Leakage): Found 2 P0 privacy leaks: (1) phone numbers exposed in search results — any authenticated user can enumerate entire userbase's phones in ~100 queries, (2) blocked users explicitly informed via BLOCKED_BY_TARGET code + duplicated BLOCKED rows. Also found metadata blocklist insufficient (no allowlist), notification data stores phone fallback for nameless users.
+- Phase 9 (Browser Resilience): Planned 11 browser UX resilience scenarios (loading, empty, error, offline, slow API, double-click, back navigation, hard reload, mobile, long names, large unread count).
+- Phase 10 (Scope Classification): Classified all 27 findings: 4 P0 (security/privacy), 7 P1 (integrity), 10 P2 (scale/reliability), 6 P3 (UX/polish).
+- Phase 11 (S4 Waves): Proposed 5 implementation waves: S4A Block Semantics, S4B Privacy & Abuse, S4C Pagination & Performance, S4D Contract Reconciliation, S4E Integrated Browser Hardening Gate.
+
+Stage Summary:
+- CRITICAL: S2 (Likes) and S3 (Notifications) DO NOT EXIST in the actual git tree. The conversation summary's closure claims are from a different git history. State reconciliation required before S4.
+- 4 P0 findings: phone-in-search privacy leak, block-status disclosure, feed permanently empty (data.feed vs data.activities), Friends UI non-functional (PENDING_IN/OUT vs PENDING_SENT/RECEIVED)
+- 7 P1 findings: verb mismatch, metadata allowlist gap, notification phone fallback, server/client type mismatch, no FK relations, idempotency substring scan, message cap inconsistency
+- 10 P2 findings: 5 block defects, no connections pagination, offset pagination, rate-limit gaps, no PATCH activity route
+- VERDICT: CONDITIONAL GO — audit complete, but state reconciliation (S2/S3 absence) and P0 contract gaps must be resolved before S4 implementation waves.
+- NO CODE CHANGES — READ/PLAN-FIRST ONLY honored.

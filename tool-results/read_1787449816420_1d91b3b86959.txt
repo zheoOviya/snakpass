@@ -1,0 +1,1181 @@
+     1→// SnakZap — Prisma schema (PostgreSQL)
+     2→// Pickup-first food ordering platform: catalog, ordering, fulfillment, governance.
+     3→
+     4→generator client {
+     5→  provider      = "prisma-client-js"
+     6→  // Vercel serverless runs on Amazon Linux 2 (rhel-openssl-3.0.x).
+     7→  // Build runs on debian (debian-openssl-3.0.x). Include both so the
+     8→  // query engine binary is available at runtime. Without rhel-openssl-3.0.x,
+     9→  // Prisma throws: "could not locate the Query Engine for runtime rhel-openssl-3.0.x".
+    10→  binaryTargets = ["native", "rhel-openssl-3.0.x"]
+    11→}
+    12→
+    13→datasource db {
+    14→  provider = "sqlite"
+    15→  url      = env("DATABASE_URL")
+    16→}
+    17→
+    18→// ----------------------------------------
+    19→// Identity context
+    20→// ----------------------------------------
+    21→model User {
+    22→  id              String   @id @default(cuid())
+    23→  phone           String   @unique
+    24→  email           String?  @unique
+    25→  passwordHash    String?
+    26→  name            String?
+    27→  role            String   @default("CONSUMER") // CONSUMER | VENDOR_OWNER | ADMIN | SUPER_ADMIN
+    28→  spiceTolerance  Int      @default(3) // 0..5
+    29→  walletBalance   Int      @default(0) // paise
+    30→  createdAt       DateTime @default(now())
+    31→  orders          Order[]
+    32→  auditLogs       AuditLog[]
+    33→  sessions        Session[]
+    34→
+    35→  // --------------------------------------------------------------------
+    36→  // PRODUCT FOUNDATION (PLAN-01) — additive nullable columns (backward-compat)
+    37→  // Governance: blueprint §29, §50. These columns do NOT modify any existing
+    38→  // field, constraint, or index. They are nullable with no default-required
+    39→  // backfill — existing rows remain valid. New code (Wave 2+) reads these
+    40→  // columns; absent code is unaffected (Prisma select/include defaults unchanged).
+    41→  // --------------------------------------------------------------------
+    42→  // Primary campus linkage — set during first-run onboarding (Wave 2 Task 2A).
+    43→  // Nullable so existing demo users (created pre-onboarding) remain valid.
+    44→  campusId         String?
+    45→  campus           Campus?  @relation(fields: [campusId], references: [id])
+    46→}
+    47→
+    48→// ----------------------------------------
+    49→// Auth context (OTP + sessions)
+    50→// ----------------------------------------
+    51→model OtpRequest {
+    52→  id        String   @id @default(cuid())
+    53→  channel   String   // 'phone' | 'email'
+    54→  target    String   // phone number or email
+    55→  purpose   String   // 'consumer_login' | 'vendor_login' | 'admin_2fa' | 'pickup'
+    56→  codeHash  String   // scrypt hash of the 6-digit code
+    57→  consumed  Boolean  @default(false)
+    58→  expiresAt DateTime
+    59→  createdAt DateTime @default(now())
+    60→  // P0-11: Track failed verify attempts per OTP record.
+    61→  // Max 5 failed attempts before the OTP is locked (must request a new one).
+    62→  attemptCount Int @default(0)
+    63→
+    64→  @@index([target, purpose])
+    65→}
+    66→
+    67→model Session {
+    68→  token     String   @id
+    69→  userId    String
+    70→  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+    71→  role      String
+    72→  expiresAt DateTime
+    73→  createdAt DateTime @default(now())
+    74→  // P0-10: Track last-known IP for session-anomaly detection (geo/IP change).
+    75→  lastIp    String?
+    76→  // P0-10: Last activity timestamp for sliding refresh + idle timeout.
+    77→  lastActivityAt DateTime @default(now())
+    78→  @@index([userId])
+    79→}
+    80→
+    81→// ----------------------------------------
+    82→// P0-11 — OTP lockout store (per-target send/attempt counters)
+    83→// ----------------------------------------
+    84→// Tracks per-target (phone/email) OTP attempt + send counts within a rolling
+    85→// 10-minute window. When limits are exceeded, the target is locked out until
+    86→// the window expires.
+    87→model OtpLockout {
+    88→  id              String   @id @default(cuid())
+    89→  target          String   @unique // phone number or email
+    90→  // Rolling window counters (reset when lockoutExpiresAt passes)
+    91→  sendCount       Int      @default(0)     // OTP sends in current window (max 3)
+    92→  verifyFailCount Int      @default(0)     // failed verify attempts in current window (max 5)
+    93→  // Lockout: when set, OTP send/verify is rejected until this time passes
+    94→  lockedUntil     DateTime?
+    95→  updatedAt       DateTime @updatedAt
+    96→}
+    97→
+    98→// ----------------------------------------
+    99→// Catalog context
+   100→// ----------------------------------------
+   101→model Restaurant {
+   102→  id             String     @id @default(cuid())
+   103→  name           String
+   104→  cuisine        String     // e.g. "North Indian", "South Indian", "Chinese"
+   105→  description    String
+   106→  image          String
+   107→  rating         Float      @default(4.5)
+   108→  prepTimeMins   Int        @default(20)
+   109→  priceForTwo    Int        @default(300) // paise
+   110→  commissionRate Float      @default(0.08)
+   111→  isActive       Boolean    @default(true)
+   112→  isSuspended    Boolean    @default(false)
+   113→  gstNumber      String     @default("29ABCDE1234F1Z5")
+   114→  address        String     @default("")
+   115→  createdAt      DateTime   @default(now())
+   116→  menuItems      MenuItem[]
+   117→  orders         Order[]
+   118→
+   119→  // --------------------------------------------------------------------
+   120→  // PRODUCT FOUNDATION (PLAN-01) — additive nullable columns + back-relations.
+   121→  // Governance: blueprint §29, §50. No existing field/constraint/index modified.
+   122→  // --------------------------------------------------------------------
+   123→  // Primary campus — nullable so existing restaurants without a campus remain
+   124→  // valid. The full many-to-many is via RestaurantCampus junction below; this
+   125→  // column is the denormalized "primary" for fast UI display.
+   126→  campusId           String?
+   127→  campus             Campus?  @relation(fields: [campusId], references: [id])
+   128→  // ownerUserId is a SOFT FK to User.id (no Prisma relation declared — avoids
+   129→  // touching the User model). Used by vendor RBAC on the new
+   130→  // POST /api/vendor/orders/[id]/accept endpoint (per plan Risk R10) to verify
+   131→  // the calling vendor owns the restaurant before recording `acceptedAt`.
+   132→  ownerUserId        String?
+   133→  // Back-relations for new additive models (no columns added — Prisma relation
+   134→  // fields are metadata only; FKs live on the child side).
+   135→  restaurantCampuses RestaurantCampus[]
+   136→  groupOrders        GroupOrder[]
+   137→
+   138→  // --------------------------------------------------------------------
+   139→  // WAVE 4B (Vendor Menu Management) — additive back-relation for VendorDeal.
+   140→  // No column added — Prisma relation field is metadata only; FK lives on the
+   141→  // child side (VendorDeal.restaurantId). Preserved unchanged: all existing
+   142→  // fields, relations, constraints, and indexes above.
+   143→  // --------------------------------------------------------------------
+   144→  deals VendorDeal[]
+   145→}
+   146→
+   147→model MenuItem {
+   148→  id             String       @id @default(cuid())
+   149→  restaurantId   String
+   150→  restaurant     Restaurant   @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+   151→  name           String
+   152→  description    String
+   153→  price          Int          // paise
+   154→  image          String
+   155→  spiceLevel     Int          @default(1) // 0..3 (mild/medium/hot/extra)
+   156→  isVeg          Boolean      @default(true)
+   157→  isAvailable    Boolean      @default(true)
+   158→  // P0-25 Case A: Inventory race protection.
+   159→  // availableCount tracks remaining quantity (NULL = unlimited availability,
+   160→  // modeled via isAvailable only). When set, concurrent orders must decrement
+   161→  // it atomically inside a transaction.
+   162→  availableCount Int?
+   163→  // P0-25: Optimistic-locking version field. Incremented on every update.
+   164→  // Conditional UPDATE (`WHERE version = X`) prevents last-writer-wins races.
+   165→  version        Int          @default(0)
+   166→  category       String       @default("Mains") // Starters | Mains | Breads | Rice | Desserts | Beverages
+   167→  createdAt      DateTime     @default(now())
+   168→  orderItems     OrderItem[]
+   169→
+   170→  // --------------------------------------------------------------------
+   171→  // PRODUCT FOUNDATION (PLAN-01) — additive back-relations for new models.
+   172→  // No columns added — these are Prisma relation fields (metadata only).
+   173→  // Required so Gift.menuItem and GroupOrderItem.menuItem relations compile.
+   174→  // --------------------------------------------------------------------
+   175→  gifts            Gift[]
+   176→  groupOrderItems  GroupOrderItem[]
+   177→
+   178→  // --------------------------------------------------------------------
+   179→  // WAVE 4B (Vendor Menu Management) — additive nullable columns.
+   180→  // Governance: blueprint §23 (configure reward multiplier). These columns do
+   181→  // NOT modify any existing field, constraint, or index. Both are nullable
+   182→  // (rewardMultiplier has a @default(1.0) so existing rows backfill cleanly;
+   183→  // deletedAt is null for all existing rows). New code (vendor-menu-manager +
+   184→  // /api/vendor/menu/*) reads/writes these; absent legacy code is unaffected.
+   185→  // --------------------------------------------------------------------
+   186→  // Reward-points multiplier applied to orders containing this item
+   187→  // (1.0 = base earn rate; 2.0 = double points; max 3.0 per blueprint §17).
+   188→  rewardMultiplier Float       @default(1.0)
+   189→  // Soft-delete timestamp — set by DELETE /api/vendor/menu/[id]. When non-null,
+   190→  // the item is excluded from public catalog reads (filter: deletedAt IS NULL)
+   191→  // but preserved for historical OrderItem references. NULL = not deleted.
+   192→  deletedAt        DateTime?
+   193→}
+   194→
+   195→// ----------------------------------------------------------------------------
+   196→// WAVE 4B (Vendor Menu Management) — VendorDeal model.
+   197→// Governance: blueprint §23 (create deal). Additive — no existing model
+   198→// modified. Restaurant.deals back-relation added above (metadata only).
+   199→// ----------------------------------------------------------------------------
+   200→// Tracks vendor-created promotional deals (percentage off, fixed-amount off,
+   201→// or free-item grant). Active deals surface on the consumer menu card
+   202→// (DealBadge) and the vendor analytics dashboard (Task 4C).
+   203→//
+   204→// dealValue semantics (per `dealType`):
+   205→//   - "percentage" → 0..100 (percent off, e.g., 20 = 20% off)
+   206→//   - "fixed"      → paise amount off (e.g., 5000 = ₹50 off)
+   207→//   - "free_item"  → menu item id (cast to Int via hash) — currently stores 0;
+   208→//                    the actual menu-item ref lives in `menuItemId` (optional).
+   209→// ----------------------------------------------------------------------------
+   210→model VendorDeal {
+   211→  id            String    @id @default(cuid())
+   212→  restaurantId  String
+   213→  title         String
+   214→  description   String?
+   215→  dealType      String    // "percentage" | "fixed" | "free_item"
+   216→  dealValue     Int       // interpretation depends on dealType (see above)
+   217→  validFrom     DateTime
+   218→  validUntil    DateTime?
+   219→  isActive      Boolean   @default(true)
+   220→  // Optional scope to a specific menu item (e.g., "free samosa with thali").
+   221→  // Nullable so a deal can apply restaurant-wide.
+   222→  menuItemId    String?
+   223→  createdAt     DateTime  @default(now())
+   224→  updatedAt     DateTime  @updatedAt
+   225→
+   226→  restaurant    Restaurant @relation(fields: [restaurantId], references: [id])
+   227→
+   228→  @@index([restaurantId, isActive])
+   229→}
+   230→
+   231→// ----------------------------------------
+   232→// Ordering context
+   233→// ----------------------------------------
+   234→model Order {
+   235→  id             String         @id @default(cuid())
+   236→  userId         String
+   237→  user           User           @relation(fields: [userId], references: [id])
+   238→  restaurantId   String
+   239→  restaurant     Restaurant     @relation(fields: [restaurantId], references: [id])
+   240→  status         String         @default("CONFIRMED") // CONFIRMED | PREPARING | ALMOST_READY | READY_FOR_PICKUP | PICKED_UP | CANCELLED | PAID | PAYMENT_PENDING
+   241→  totalAmount    Int            // paise
+   242→  pickupOtp      String         @default("000000")
+   243→  isCatering     Boolean        @default(false)
+   244→  headcount      Int?
+   245→  itemsCount     Int            @default(0)
+   246→  note           String?
+   247→  createdAt      DateTime       @default(now())
+   248→  updatedAt      DateTime       @updatedAt
+   249→  orderItems     OrderItem[]
+   250→  statusHistory  String         @default("[]") // JSON array of {status, at}
+   251→  // P0-25 Case B: State-transition race protection.
+   252→  version        Int            @default(0)
+   253→  // P0-01 Wave-3: 1:1 relation to Payment
+   254→  payment        Payment?
+   255→  // P0-06 Wave-6: 1:1 relation to Fulfilment (parallel state machine — additive, additive-only)
+   256→  // Order.status (NEXT_STATUS) is NOT modified — Fulfilment.status has its own
+   257→  // NEXT_FULFILMENT_STATUS machine (PREPARING → ALMOST_READY → READY_FOR_PICKUP → PICKED_UP).
+   258→  // Lazy-created on first access via GET/PATCH /api/orders/[id]/fulfilment.
+   259→  fulfilment     Fulfilment?
+   260→}
+   261→
+   262→model OrderItem {
+   263→  id            String   @id @default(cuid())
+   264→  orderId       String
+   265→  order         Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+   266→  menuItemId    String
+   267→  menuItem      MenuItem @relation(fields: [menuItemId], references: [id])
+   268→  name          String
+   269→  price         Int      // paise (snapshot)
+   270→  quantity      Int      @default(1)
+   271→  subtotal      Int      // paise
+   272→  createdAt     DateTime @default(now())
+   273→}
+   274→
+   275→// ----------------------------------------
+   276→// Governance context
+   277→// ----------------------------------------
+   278→model AuditLog {
+   279→  id        String   @id @default(cuid())
+   280→  actorId   String?
+   281→  actor     User?    @relation(fields: [actorId], references: [id])
+   282→  actorRole String   @default("SYSTEM")
+   283→  action    String
+   284→  metadata  String   @default("{}") // JSON
+   285→  createdAt DateTime @default(now())
+   286→  // DEV-001: Hash-chain tamper-evidence. Each entry's hash = SHA-256(prevHash + entry data).
+   287→  // If any entry is modified or deleted, the chain breaks and integrity check detects it.
+   288→  // This makes tampering DETECTABLE; true PREVENTION requires storage-level WORM (production).
+   289→  prevHash  String   @default("GENESIS") // hash of previous entry; "GENESIS" for first
+   290→  hash      String   @default("") // SHA-256(prevHash + id + actorId + actorRole + action + metadata + createdAt)
+   291→}
+   292→
+   293→model KillSwitch {
+   294→  id          String   @id @default(cuid())
+   295→  key         String   @unique
+   296→  label       String
+   297→  description String
+   298→  enabled     Boolean  @default(false)
+   299→  severity    String   @default("HIGH") // LOW | MEDIUM | HIGH | CRITICAL
+   300→  updatedAt   DateTime @updatedAt
+   301→  // P0-25: Optimistic-locking version field for kill-switch toggles.
+   302→  // Prevents concurrent admin toggles from silently overwriting each other.
+   303→  version     Int      @default(0)
+   304→}
+   305→
+   306→// ----------------------------------------
+   307→// P0-17 — Idempotency key store
+   308→// ----------------------------------------
+   309→// Stores the idempotency key + cached response for critical writes (orders,
+   310→// payments, refunds, status updates). Retries with the same key return the
+   311→// cached response instead of creating a duplicate resource.
+   312→//
+   313→// Usage: client sends `Idempotency-Key` header on POST /api/orders (and
+   314→// future payment routes). The server checks this table inside the same
+   315→// transaction as the business write — if the key exists, return the cached
+   316→// response; else execute the write + store the key + response.
+   317→model IdempotencyKey {
+   318→  id              String   @id @default(cuid())
+   319→  key             String   @unique // the client-provided idempotency key
+   320→  resourceType    String   // e.g. "Order", "Payment" — which resource this key created
+   321→  resourceId      String   // the id of the created resource (for lookup)
+   322→  // Cached response payload (status + body) so retries return the exact same response.
+   323→  responseStatus  Int      // HTTP status code
+   324→  responseBody    String   // JSON-serialized response body
+   325→  // Sub-Wave 3c: Request body hash (SHA-256 hex) for materially-different-request detection.
+   326→  // Nullable for backward compatibility — pre-3c records have null (hash check skipped).
+   327→  // When requestHashEnforcement flag is ON and this is non-null, a mismatch with the
+   328→  // incoming request hash throws IdempotencyKeyReuseError (HTTP 422).
+   329→  requestHash     String?
+   330→  createdAt       DateTime @default(now())
+   331→  expiresAt       DateTime // TTL (default 24h); old keys are safe to delete
+   332→
+   333→  @@index([resourceType, resourceId])
+   334→}
+   335→
+   336→// ----------------------------------------
+   337→// P0-28 — Unknown-exception handling (exception queue + freeze state)
+   338→// ----------------------------------------
+   339→// When an invariant violation is detected (e.g., order in unknown state,
+   340→// payment amount mismatch, audit hash-chain break), the system:
+   341→//   1. Preserves evidence (full state snapshot + trace + invariant name)
+   342→//   2. Creates an ExceptionQueue entry
+   343→//   3. Applies the smallest sufficient freeze (Level 1/2/3)
+   344→//   4. Alerts
+   345→//
+   346→// Freeze levels:
+   347→//   Level 1 (TRANSACTION): freeze a single order/payment (set frozen=true)
+   348→//   Level 2 (ENTITY): quarantine a whole Restaurant/User (set quarantined=true)
+   349→//   Level 3 (SYSTEM): activate system kill switch (links to P0-23 KillSwitch)
+   350→model ExceptionQueue {
+   351→  id              String   @id @default(cuid())
+   352→  // What was violated (e.g., "I-02 Order Integrity", "UNKNOWN_STATE")
+   353→  invariant       String
+   354→  // The resource that triggered the exception
+   355→  entityType      String   // "Order" | "Payment" | "User" | "Restaurant" | "System"
+   356→  entityId        String   // the id of the affected resource
+   357→  // Freeze level applied: 1 (transaction) | 2 (entity) | 3 (system)
+   358→  freezeLevel     Int      @default(1)
+   359→  // Full state snapshot at time of detection (JSON: the resource state + context)
+   360→  stateSnapshot   String   // JSON
+   361→  // Trace ID for correlation with logs
+   362→  traceId         String?
+   363→  // Human-readable description of what went wrong
+   364→  description     String
+   365→  // Resolution tracking
+   366→  resolvedAt      DateTime?
+   367→  resolvedBy      String?  // admin user id who resolved it
+   368→  resolutionNote  String?  // what was done to resolve
+   369→  createdAt       DateTime @default(now())
+   370→
+   371→  @@index([entityType, entityId])
+   372→  @@index([freezeLevel, resolvedAt])
+   373→}
+   374→
+   375→// ----------------------------------------
+   376→// P0-24 — Transactional outbox (cross-entity atomic writes)
+   377→// ----------------------------------------
+   378→// The Outbox table is the persistent event queue committed INSIDE the same
+   379→// transaction as the business write. This ensures the event is NOT lost even
+   380→// if the process crashes after commit — the outbox publisher worker will
+   381→// pick it up and deliver it later (at-least-once delivery).
+   382→//
+   383→// Key principle (Architectural Law 2 — Idempotent Business Effect):
+   384→//   "We do NOT chase technical 'exactly-once delivery.' We chase idempotent
+   385→//    business effect." — the consumer side deduplicates via the eventId.
+   386→//
+   387→// Usage:
+   388→//   await withTransaction(async (tx) => {
+   389→//     const order = await tx.order.create({ ... })      // business mutation
+   390→//     await enqueueOutboxEvent(tx, {                    // outbox INSERT (same txn)
+   391→//       eventType: 'ORDER_CREATED',
+   392→//       aggregateType: 'Order',
+   393→//       aggregateId: order.id,
+   394→//       payload: { orderId: order.id, status: order.status, ... },
+   395→//     })
+   396→//   })
+   397→//   // Publisher (Sub-Wave 2b) later reads PENDING rows + delivers via Socket.io
+   398→model Outbox {
+   399→  id              String   @id @default(cuid())
+   400→  // Unique event ID for consumer-side idempotency (Q17 decision: event id = idempotency key)
+   401→  eventId         String   @unique
+   402→  // Event type for routing (e.g., "ORDER_CREATED", "ORDER_STATUS_CHANGED", "KILL_SWITCH_TOGGLED")
+   403→  eventType       String
+   404→  // The aggregate root type (e.g., "Order", "KillSwitch")
+   405→  aggregateType   String
+   406→  // The aggregate root ID (e.g., order.id, kill-switch key)
+   407→  aggregateId     String
+   408→  // JSON payload of the event (the data the consumer needs)
+   409→  payload         String   // JSON
+   410→  // PENDING = not yet published; PUBLISHED = delivered by publisher; FAILED = max retries exhausted
+   411→  status          String   @default("PENDING") // PENDING | CLAIMED | PUBLISHED | FAILED
+   412→  // Number of publish attempts (for retry tracking + backoff)
+   413→  attempts        Int      @default(0)
+   414→  // Last error message (if publishing failed)
+   415→  lastError       String?
+   416→  // When the event was created (inside the business transaction)
+   417→  createdAt       DateTime @default(now())
+   418→  // When the publisher successfully delivered the event
+   419→  publishedAt     DateTime?
+   420→  // P0-24 2b-2: Claim/lease fields for crash-safe publisher
+   421→  // When a worker claims this event (sets status=CLAIMED)
+   422→  claimedAt       DateTime?
+   423→  // When the lease expires (if publisher crashes, another worker can re-claim after this time)
+   424→  claimUntil      DateTime?
+   425→  // ID of the worker that claimed this event (for debugging + lease management)
+   426→  workerId        String?
+   427→
+   428→  @@index([status, createdAt]) // publisher polls WHERE status='PENDING' ORDER BY createdAt
+   429→  @@index([aggregateType, aggregateId]) // lookup by aggregate
+   430→}
+   431→
+   432→// ----------------------------------------
+   433→// P0-24 Sub-Wave 2b — Consumer-side idempotency (ProcessedEvent)
+   434→// ----------------------------------------
+   435→// When the outbox publisher delivers an event, the consumer checks this
+   436→// table to determine if the event has already been processed. If the
+   437→// eventId exists, the business effect is NOT re-applied (exactly-once
+   438→// business effect, even if delivery happens multiple times).
+   439→//
+   440→// The dedup record and the protected business effect must be in the same
+   441→// transaction (atomic dedup).
+   442→model ProcessedEvent {
+   443→  // Matches Outbox.eventId — the consumer-side idempotency key
+   444→  eventId     String   @id
+   445→  // Event type (for debugging + audit)
+   446→  eventType   String
+   447→  // Which consumer processed it (for multi-consumer future)
+   448→  consumerId  String   @default("default")
+   449→  // When the event was processed
+   450→  processedAt DateTime @default(now())
+   451→  // Optional: payload hash for verification
+   452→  payloadHash String?
+   453→
+   454→  @@index([consumerId, processedAt])
+   455→}
+   456→
+   457→// ----------------------------------------
+   458→// P0-01 Wave-3 — Payment (Razorpay capture lifecycle)
+   459→// ----------------------------------------
+   460→model Payment {
+   461→  id               String    @id @default(cuid())
+   462→  orderId          String    @unique
+   463→  order            Order     @relation(fields: [orderId], references: [id])
+   464→  userId           String
+   465→  // Razorpay gateway linkage
+   466→  gatewayOrderId   String?   // razorpay_order_id (from order-create API)
+   467→  gatewayPaymentId String?   // razorpay_payment_id (after Checkout SDK)
+   468→  gatewaySignature String?   // X-Razorpay-Signature (HMAC-SHA256)
+   469→  // Amount (paise — consistent with Order.totalAmount)
+   470→  amount           Int
+   471→  currency         String    @default("INR")
+   472→  // Status lifecycle:
+   473→  //   PAYMENT_PENDING → CAPTURE_PENDING → CAPTURED
+   474→  //   CAPTURE_PENDING → FAILED
+   475→  //   CAPTURED → REFUND_PENDING → REFUNDED | FAILED (Wave-5 Sub-Wave 5a — P0-04)
+   476→  //   (any state) → FROZEN (P0-28 invariant freeze)
+   477→  status           String    @default("PAYMENT_PENDING")
+   478→  // I-04 Capture Uniqueness: capturedAt set once, never reset
+   479→  capturedAt       DateTime?
+   480→  // P0-25 Case C: Idempotency-Key linkage (payment double-click dedup)
+   481→  idempotencyKey   String?   @unique
+   482→  // P0-28: Freeze flag (per invariant-checker.ts:139)
+   483→  frozen           Boolean   @default(false)
+   484→  // P0-25: Optimistic-locking version field
+   485→  version          Int       @default(0)
+   486→  // Failure tracking
+   487→  failureReason    String?
+   488→  retryCount       Int       @default(0)
+   489→  // Ledger entries (double-entry: Dr + Cr per payment)
+   490→  ledgerEntries    LedgerEntry[]
+   491→  // P0-04 Wave-5 Sub-Wave 5a: Refunds (1:N — a payment may have multiple
+   492→  // partial refunds over its lifetime). Each Refund carries its own status
+   493→  // lifecycle (REFUND_PENDING → REFUNDED | FAILED) + double-entry reversal
+   494→  // LedgerEntry pair tied to its own paymentId FK (entries are append-only).
+   495→  refunds          Refund[]
+   496→  // Audit
+   497→  createdAt        DateTime  @default(now())
+   498→  updatedAt        DateTime  @updatedAt
+   499→
+   500→  @@index([userId, createdAt])
+   501→  @@index([status, createdAt])
+   502→}
+   503→
+   504→// ----------------------------------------
+   505→// P0-02/P0-24 Wave-3 — LedgerEntry (double-entry, append-only)
+   506→// ----------------------------------------
+   507→model LedgerEntry {
+   508→  id              String   @id @default(cuid())
+   509→  paymentId       String
+   510→  payment         Payment  @relation(fields: [paymentId], references: [id])
+   511→  // Double-entry: each Payment produces >=2 entries (Dr + Cr)
+   512→  entryType       String   // "DEBIT" | "CREDIT"
+   513→  accountType     String   // "GATEWAY_RECEIVABLE" | "CONSUMER_REVENUE" | "VENDOR_PAYOUT" | "COMMISSION_REVENUE" | "GATEWAY_FEE_EXPENSE"
+   514→  amount          Int      // paise; Dr and Cr sum to same total per Payment (I-06)
+   515→  // Traceability
+   516→  traceId         String?
+   517→  // Append-only: no updatedAt field (entries never updated)
+   518→  createdAt       DateTime @default(now())
+   519→
+   520→  @@index([paymentId, entryType])
+   521→  @@index([accountType, createdAt])
+   522→}
+   523→
+   524→// ----------------------------------------
+   525→// P0-05 Wave-3 — WebhookEvent (Razorpay webhook dedup + HMAC verification)
+   526→// ----------------------------------------
+   527→// Handler implementation in Wave-4 Sub-Wave 4a (P0-05)
+   528→model WebhookEvent {
+   529→  id              String   @id @default(cuid())
+   530→  eventId         String   @unique // Razorpay webhook event_id (dedup key, I-04)
+   531→  eventType       String   // "payment.captured" | "payment.failed" | "refund.processed"
+   532→  paymentId       String?  // FK to Payment (if webhook relates to a payment)
+   533→  // Raw webhook payload
+   534→  payload         String   // JSON
+   535→  payloadHash     String   // SHA-256 of payload
+   536→  signature       String   // X-Razorpay-Signature header
+   537→  verified        Boolean  @default(false) // HMAC verification result
+   538→  processed       Boolean  @default(false) // idempotent processing flag
+   539→  processedAt     DateTime?
+   540→  // Sub-Wave 4a: Processing metadata (nullable — set when processed)
+   541→  processedBy     String?  // worker/processor ID (for debugging)
+   542→  processingNotes String?  // failure reason or processing notes
+   543→  receivedAt     DateTime @default(now())
+   544→
+   545→  @@index([eventType, receivedAt])
+   546→  @@index([processed, receivedAt])
+   547→}
+   548→
+   549→// ----------------------------------------
+   550→// P0-04 Wave-5 Sub-Wave 5a — Refund (Razorpay refund lifecycle)
+   551→// ----------------------------------------
+   552→// A Refund is created when a CAPTURED payment is to be (partially or fully)
+   553→// refunded. The refund API call to Razorpay is performed by the outbox publisher
+   554→// (OUTSIDE any DB transaction) — the same Wave-4 4c pattern that protects the
+   555→// capture flow's TRANSACTION_RETRY_INVARIANT. The refund route only writes the
+   556→// Refund + reversal LedgerEntry pair + AuditLog + Outbox event inside a single
+   557→// transaction; the publisher then calls refundRazorpayPayment() and on success
+   558→// transitions Refund.status REFUND_PENDING → REFUNDED + Payment.status
+   559→// CAPTURED → REFUNDED (full refund) atomically.
+   560→//
+   561→// Lifecycle:
+   562→//   REFUND_PENDING (created by refund route, inside txn)
+   563→//     → REFUNDED   (publisher confirms Razorpay refund success, inside new txn)
+   564→//     → FAILED     (publisher exhausts retries / gateway declined)
+   565→//
+   566→// Partial refunds: amount < Payment.amount is allowed. Multiple Refunds per
+   567→// Payment are supported (1:N). Each Refund produces its own Dr/Cr reversal
+   568→// LedgerEntry pair tied to the same paymentId (entries are append-only — no
+   569→// updates to existing rows).
+   570→model Refund {
+   571→  id              String   @id @default(cuid())
+   572→  paymentId       String
+   573→  payment         Payment  @relation(fields: [paymentId], references: [id])
+   574→  // Amount (paise). For a full refund, equals Payment.amount. For a partial
+   575→  // refund, is less than Payment.amount. Must be > 0.
+   576→  amount          Int
+   577→  currency        String   @default("INR")
+   578→  // REFUND_PENDING → REFUNDED | FAILED
+   579→  status          String   @default("REFUND_PENDING")
+   580→  // Razorpay refund ID (rpf_*) — set by the publisher after a successful refund.
+   581→  gatewayRefundId String?
+   582→  // P0-17: Idempotency-Key linkage (refund double-click dedup). Unique per
+   583→  // refund attempt — same key on retry returns the cached Refund.
+   584→  idempotencyKey  String?  @unique
+   585→  // Failure tracking (set by publisher on retry/decline).
+   586→  failureReason   String?
+   587→  // Set by publisher when Razorpay confirms the refund.
+   588→  refundedAt      DateTime?
+   589→  // P0-25: Optimistic-locking version field (race-safe conditional update).
+   590→  version         Int      @default(0)
+   591→  createdAt       DateTime @default(now())
+   592→  updatedAt       DateTime @updatedAt
+   593→
+   594→  @@index([paymentId, status])
+   595→  @@index([status, createdAt])
+   596→}
+   597→
+   598→// ----------------------------------------
+   599→// P0-03 Wave-5 Sub-Wave 5b — Reconciliation (detection-only)
+   600→// ----------------------------------------
+   601→// Two Class-2 ADDITIVE models that store the audit trail of reconciliation
+   602→// runs + their findings. The reconciliation job is READ-ONLY with respect to
+   603→// all money-state tables (Payment, Refund, LedgerEntry, Outbox, WebhookEvent,
+   604→// IdempotencyKey, AuditLog). Its only writes are to these two tables + to
+   605→// ExceptionQueue (via the existing reportInvariantViolation() P0-28 path).
+   606→//
+   607→// ReconciliationRun: one row per reconciliation cycle (cron / manual / evidence).
+   608→// Tracks when it started, completed, what it checked, and what it found.
+   609→//
+   610→// ReconciliationFinding: one row per detected mismatch (deduped by
+   611→// (mismatchClass, entityId) while unresolved — a second run for the same
+   612→// mismatch updates lastSeenAt, NOT a new row). High-severity findings are
+   613→// routed to ExceptionQueue via reportInvariantViolation() (exceptionId FK).
+   614→//
+   615→// SAFETY CONTRACT (Orchestrator hard boundary):
+   616→//   - Reconciliation NEVER writes to Payment, Refund, LedgerEntry, Outbox,
+   617→//     WebhookEvent, IdempotencyKey, or AuditLog.
+   618→//   - Reconciliation NEVER makes external Razorpay API calls.
+   619→//   - Reconciliation NEVER triggers capture / refund / outbox enqueue.
+   620→//   - Reconciliation NEVER performs automatic financial correction.
+   621→//   - Its job is: detect → classify → record → report. Repair is a separate
+   622→//     authorization boundary (5C or dedicated Orchestrator directive).
+   623→model ReconciliationRun {
+   624→  id              String   @id @default(cuid())
+   625→  // What triggered this run: 'cron' | 'manual' | 'evidence'
+   626→  // (renamed from `trigger` — that's a reserved keyword in SQLite/Prisma)
+   627→  triggerType     String   @default("cron")
+   628→  // Status of the run itself: RUNNING | COMPLETED | FAILED
+   629→  status          String   @default("RUNNING")
+   630→  startedAt       DateTime @default(now())
+   631→  completedAt     DateTime?
+   632→  // Summary counts (populated on completion)
+   633→  paymentsChecked Int      @default(0)
+   634→  refundsChecked  Int      @default(0)
+   635→  outboxChecked    Int      @default(0)
+   636→  webhooksChecked  Int      @default(0)
+   637→  findingsCount    Int      @default(0)
+   638→  // The mismatch_count metric value emitted for this run (activates the
+   639→  // existing 'reconciliation-mismatch' alert rule in alerting.ts).
+   640→  mismatchCount    Int      @default(0)
+   641→  // Error tracking (if the run itself failed)
+   642→  lastError        String?
+   643→  findings         ReconciliationFinding[]
+   644→
+   645→  @@index([status, startedAt])
+   646→}
+   647→
+   648→model ReconciliationFinding {
+   649→  id              String   @id @default(cuid())
+   650→  runId           String
+   651→  run             ReconciliationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+   652→  // Mismatch class (M1-M17 from WAVE5_5B_GATE_REVIEW.md §2 D4)
+   653→  // e.g. "M1_LEDGER_IMBALANCE", "M9_STUCK_CAPTURE_PENDING", "M10_STUCK_REFUND_PENDING"
+   654→  mismatchClass   String
+   655→  // Severity: CRITICAL | HIGH | MEDIUM
+   656→  // CRITICAL/HIGH → routed to ExceptionQueue via reportInvariantViolation()
+   657→  severity        String
+   658→  // The affected entity type: "Payment" | "Refund" | "Outbox" | "WebhookEvent"
+   659→  entityType      String
+   660→  // The affected entity id (paymentId / refundId / outbox id / webhookEvent id)
+   661→  entityId        String
+   662→  // Full state snapshot at detection time (JSON — the evidence for the finding)
+   663→  stateSnapshot   String
+   664→  // Human-readable description of the mismatch
+   665→  description     String
+   666→  // Recommended remediation (informational only — NOT auto-applied)
+   667→  recommendedRemediation String?
+   668→  // ExceptionQueue entry id (set only for CRITICAL/HIGH findings routed via
+   669→  // reportInvariantViolation()). NULL for MEDIUM findings (logged + recorded
+   670→  // but not frozen).
+   671→  exceptionId     String?
+   672→  // Detection timestamps (idempotency: a second run for the same mismatch
+   673→  // updates lastSeenAt, NOT a new row)
+   674→  firstSeenAt     DateTime @default(now())
+   675→  lastSeenAt      DateTime @default(now())
+   676→  // Resolution tracking (admin action — manual, NOT automatic)
+   677→  resolvedAt      DateTime?
+   678→  resolvedBy      String?
+   679→  resolutionNote  String?
+   680→  // 5C: Remediation actions taken for this finding (1:N — a finding may be
+   681→  // repaired multiple times if the first repair fails + is retried).
+   682→  remediationActions RemediationAction[]
+   683→
+   684→  // Idempotency: one unresolved finding per (mismatchClass, entityId).
+   685→  // A partial unique index on (mismatchClass, entityId) WHERE resolvedAt IS NULL
+   686→  // is created in the migration SQL. Prisma's @unique creates a full unique
+   687→  // index (including resolvedAt) which allows multiple resolved findings for
+   688→  // the same (mismatchClass, entityId) over time (audit trail) while preventing
+   689→  // duplicate unresolved findings.
+   690→  @@unique([mismatchClass, entityId, resolvedAt])
+   691→  @@index([severity, resolvedAt])
+   692→  @@index([entityType, entityId])
+   693→  @@index([runId])
+   694→}
+   695→
+   696→// ----------------------------------------
+   697→// P0-03 Wave-5 Sub-Wave 5C — Remediation Action (M16-only, Class-2 additive)
+   698→// ----------------------------------------
+   699→// Audit trail for remediation/repair actions. Currently ONLY M16 (outbox lag —
+   700→// operational, non-financial) remediation is authorized. M3/M9/M10 + CLASS B/D/E
+   701→// are NOT authorized — they require separate Orchestrator directives.
+   702→//
+   703→// SI-6 (Safety Invariant): every repair writes a RemediationAction audit record.
+   704→// SI-2 (Repair Idempotency): the unique constraint on (findingId, repairType)
+   705→// prevents duplicate repair actions for the same finding + repair type. A second
+   706→// attempt to repair the same finding with the same repairType is a no-op (caught
+   707→// by the unique constraint → the handler skips).
+   708→//
+   709→// SAFETY CONTRACT (Orchestrator hard boundary for 5C-M16):
+   710→//   - M16 remediation NEVER writes to Payment, Refund, LedgerEntry, Outbox,
+   711→//     WebhookEvent, IdempotencyKey, or AuditLog.
+   712→//   - M16 remediation NEVER makes external Razorpay API calls.
+   713→//   - M16 remediation's only "external" action is an HTTP call to the outbox
+   714→//     publisher's /trigger endpoint (operational restart — no financial mutation).
+   715→//   - M16 remediation's only DB writes are to this table (RemediationAction) +
+   716→//     ReconciliationFinding (resolves the finding).
+   717→model RemediationAction {
+   718→  id              String   @id @default(cuid())
+   719→  // The finding being repaired
+   720→  findingId       String
+   721→  finding         ReconciliationFinding @relation(fields: [findingId], references: [id], onDelete: Cascade)
+   722→  // The repair type (e.g., "M16_PUBLISHER_TRIGGER"). Only M16 is authorized.
+   723→  repairType      String
+   724→  // The status of the repair action: ATTEMPTED | SUCCEEDED | SKIPPED | FAILED
+   725→  status          String   @default("ATTEMPTED")
+   726→  // What the repair did (JSON snapshot — e.g., { publisherTriggerCalled: true, lagBefore: 360, lagAfter: 45 })
+   727→  actionSnapshot  String
+   728→  // When the repair was attempted
+   729→  attemptedAt     DateTime @default(now())
+   730→  // When the repair completed (set on SUCCEEDED/SKIPPED/FAILED)
+   731→  completedAt     DateTime?
+   732→  // Error message if the repair FAILED
+   733→  error           String?
+   734→
+   735→  // Idempotency: one repair action per (findingId, repairType). A second attempt
+   736→  // to repair the same finding with the same repairType throws P2002 (unique
+   737→  // constraint) — the handler catches this and skips (SI-2: Repair Idempotency).
+   738→  @@unique([findingId, repairType])
+   739→  @@index([status, attemptedAt])
+   740→  @@index([repairType])
+   741→}
+   742→
+   743→// ----------------------------------------
+   744→// P0-06 Wave-6 — Fulfilment (parallel state machine — additive-only)
+   745→// ----------------------------------------
+   746→// 1:1 to Order. Parallel to Order.status (NEXT_STATUS) — does NOT modify
+   747→// the existing Order state machine. Fulfilment has its own NEXT_FULFILMENT_STATUS
+   748→// machine: PREPARING → ALMOST_READY → READY_FOR_PICKUP → PICKED_UP.
+   749→//
+   750→// Lifecycle:
+   751→//   PREPARING        (default — created lazily on first access)
+   752→//     → ALMOST_READY
+   753→//     → READY_FOR_PICKUP
+   754→//     → PICKED_UP    (terminal)
+   755→//
+   756→// Lazy-created: when GET/PATCH /api/orders/[id]/fulfilment is called and no
+   757→// Fulfilment row exists yet, it is created with status='PREPARING' +
+   758→// pickupOtp copied from Order.pickupOtp.
+   759→//
+   760→// Optimistic locking: every PATCH uses a conditional UPDATE
+   761→// (`WHERE id = X AND version = expectedVersion`). A version mismatch returns
+   762→// HTTP 409 (same pattern as Order.status PATCH — P0-25 Case B).
+   763→//
+   764→// P0-07 (pickup attribution): pickupOtp / pickupVerifiedAt / pickupVerifiedBy
+   765→// fields are PRESENT but INACTIVE in this wave. No QR+OTP verification is
+   766→// performed on the PICKED_UP transition; no RBAC is enforced on the
+   767→// PICKED_UP actor. P0-07 activation is a separate Orchestrator directive.
+   768→model Fulfilment {
+   769→  id                String   @id @default(cuid())
+   770→  // 1:1 to Order — @unique ensures at most one Fulfilment per Order.
+   771→  orderId           String   @unique
+   772→  order             Order    @relation(fields: [orderId], references: [id])
+   773→  // Parallel state machine (NEXT_FULFILMENT_STATUS) — does NOT touch Order.status.
+   774→  status            String   @default("PREPARING") // PREPARING | ALMOST_READY | READY_FOR_PICKUP | PICKED_UP
+   775→  // JSON array of {status, at} — parallel to Order.statusHistory.
+   776→  statusHistory     String   @default("[]")
+   777→  // P0-25: Optimistic-locking version field. Incremented on every PATCH.
+   778→  version           Int      @default(0)
+   779→  // P0-07 future: pickup attribution fields (INACTIVE in this wave).
+   780→  pickupOtp         String?  // copied from Order.pickupOtp on lazy-create
+   781→  pickupVerifiedAt  DateTime? // set when pickup is verified (P0-07 — not yet enforced)
+   782→  pickupVerifiedBy  String?  // actor who verified pickup (P0-07 — not yet enforced)
+   783→  createdAt         DateTime @default(now())
+   784→  updatedAt         DateTime @updatedAt
+   785→
+   786→  // --------------------------------------------------------------------
+   787→  // PRODUCT FOUNDATION (PLAN-01) — additive nullable timestamp (Decision #1).
+   788→  //
+   789→  // THIS IS NOT A STATE-MACHINE CHANGE.
+   790→  //
+   791→  // The Fulfilment.status enum remains exactly:
+   792→  //   PREPARING → ALMOST_READY → READY_FOR_PICKUP → PICKED_UP
+   793→  // (P0-06 boundary preserved — no new enum value, no transition added).
+   794→  //
+   795→  // `acceptedAt` is purely an informational timestamp set by the new
+   796→  // POST /api/vendor/orders/[id]/accept endpoint (Wave 3 Task 3C) to record
+   797→  // when the vendor acknowledged an incoming order — analogous to a "read
+   798→  // receipt". It does NOT drive any state transition, does NOT unlock any
+   799→  // downstream action, and does NOT modify the existing state invariant
+   800→  // checks in src/lib/fulfilment-state.ts (governance: DO NOT TOUCH).
+   801→  //
+   802→  // Rationale (plan Risk R1): blueprint §14 mentions an "ACCEPTED" state,
+   803→  // but adding it to the enum would trip P0-06 (state-machine immutability).
+   804→  // Modeling it as an additive timestamp achieves the UX goal (vendor
+   805→  // acknowledgement visible in the timeline) without the governance risk.
+   806→  // --------------------------------------------------------------------
+   807→  acceptedAt        DateTime?
+   808→
+   809→  @@index([status])
+   810→}
+   811→
+   812→// ============================================================================
+   813→// PRODUCT FOUNDATION — ADDITIVE MODELS (PLAN-01 / Wave 1 Task 1A)
+   814→// ============================================================================
+   815→// All models below are NEW and ADDITIVE. No existing model is modified
+   816→// except for the additive nullable columns + back-relations already appended
+   817→// to User, Restaurant, MenuItem, Fulfilment above.
+   818→//
+   819→// Governance: blueprint §29, §50. Do NOT touch existing money-state tables
+   820→// (Payment, Refund, LedgerEntry, Outbox, WebhookEvent, IdempotencyKey, AuditLog)
+   821→// or the fulfilment state machine (Fulfilment.status enum — see acceptedAt
+   822→// comment above: it is a timestamp, NOT a new enum value).
+   823→// ============================================================================
+   824→
+   825→// ---------------------------------------------------------------------------
+   826→// Campus context (blueprint §40)
+   827→// ---------------------------------------------------------------------------
+   828→// A Campus represents an academic institution (college/university) that
+   829→// SnakZap serves. Users link to a campus during onboarding; restaurants link
+   830→// to one or more campuses via the RestaurantCampus junction (a chain can
+   831→// serve multiple campuses). The `domain` field is the email suffix used to
+   832→// verify student affiliation (e.g. "iitb.ac.in").
+   833→// ---------------------------------------------------------------------------
+   834→model Campus {
+   835→  id          String   @id @default(cuid())
+   836→  name        String   @unique
+   837→  shortName   String?  // e.g. "IIT-B"
+   838→  domain      String?  @unique // email suffix e.g. "iitb.ac.in"
+   839→  city        String
+   840→  state       String
+   841→  pincode     String?
+   842→  latitude    Float?
+   843→  longitude   Float?
+   844→  isActive    Boolean  @default(true)
+   845→  // JSON: { defaultCurrency, commissionRate, mealPlanEnabled, studentDiscountPercent }
+   846→  settings    String   @default("{}")
+   847→  createdAt   DateTime @default(now())
+   848→  updatedAt   DateTime @updatedAt
+   849→
+   850→  users       User[]
+   851→  restaurants Restaurant[]
+   852→  restaurantCampuses RestaurantCampus[]
+   853→
+   854→  @@index([city, state])
+   855→  @@index([isActive])
+   856→}
+   857→
+   858→// Many-to-many junction: a restaurant can serve multiple campuses
+   859→// (e.g., a chain with 5 outlets near 3 campuses).
+   860→model RestaurantCampus {
+   861→  id           String   @id @default(cuid())
+   862→  restaurantId String
+   863→  campusId     String
+   864→  isPrimary    Boolean  @default(false)
+   865→  createdAt    DateTime @default(now())
+   866→
+   867→  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+   868→  campus       Campus     @relation(fields: [campusId], references: [id], onDelete: Cascade)
+   869→
+   870→  @@unique([restaurantId, campusId])
+   871→  @@index([campusId])
+   872→}
+   873→
+   874→// ---------------------------------------------------------------------------
+   875→// Rewards context (blueprint §17)
+   876→// ---------------------------------------------------------------------------
+   877→// Rewards engine: 1 pt per ₹10 spent (10 pts per ₹100); 100 pts = ₹10 discount
+   878→// (10% back). Ledger-based — RewardLedgerEntry is immutable + append-only.
+   879→// RewardAccount.balance is a CACHED sum (refreshed after every ledger mutation
+   880→// inside the same transaction — derived value, not authoritative).
+   881→//
+   882→// Idempotency: each issuance carries an idempotencyKey constructed as
+   883→// `${ruleKey}:${eventId}` by src/lib/rewards-engine.ts. The unique constraint
+   884→// on idempotencyKey prevents double-issuance on retry/duplicate event delivery.
+   885→// ---------------------------------------------------------------------------
+   886→model RewardAccount {
+   887→  id              String   @id @default(cuid())
+   888→  userId          String   @unique
+   889→  // Balance is DERIVED from RewardLedgerEntry sum, but cached here for fast reads.
+   890→  // Refreshed after every ledger mutation inside the same transaction.
+   891→  balance         Int      @default(0) // points (positive integer)
+   892→  lifetimeEarned  Int      @default(0) // points (sum of all EARN entries)
+   893→  lifetimeRedeemed Int     @default(0) // points (sum of all REDEEM entries, positive number)
+   894→  updatedAt       DateTime @updatedAt
+   895→
+   896→  ledgerEntries   RewardLedgerEntry[]
+   897→
+   898→  @@index([userId])
+   899→}
+   900→
+   901→model RewardRule {
+   902→  id            String   @id @default(cuid())
+   903→  key           String   @unique // e.g. "EARN_BASE", "FIRST_ORDER", "STREAK_3"
+   904→  name          String
+   905→  description   String?
+   906→  // JSON formula spec — interpreted by src/lib/rewards-engine.ts:
+   907→  //   { "type": "perRupee", "rate": 0.1 } — 1 pt per ₹10
+   908→  //   { "type": "fixed", "points": 50 }
+   909→  //   { "type": "multiplier", "multiplier": 2 } — doubles base earn
+   910→  pointsFormula  String
+   911→  isActive      Boolean  @default(true)
+   912→  // Optional window for time-bound rules (e.g., campus event)
+   913→  startsAt      DateTime?
+   914→  endsAt        DateTime?
+   915→  createdAt     DateTime @default(now())
+   916→  updatedAt     DateTime @updatedAt
+   917→
+   918→  ledgerEntries RewardLedgerEntry[]
+   919→  redemptions   RewardRedemption[]
+   920→
+   921→  @@index([isActive])
+   922→}
+   923→
+   924→model RewardLedgerEntry {
+   925→  id             String   @id @default(cuid())
+   926→  userId         String
+   927→  // EARN (positive) | REDEEM (negative) | EXPIRE (negative) | ADJUST (±)
+   928→  type           String
+   929→  points         Int      // signed: + for EARN, - for REDEEM/EXPIRE
+   930→  // Optional context — set depending on rule type
+   931→  orderId        String?
+   932→  ruleId         String?
+   933→  rule           RewardRule? @relation(fields: [ruleId], references: [id])
+   934→  giftId         String?
+   935→  groupOrderId   String?
+   936→  referralUserId String? // for REFERRAL rule — the referee userId
+   937→  // Idempotency: one entry per idempotencyKey. Constructed as
+   938→  // `${ruleKey}:${eventId}` by src/lib/rewards-engine.ts.
+   939→  // Single-column @unique is stricter than @@unique([userId, idempotencyKey])
+   940→  // (globally unique, not per-user) — also satisfies the per-user requirement.
+   941→  idempotencyKey String   @unique
+   942→  // Optional expiry (EARN entries only) — when this timestamp passes,
+   943→  // a cron job creates a matching EXPIRE entry.
+   944→  expiresAt      DateTime?
+   945→  createdAt      DateTime @default(now())
+   946→
+   947→  account        RewardAccount @relation(fields: [userId], references: [userId])
+   948→  // 1:1 back-relation — RewardRedemption.ledgerEntryId is @unique, so at most
+   949→  // one redemption per ledger entry (a REDEEM entry corresponds to exactly one
+   950→  // redemption code).
+   951→  redemption     RewardRedemption?
+   952→
+   953→  @@index([userId, createdAt])
+   954→  @@index([type, createdAt])
+   955→  @@index([orderId])
+   956→  @@index([ruleId])
+   957→}
+   958→
+   959→model RewardRedemption {
+   960→  id            String   @id @default(cuid())
+   961→  userId        String
+   962→  ledgerEntryId String   @unique // the REDEEM ledger entry (1:1)
+   963→  ledgerEntry   RewardLedgerEntry @relation(fields: [ledgerEntryId], references: [id])
+   964→  // PERCENT_DISCOUNT | FIXED_DISCOUNT | FREE_ITEM | VENDOR_SPECIFIC
+   965→  rewardType    String
+   966→  // For PERCENT_DISCOUNT: percent value (e.g., 5 = 5% off)
+   967→  // For FIXED_DISCOUNT: paise amount (e.g., 2000 = ₹20 off)
+   968→  // For FREE_ITEM: menuItemId
+   969→  // For VENDOR_SPECIFIC: dealId
+   970→  discountValue String
+   971→  // If redeemed against an order, the orderId; else null (generic redemption code)
+   972→  orderId       String?
+   973→  // Generated redemption code (e.g., "SNZ-RWD-AB12CD") — single-use
+   974→  redemptionCode String @unique
+   975→  redeemedAt    DateTime @default(now())
+   976→
+   977→  ruleRuleId    String?
+   978→  rule          RewardRule? @relation(fields: [ruleRuleId], references: [id])
+   979→
+   980→  @@index([userId, redeemedAt])
+   981→  @@index([orderId])
+   982→}
+   983→
+   984→// ---------------------------------------------------------------------------
+   985→// Gift context (blueprint §19)
+   986→// ---------------------------------------------------------------------------
+   987→// Food gifting lifecycle:
+   988→//   CREATED → PAID → AVAILABLE → REDEEMED | EXPIRED | CANCELLED | REFUNDED
+   989→//
+   990→// Implementation uses the "ghost Order" pattern (plan Decision #6):
+   991→//   - Sender pays for a normal Order via the EXISTING /api/payments route
+   992→//     (governance: DO NOT modify payment routes). Order.note encodes
+   993→//     `GIFT:${giftId}:for:${recipientId}` so the gift backend can correlate.
+   994→//   - The ghost Order is filtered from "My Orders" UI via note-prefix filter.
+   995→//   - Recipient's redemption creates a NEW zero-amount Order with note
+   996→//     `GIFT_FROM:${senderId}:${giftId}`. ZERO modifications to Order model.
+   997→//
+   998→// Payment linkage (paymentId) is a soft FK — no Prisma relation to Payment
+   999→// (governance: Payment is a money-state table, DO NOT TOUCH its relations).
+  1000→// ---------------------------------------------------------------------------
+  1001→model Gift {
+  1002→  id             String   @id @default(cuid())
+  1003→  senderId       String
+  1004→  recipientId    String
+  1005→  menuItemId     String
+  1006→  menuItem       MenuItem @relation(fields: [menuItemId], references: [id])
+  1007→  // Snapshot at creation time (price + name — protects against later menu edits)
+  1008→  menuItemName   String
+  1009→  menuItemPrice  Int      // paise
+  1010→  message        String?
+  1011→  // CREATED → PAID → AVAILABLE → REDEEMED | EXPIRED | CANCELLED | REFUNDED
+  1012→  status         String   @default("CREATED")
+  1013→  // Single-use code the recipient uses to redeem
+  1014→  redemptionCode String   @unique
+  1015→  // 30-day default expiry (set when status → AVAILABLE)
+  1016→  expiresAt      DateTime
+  1017→  // Soft FK to Payment.id — sender's payment (no Prisma relation; Payment is governance-protected)
+  1018→  paymentId      String?
+  1019→  // Recipient's order (set when recipient redeems) — soft FK to Order.id
+  1020→  recipientOrderId String?
+  1021→  // Lifecycle timestamps
+  1022→  paidAt         DateTime?
+  1023→  availableAt    DateTime?
+  1024→  redeemedAt     DateTime?
+  1025→  cancelledAt    DateTime?
+  1026→  refundedAt     DateTime?
+  1027→  createdAt      DateTime @default(now())
+  1028→  updatedAt      DateTime @updatedAt
+  1029→
+  1030→  @@index([senderId, createdAt])
+  1031→  @@index([recipientId, status])
+  1032→  @@index([status, expiresAt])
+  1033→}
+  1034→
+  1035→// ---------------------------------------------------------------------------
+  1036→// Group ordering context (blueprint §20 — Model A: host pays)
+  1037→// ---------------------------------------------------------------------------
+  1038→// GroupOrder + GroupOrderMember + GroupOrderItem.
+  1039→//
+  1040→// Host creates → share code → friends join + add items to own cart →
+  1041→// host confirm creates a single merged Order via direct prisma call inside
+  1042→// withTransaction (NOT via /api/orders POST — avoids modifying that route).
+  1043→//
+  1044→// Concurrency: optimistic lock on GroupOrder.version (incremented on confirm;
+  1045→// mismatch returns HTTP 409).
+  1046→// ---------------------------------------------------------------------------
+  1047→model GroupOrder {
+  1048→  id            String   @id @default(cuid())
+  1049→  hostId        String
+  1050→  restaurantId  String
+  1051→  restaurant    Restaurant @relation(fields: [restaurantId], references: [id])
+  1052→  // OPEN (members joining) | CONFIRMED (host confirmed + paid) | CLOSED (auto-closed) | CANCELLED
+  1053→  status        String   @default("OPEN")
+  1054→  // 6-character human-readable share code (e.g., "AB12CD")
+  1055→  shareCode     String   @unique
+  1056→  // Auto-close time (default createdAt + 24h)
+  1057→  closesAt      DateTime
+  1058→  // Host's confirmation
+  1059→  confirmedAt   DateTime?
+  1060→  // The single Order created on confirm — soft FK to Order.id (no relation to avoid touching Order)
+  1061→  confirmedOrderId String?
+  1062→  // Optimistic lock — incremented on confirm; conditional UPDATE prevents race
+  1063→  version       Int      @default(0)
+  1064→  // Group name (optional — e.g., "Tuesday lunch")
+  1065→  name          String?
+  1066→  createdAt     DateTime @default(now())
+  1067→  updatedAt     DateTime @updatedAt
+  1068→
+  1069→  members       GroupOrderMember[]
+  1070→  items         GroupOrderItem[]
+  1071→
+  1072→  @@index([hostId, status])
+  1073→  @@index([restaurantId, status])
+  1074→  @@index([status, closesAt])
+  1075→}
+  1076→
+  1077→model GroupOrderMember {
+  1078→  id            String   @id @default(cuid())
+  1079→  groupOrderId  String
+  1080→  groupOrder    GroupOrder @relation(fields: [groupOrderId], references: [id], onDelete: Cascade)
+  1081→  userId        String
+  1082→  joinedAt      DateTime @default(now())
+  1083→
+  1084→  items         GroupOrderItem[]
+  1085→
+  1086→  @@unique([groupOrderId, userId])
+  1087→  @@index([userId])
+  1088→}
+  1089→
+  1090→model GroupOrderItem {
+  1091→  id            String   @id @default(cuid())
+  1092→  groupOrderId  String
+  1093→  groupOrder    GroupOrder @relation(fields: [groupOrderId], references: [id], onDelete: Cascade)
+  1094→  userId        String
+  1095→  // Composite FK to GroupOrderMember — enforces that the user adding the item
+  1096→  // is a member of the group (referential integrity at the DB layer).
+  1097→  // References the @@unique([groupOrderId, userId]) on GroupOrderMember.
+  1098→  member        GroupOrderMember @relation(fields: [groupOrderId, userId], references: [groupOrderId, userId])
+  1099→  menuItemId    String
+  1100→  menuItem      MenuItem @relation(fields: [menuItemId], references: [id])
+  1101→  name          String   // snapshot
+  1102→  price         Int      // paise snapshot
+  1103→  quantity      Int      @default(1)
+  1104→  addedAt       DateTime @default(now())
+  1105→  updatedAt     DateTime @updatedAt
+  1106→
+  1107→  @@index([groupOrderId, userId])
+  1108→  @@index([menuItemId])
+  1109→}
+  1110→
+  1111→// ---------------------------------------------------------------------------
+  1112→// Social context (blueprint §18)
+  1113→// ---------------------------------------------------------------------------
+  1114→// Bidirectional follow = friend request + accept. 2 rows per mutual friendship
+  1115→// (A→B + B→A) for clean queries.
+  1116→//
+  1117→// Activity feed verbs: ORDERED | ORDERED_ITEM (opt-in) | GIFTED | GROUP_ORDERED
+  1118→// | REWARDED | REDEEMED — NEVER payment amount. metadata JSON is validated by
+  1119→// Zod schema in src/lib/validation.ts (Wave 6) to forbid amount/total/price.
+  1120→// ---------------------------------------------------------------------------
+  1121→model SocialConnection {
+  1122→  id            String   @id @default(cuid())
+  1123→  followerId    String   // the user who initiated
+  1124→  followeeId    String   // the user being followed
+  1125→  // PENDING (request sent) | ACCEPTED | REJECTED | BLOCKED
+  1126→  status        String   @default("PENDING")
+  1127→  requestedAt   DateTime @default(now())
+  1128→  acceptedAt    DateTime?
+  1129→  // Optional message with friend request
+  1130→  message       String?
+  1131→  createdAt     DateTime @default(now())
+  1132→  updatedAt     DateTime @updatedAt
+  1133→
+  1134→  @@unique([followerId, followeeId])
+  1135→  @@index([followeeId, status])
+  1136→  @@index([followerId, status])
+  1137→}
+  1138→
+  1139→model SocialActivity {
+  1140→  id            String   @id @default(cuid())
+  1141→  actorId       String   // the user who performed the action
+  1142→  // ORDERED | ORDERED_ITEM | GIFTED | GROUP_ORDERED | REWARDED | REDEEMED
+  1143→  verb          String
+  1144→  // Restaurant | MenuItem | Gift | GroupOrder | RewardLedgerEntry | RewardRedemption
+  1145→  objectType   String
+  1146→  objectId      String
+  1147→  // JSON metadata — NEVER includes payment amount
+  1148→  // e.g., { restaurantName, itemName?, recipientName? }
+  1149→  metadata      String   @default("{}")
+  1150→  // FRIENDS (default) | PUBLIC | PRIVATE
+  1151→  visibility    String   @default("FRIENDS")
+  1152→  createdAt     DateTime @default(now())
+  1153→
+  1154→  @@index([actorId, createdAt])
+  1155→  @@index([createdAt])
+  1156→  @@index([verb, createdAt])
+  1157→}
+  1158→
+  1159→// ---------------------------------------------------------------------------
+  1160→// Notification context
+  1161→// ---------------------------------------------------------------------------
+  1162→// Simple notification store. Read by GET /api/notifications (Wave 2+).
+  1163→// readAt=null means unread; setting readAt marks as read.
+  1164→// ---------------------------------------------------------------------------
+  1165→model Notification {
+  1166→  id            String   @id @default(cuid())
+  1167→  userId        String   // recipient
+  1168→  // ORDER_READY | GIFT_RECEIVED | GIFT_REDEEMED | FRIEND_REQUEST |
+  1169→  // GROUP_ORDER_INVITE | REWARD_EARNED | REWARD_EXPIRING | ORDER_ACCEPTED | SYSTEM
+  1170→  type          String
+  1171→  title         String
+  1172→  body          String
+  1173→  // JSON: deep link + action buttons + context
+  1174→  data          String   @default("{}")
+  1175→  readAt        DateTime?
+  1176→  createdAt     DateTime @default(now())
+  1177→
+  1178→  @@index([userId, readAt])
+  1179→  @@index([type, createdAt])
+  1180→}
+  1181→
