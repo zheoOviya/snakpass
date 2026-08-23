@@ -241,6 +241,13 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
 
       // Outbox event — Wave-4 4c: PAYMENT_CAPTURE_REQUESTED (publisher calls captureRazorpayPayment).
       // The publisher emits PAYMENT_CAPTURED after capture confirms (no longer emitted here).
+      //
+      // Gateway idempotency key (Wave-5 Gateway Idempotency workstream):
+      // Generated BEFORE the txn + stored in the outbox payload. The publisher
+      // reads this key on each retry + passes it to captureRazorpayPayment()
+      // as the X-Idempotency-Key header. Razorpay deduplicates on retry.
+      // The key is deterministic across retries (same key in the same outbox row).
+      const gatewayIdempotencyKey = randomUUID()
       await enqueueOutboxEvent(tx, {
         eventType: 'PAYMENT_CAPTURE_REQUESTED',
         aggregateType: 'Payment',

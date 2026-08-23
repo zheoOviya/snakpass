@@ -216,6 +216,12 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
       // Outbox event — PAYMENT_REFUND_REQUESTED (publisher calls
       // refundRazorpayPayment). The publisher emits PAYMENT_REFUNDED after the
       // gateway confirms (not emitted here — same as 4c capture pattern).
+      //
+      // Gateway idempotency key (Wave-5 Gateway Idempotency workstream):
+      // Generated BEFORE the txn + stored in the outbox payload. The publisher
+      // reads this key on each retry + passes it to refundRazorpayPayment()
+      // as the X-Idempotency-Key header. Razorpay deduplicates on retry.
+      const gatewayIdempotencyKey = randomUUID()
       await enqueueOutboxEvent(tx, {
         eventType: 'PAYMENT_REFUND_REQUESTED',
         aggregateType: 'Refund',

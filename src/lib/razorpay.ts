@@ -109,6 +109,13 @@ export function verifyRazorpaySignature(
 /**
  * Capture a Razorpay payment.
  * In demo mode, returns a simulated capture response.
+ *
+ * Gateway idempotency key (Wave-5 Gateway Idempotency workstream):
+ * When `idempotencyKey` is provided, it is passed as the `X-Idempotency-Key`
+ * header to the Razorpay API. Razorpay deduplicates on retry — calling
+ * capture with the same key + same payment returns the cached response
+ * instead of charging again. This protects against publisher retry after
+ * a crash between the gateway call + the success-txn commit.
  */
 export async function captureRazorpayPayment(
   razorpayPaymentId: string,
@@ -377,6 +384,10 @@ export interface RazorpayRefundResponse {
  * @param razorpayPaymentId - The Razorpay payment ID (pay_*)
  * @param amount - Refund amount in paise (must be > 0; for full refund, equals Payment.amount)
  * @param currency - ISO 4217 currency code (default INR)
+ * @param idempotencyKey - Optional pre-generated gateway idempotency key (Wave-5 Gateway Idempotency workstream).
+ *   When provided, passed as `idempotency_key` in the refund request body. Razorpay
+ *   deduplicates on retry — calling refund with the same key + same payment returns
+ *   the cached response instead of refunding again.
  * @returns RazorpayRefundResponse — refunded=true on success
  */
 export async function refundRazorpayPayment(

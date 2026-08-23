@@ -12264,3 +12264,184 @@ Stage Summary:
 - To unblock: a SEPARATE directive must authorize manual conflict resolution (accept local wording for comments, set file mode 100644, merge worklog entries). Then: git add + git commit (merge commit) + git push + ls-remote verification.
 - S1 checkpoint (682a4b1) remains intact and is ancestor of HEAD. No source changes. No push. No force.
 - NO CODE CHANGES. GIT MUTATIONS: git merge (attempted+aborted per directive).
+
+--- (merged from remote origin/main) ---
+
+
+## Task ID: 5c-class-c-consolidated-close — Wave-5 5C CLASS-C Consolidated Closure
+
+Timestamp: 2026-08-17 (Orchestrator S5-5C-CLASS-C-CONSOLIDATED-CLOSE-01 directive executed)
+
+Agent: main (IDE)
+
+### Directive
+- **Directive ID:** `S5-5C-CLASS-C-CONSOLIDATED-CLOSE-01`
+- **Decision:** Formally close 5C CLASS-C remediation scope (M16 + M3 + M9 + M10 — all S5 PASS / CLOSED).
+- **Scope:** Documentation/governance closure only — no implementation, no schema changes, no new evidence, no production changes.
+
+### Pre-conditions verified
+1. ✅ Git working tree clean (after restoring external modifications).
+2. ✅ HEAD = `472765f` (Consolidated Closure Review).
+3. ✅ Consolidated review document exists.
+4. ✅ All 4 CLASS-C S5 PASS / CLOSED references present in WAVE5_EVIDENCE.md.
+5. ✅ All 8 evidence artifacts preserved.
+
+### Work Log
+- Verified all preconditions.
+- Documentation closure edits (documentation-only — no code/schema/evidence changes):
+  - `WAVE5_EVIDENCE.md`:
+    - Header status → "5C CLASS-C CONSOLIDATED CLOSED".
+    - Added closure lines for M3, M9, M10 S5 closures + CLASS-C consolidated closure.
+    - §6 → "Canonical Governance State (Authoritative — 5C CLASS-C CONSOLIDATED CLOSED)" + all 5 Orchestrator directives listed.
+    - §7 → "5C CLASS-C CONSOLIDATED CLOSED" + consolidated closure blockquote.
+  - Appended this worklog entry.
+- Lint passes clean (documentation-only).
+
+### Stage Summary
+- **Wave-5 Sub-Wave 5C — CLASS-C CONSOLIDATED CLOSED.**
+- Directive ID: `S5-5C-CLASS-C-CONSOLIDATED-CLOSE-01`.
+- All 4 CLASS-C remediation gates (M16, M3, M9, M10) formally closed.
+- CLASS B/D/E remain LOCKED.
+- Gateway idempotency-key gap remains DEFERRED.
+- `reconciliationAutoRepair` OFF. Production NOT AUTHORIZED.
+- Wave-6 / Wave-7 LOCKED.
+- NO code modified. NO schema changed. NO evidence run. NO production touched.
+- IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: gateway-idempotency-gate-review — Gateway Idempotency Key READ/PLAN-FIRST Gate Review
+
+Timestamp: 2026-08-17 (Orchestrator WAVE5-GATEWAY-IDEMPOTENCY-READ-PLAN-FIRST-01 directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized Gateway Idempotency Key READ/PLAN-FIRST Gate Review. Read-only planning — no implementation, no code changes, no schema changes, no evidence execution. This is a separate safety workstream — does NOT reopen M9/M10.
+
+### Governance boundaries honored
+- ✅ READ/PLAN-FIRST ONLY — no implementation, no code changes, no schema changes, no migrations.
+- ✅ No financial mutation. No Razorpay calls. No outbox enqueue.
+- ✅ No feature-flag changes. No production deployment. No evidence execution.
+- ✅ No M9/M10 reopening. No CLOSED wave modification.
+- ✅ Wave-6 / Wave-7 remain LOCKED.
+
+### Work Log
+- Read TRANSACTION_RETRY_INVARIANT.md §8.2 item 4 (deferred pre-generated idempotency key requirement) + §5 Option B (gateway idempotency key pattern).
+- Read current gateway call sites: `captureRazorpayPayment()`, `refundRazorpayPayment()`, `createRazorpayOrder()` — ALL without idempotency key.
+- Read publisher retry loop (claim → gateway call → success-txn → retry/FAILED).
+- Read M9/M10 closure boundaries (re-enqueue PROHIBITED due to this gap).
+- Read Razorpay SDK — confirmed `idempotency_key` parameter supported on some endpoints (orders.create, payments.refund). Capture support unclear.
+- Analyzed key lifecycle: generation (before txn), persistence (in outbox payload), reuse (publisher reads from payload), retention (persists with outbox event), format (UUID, no PII).
+- Analyzed crash/retry/race scenarios (H.1-H.4): ALL SAFE with idempotency key. The key eliminates the "after gateway call, before success-txn" crash window — the most dangerous scenario.
+- Analyzed compatibility with CLOSED waves: ALL COMPATIBLE. The key is additive (stored in outbox payload, passed as parameter to gateway call). No CLOSED wave code structure changes.
+- Produced `WAVE5_GATEWAY_IDEMPOTENCY_GATE_REVIEW.md` — 14 sections (A-N):
+  - A. Current Architecture (5 gateway functions, all without key).
+  - B. Existing Retry Behavior (publisher retry loop, dangerous gap).
+  - C. Current Idempotency Mechanisms (5 mechanisms, none protect gateway call retry).
+  - D. Gateway Idempotency Gap (fundamental problem + why existing checks don't help).
+  - E. Required Key Lifecycle (generation timing, persistence in outbox payload, format, reuse, retention).
+  - F. Capture Retry Design (proposed flow with key in payload + publisher passes to gateway).
+  - G. Refund Retry Design (same pattern, separate key domains for capture vs refund).
+  - H. Race Analysis (4 scenarios — all SAFE with key).
+  - I. Crash-Recovery Analysis (4 crash points — key eliminates the dangerous window).
+  - J. Failure/Timeout Handling (4 scenarios — key makes timeout safe).
+  - K. Database Constraints (no new unique constraint needed; optional dedicated column).
+  - L. Security/Audit Considerations (UUID, no PII, in audit trail, not sent to client).
+  - M. Compatibility with CLOSED Waves (ALL COMPATIBLE — additive only).
+  - N. Recommendation: CONDITIONAL GO (with explicit authorization boundary).
+
+### Key decisions documented
+- **Recommendation: CONDITIONAL GO.** The architecture is sound (TRANSACTION_RETRY_INVARIANT.md §5 Option B). Implementation authorized ONLY for: adding key to outbox payload, adding parameter to gateway functions, modifying publisher to read+pass key, verifying per-endpoint Razorpay support.
+- **NOT authorized:** M9/M10 re-enqueue path (requires key implementation + SEPARATE directive), `createRazorpayOrder()` idempotency (separate gap), production deployment, feature-flag activation.
+- **Key design:** UUID generated before txn, stored in outbox payload JSON (no schema change needed), read by publisher on each retry, passed to gateway as `X-Idempotency-Key` header or `idempotency_key` body parameter.
+- **Key eliminates:** the "after gateway call, before success-txn" crash window — the most dangerous scenario where a publisher retry can cause a duplicate charge/refund at the gateway.
+- **CLOSED wave compatibility:** ALL waves compatible — the key is additive, no existing transaction structure changes.
+
+### Stage Summary
+- **Gateway Idempotency Key READ/PLAN-FIRST Gate Review: ✅ COMPLETE.**
+- `WAVE5_GATEWAY_IDEMPOTENCY_GATE_REVIEW.md` produced (14 sections, CONDITIONAL GO recommendation).
+- **Recommendation: CONDITIONAL GO** — the key is a prerequisite for M9/M10 re-enqueue paths. Implementation would close the deferred gap (TRANSACTION_RETRY_INVARIANT.md §8.2 item 4). But it does NOT authorize M9/M10 re-enqueue — that requires a separate directive.
+- NO code modified. NO schema changed. NO evidence run. NO production touched.
+- Wave-3/4/5A/5B/5C-M16/M3/M9/M10 CLOSED — immutable.
+- `reconciliationAutoRepair` OFF. Wave-6/7 LOCKED. Production NOT AUTHORIZED.
+- Next governance checkpoint: Orchestrator decision on gateway idempotency key implementation authorization (separate directive required).
+- IDE is STOPPING after commit + push.
+
+---
+
+## Task ID: gateway-idempotency-implementation — Gateway Idempotency Key Foundation Implementation
+
+Timestamp: 2026-08-17 (Orchestrator WAVE5-GATEWAY-IDEMPOTENCY-IMPLEMENT-01 directive executed)
+
+Agent: main (IDE)
+
+### Task
+Execute the Orchestrator-authorized Gateway Idempotency Key implementation (Directive ID: `WAVE5-GATEWAY-IDEMPOTENCY-IMPLEMENT-01`):
+- Add `gatewayIdempotencyKey` (UUID) to outbox payload in capture route + refund route.
+- Add `idempotencyKey` optional parameter to `captureRazorpayPayment()` + `refundRazorpayPayment()`.
+- Modify publisher to read key from outbox payload + pass to gateway functions.
+- Handle legacy outbox rows (key absent) — proceed without key (backward-compatible).
+- SQLite evidence E1-E8.
+- Commit + push.
+- STOP — do NOT self-authorize evidence gate or M9/M10 re-enqueue.
+
+### Governance boundaries honored
+- ✅ Only the idempotency-key foundation — NO M9/M10 re-enqueue, NO retry path, NO capture/refund retry.
+- ✅ NO schema change (key stored in outbox payload JSON — no new column).
+- ✅ NO new feature flag (key is always generated by default — it's in the payload).
+- ✅ NO production deployment. `realPayments` OFF. `reconciliationAutoRepair` OFF.
+- ✅ NO modification of CLOSED wave transaction structures (key is additive to payload).
+- ✅ Wave-6/7 NOT started. M9/M10 re-enqueue NOT authorized.
+
+### Implementation
+1. **`src/app/api/payments/route.ts`** (capture route):
+   - Added `import { randomUUID } from 'crypto'`.
+   - Generate `gatewayIdempotencyKey = randomUUID()` before the outbox event.
+   - Store `gatewayIdempotencyKey` in the outbox payload JSON.
+
+2. **`src/app/api/payments/refund/route.ts`** (refund route):
+   - Added `import { randomUUID } from 'crypto'`.
+   - Generate `gatewayIdempotencyKey = randomUUID()` before the outbox event.
+   - Store `gatewayIdempotencyKey` in the outbox payload JSON.
+
+3. **`src/lib/razorpay.ts`**:
+   - `captureRazorpayPayment()`: added `idempotencyKey?: string` parameter. When provided, passes as `X-Idempotency-Key` header. In demo mode, key is accepted but not sent to gateway.
+   - `refundRazorpayPayment()`: added `idempotencyKey?: string` parameter. When provided, passes as `idempotency_key` in request body. In demo mode, key is accepted but not sent to gateway.
+
+4. **`mini-services/outbox-publisher/index.ts`**:
+   - Capture handler: reads `payload.gatewayIdempotencyKey` from outbox payload. If present, passes to `captureRazorpayPayment()`. If absent (legacy row), proceeds without key (backward-compatible — no new key generated).
+   - Refund handler: reads `payload.gatewayIdempotencyKey` from outbox payload. Same pattern.
+
+5. **`src/app/api/payments/evidence-verify/route.ts`**:
+   - Added `payload: true` to outbox select + `outboxPayload` to response (so evidence runner can verify the key is in the payload).
+   - Fixed audit log query to include `PAYMENT_CAPTURE_PENDING` action (not just `PAYMENT_CAPTURED`).
+
+6. **Evidence runner** (`scripts/wave5-gateway-idempotency-evidence.mjs`) + wrapper (`scripts/run-gateway-idempotency-evidence.sh`).
+
+### SQLite Evidence Results (ALL 8/8 PASS)
+- Run ID: `gw-idem-1786968139727-2ffc4019`
+- Artifact: `evidence/wave5-gateway-idempotency/evidence-E1-E8-sqlite.json`
+- `ok`: true
+- `summary`: {passed: 8, total: 8}
+
+Per-scenario results:
+- ✅ **E1** Key generated + stored in outbox payload.
+- ✅ **E2** Key persisted in outbox (deterministic — same key on every read).
+- ✅ **E3** Capture route still works correctly with key (Payment CAPTURE_PENDING).
+- ✅ **E4** Capture without Idempotency-Key header (backward compatible — key generated internally).
+- ✅ **E5** Refund route generates key in outbox payload (refund created).
+- ✅ **E6** Key in outbox payload (publisher would read it).
+- ✅ **E7** No CLOSED wave behavior change (Payment + Ledger + Audit + Outbox structure unchanged).
+- ✅ **E8** No new feature flag added.
+
+### Stage Summary
+- **Gateway Idempotency Key Foundation — IMPLEMENTED + SQLite evidence E1-E8 PASS (8/8).**
+- Key is a UUID generated before the business txn, stored in the outbox payload JSON.
+- Publisher reads the key from the payload on each retry + passes it to the gateway API.
+- Legacy outbox rows (without key) are handled backward-compatibly (proceed without key).
+- NO schema change. NO new feature flag. NO M9/M10 re-enqueue.
+- `realPayments` OFF. `reconciliationAutoRepair` OFF. Production NOT AUTHORIZED.
+- Wave-6/7 LOCKED. M9/M10 re-enqueue NOT authorized.
+- PostgreSQL evidence NOT run. Evidence gate NOT authorized.
+- IDE is STOPPING after commit + push.
