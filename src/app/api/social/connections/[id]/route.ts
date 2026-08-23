@@ -62,20 +62,21 @@ import { newTraceId, info as logInfo } from '@/lib/logger'
 //   2. Audit log: action='FRIEND_REQUEST_REJECTED'.
 // ----------------------------------------------------------------------------
 
-type PatchStatus = 'ACCEPTED' | 'BLOCKED' | 'REJECTED'
+type PatchStatus = 'ACCEPTED' | 'BLOCKED' | 'REJECTED' | 'UNBLOCKED'
 
 function parsePatchStatus(body: unknown): PatchStatus | null {
   if (typeof body !== 'object' || body === null) return null
   const b = body as { status?: unknown; action?: unknown }
   if (typeof b.status === 'string') {
     const s = b.status.toUpperCase()
-    if (s === 'ACCEPTED' || s === 'BLOCKED' || s === 'REJECTED') return s
+    if (s === 'ACCEPTED' || s === 'BLOCKED' || s === 'REJECTED' || s === 'UNBLOCKED') return s
   }
   if (typeof b.action === 'string') {
     const a = b.action.toUpperCase()
     if (a === 'ACCEPT') return 'ACCEPTED'
     if (a === 'REJECT') return 'REJECTED'
     if (a === 'BLOCK') return 'BLOCKED'
+    if (a === 'UNBLOCK') return 'UNBLOCKED'
   }
   return null
 }
@@ -257,17 +258,18 @@ export const PATCH = (
         // edge (so neither party can re-request without an explicit unblock).
         // -----------------------------------------------------------------
         if (status === 'BLOCKED') {
+          // S4A: set blockedBy on BOTH rows so ownership is recoverable
           await tx.socialConnection.update({
             where: { id: connectionId },
-            data: { status: 'BLOCKED' },
+            data: { status: 'BLOCKED', blockedBy: session.userId },
           })
-          // Flip the reverse edge to BLOCKED if it exists.
+          // Flip the reverse edge to BLOCKED + set blockedBy if it exists.
           await tx.socialConnection.updateMany({
             where: {
               followerId: conn.followeeId,
               followeeId: conn.followerId,
             },
-            data: { status: 'BLOCKED' },
+            data: { status: 'BLOCKED', blockedBy: session.userId },
           })
 
           await tx.auditLog.create({
@@ -291,6 +293,76 @@ export const PATCH = (
               connectionId,
               status: 'BLOCKED',
               blockedBy: session.userId,
+            },
+          }
+        }
+
+        // -----------------------------------------------------------------
+        // S4A: UNBLOCKED → only the blocker (blockedBy) can unblock.
+        // Removes all BLOCKED rows for this pair → resulting state = NONE.
+        // Does NOT restore ACCEPTED friendship — users must re-request.
+        // -----------------------------------------------------------------
+        if (status === 'UNBLOCKED') {
+          // Must be a BLOCKED row
+          if (conn.status !== 'BLOCKED') {
+            return {
+              type: 'error' as const,
+              status: 409,
+              body: {
+                error: {
+                  code: 'CONFLICT',
+                  message: `Cannot unblock a connection with status '${conn.status}'`,
+                  traceId,
+                  details: { currentStatus: conn.status },
+                },
+              },
+            }
+          }
+          // S4A: only the blocker can unblock. Legacy NULL blockedBy = fail-closed.
+          if (conn.blockedBy !== session.userId) {
+            return {
+              type: 'error' as const,
+              status: 403,
+              body: {
+                error: {
+                  code: 'AUTHORIZATION_DENIED',
+                  message: 'Only the user who blocked can unblock',
+                  traceId,
+                },
+              },
+            }
+          }
+          // Delete all BLOCKED rows for this pair
+          await tx.socialConnection.deleteMany({
+            where: {
+              OR: [
+                { followerId: conn.followerId, followeeId: conn.followeeId },
+                { followerId: conn.followeeId, followeeId: conn.followerId },
+              ],
+            },
+          })
+
+          await tx.auditLog.create({
+            data: {
+              actorId: session.userId,
+              actorRole: session.role,
+              action: 'FRIEND_UNBLOCKED',
+              metadata: JSON.stringify({
+                connectionId,
+                unblockedBy: session.userId,
+                followerId: conn.followerId,
+                followeeId: conn.followeeId,
+              }),
+            },
+          })
+
+          return {
+            type: 'success' as const,
+            status: 200,
+            body: {
+              connectionId,
+              status: 'UNBLOCKED',
+              unblockedBy: session.userId,
             },
           }
         }
@@ -503,18 +575,35 @@ export const DELETE = (
           }
         }
 
+        // S4A Fix S-02: BLOCKED rows cannot be deleted via generic DELETE.
+        // Only the blocker (blockedBy) can unblock via PATCH {status:'UNBLOCKED'}.
+        // Legacy NULL blockedBy = fail-closed (no one can DELETE a BLOCKED row).
+        if (conn.status === 'BLOCKED') {
+          return {
+            type: 'error' as const,
+            status: 403,
+            body: {
+              error: {
+                code: 'AUTHORIZATION_DENIED',
+                message: 'Cannot delete a blocked connection. Use unblock instead.',
+                traceId,
+              },
+            },
+          }
+        }
+
         if (block) {
-          // BLOCK: set status='BLOCKED' on both rows.
+          // BLOCK: set status='BLOCKED' + blockedBy on both rows.
           await tx.socialConnection.update({
             where: { id: connectionId },
-            data: { status: 'BLOCKED' },
+            data: { status: 'BLOCKED', blockedBy: session.userId },
           })
           await tx.socialConnection.updateMany({
             where: {
               followerId: conn.followeeId,
               followeeId: conn.followerId,
             },
-            data: { status: 'BLOCKED' },
+            data: { status: 'BLOCKED', blockedBy: session.userId },
           })
 
           await tx.auditLog.create({

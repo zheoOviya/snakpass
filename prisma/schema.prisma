@@ -1128,6 +1128,9 @@ model SocialConnection {
   acceptedAt    DateTime?
   // Optional message with friend request
   message       String?
+  // S4A: who initiated the block. NULL for non-block rows.
+  // Legacy BLOCKED rows with NULL = fail-closed (no one can unblock without explicit repair).
+  blockedBy     String?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

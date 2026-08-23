@@ -236,8 +236,9 @@ export const POST = (req: NextRequest) =>
           }
         }
 
-        // 2. Check for an existing connection in EITHER direction.
-        const existing = await tx.socialConnection.findFirst({
+        // 2. Check for existing connections in EITHER direction (findMany, not findFirst).
+        // S4A Fix S-01: inspect ALL pair rows — any BLOCKED row blocks reconnection.
+        const existingRows = await tx.socialConnection.findMany({
           where: {
             OR: [
               { followerId: session.userId, followeeId },
@@ -246,51 +247,49 @@ export const POST = (req: NextRequest) =>
           },
         })
 
-        if (existing) {
-          // If the target has BLOCKED the current user → forbid.
-          if (
-            existing.status === 'BLOCKED' &&
-            existing.followerId === followeeId
-          ) {
-            return {
-              type: 'error' as const,
-              status: 403,
-              body: {
-                error: {
-                  code: 'AUTHORIZATION_DENIED',
-                  message: 'This user is not available for friend requests',
-                  traceId,
-                  details: { code: 'BLOCKED_BY_TARGET' },
+        // S4A: If ANY row is BLOCKED (in either direction), reject.
+        // This prevents the bypass where findFirst returned an arbitrary row.
+        const blockedRow = existingRows.find((r) => r.status === 'BLOCKED')
+        if (blockedRow) {
+          return {
+            type: 'error' as const,
+            status: 403,
+            body: {
+              error: {
+                code: 'AUTHORIZATION_DENIED',
+                message: 'This user is not available for friend requests',
+                traceId,
+              },
+            },
+          }
+        }
+
+        // If there's already a PENDING/ACCEPTED connection → conflict.
+        const pendingOrAccepted = existingRows.find(
+          (r) => r.status === 'PENDING' || r.status === 'ACCEPTED',
+        )
+        if (pendingOrAccepted) {
+          return {
+            type: 'error' as const,
+            status: 409,
+            body: {
+              error: {
+                code: 'CONFLICT',
+                message: `Connection already exists with status '${pendingOrAccepted.status}'`,
+                traceId,
+                details: {
+                  existingStatus: pendingOrAccepted.status,
+                  existingConnectionId: pendingOrAccepted.id,
                 },
               },
-            }
+            },
           }
-          // If there's already a PENDING/ACCEPTED connection → conflict.
-          if (
-            existing.status === 'PENDING' ||
-            existing.status === 'ACCEPTED'
-          ) {
-            return {
-              type: 'error' as const,
-              status: 409,
-              body: {
-                error: {
-                  code: 'CONFLICT',
-                  message: `Connection already exists with status '${existing.status}'`,
-                  traceId,
-                  details: {
-                    existingStatus: existing.status,
-                    existingConnectionId: existing.id,
-                  },
-                },
-              },
-            }
+        }
+        // For REJECTED rows → allow re-request by deleting the old row first.
+        for (const r of existingRows) {
+          if (r.status === 'REJECTED') {
+            await tx.socialConnection.delete({ where: { id: r.id } })
           }
-          // For REJECTED or BLOCKED-initiated-by-me → allow re-request by
-          // deleting the old row first, then creating a fresh PENDING.
-          // (Soft-deletes are simpler than re-flipping status — REJECTED has
-          // no semantic value to preserve.)
-          await tx.socialConnection.delete({ where: { id: existing.id } })
         }
 
         // 3. Create the PENDING connection (current user → target).
