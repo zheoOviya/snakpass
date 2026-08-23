@@ -12615,3 +12615,27 @@ Stage Summary:
 - S4A security contract remains intact
 - No code changes made (challenge-only)
 - Implementation plan ready for S4B repair contracts
+
+---
+Task ID: S4B-P4-CHALLENGE-02
+Agent: Rate-Limit Boundary Verification Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4B-RATE-LIMIT-EVIDENCE-CHALLENGE-02 — Settle P4 (XFF/rate-limit bypass) with runtime evidence. NO code changes.
+
+Work Log:
+- Phase 0: Baseline locked — HEAD=f267c3c, source diff=0 since cc99b8e. Restarted dev server WITHOUT EVIDENCE_TEST_MODE. Verified absent in /proc/<pid>/environ.
+- Phase 1: Established limiter ACTIVE via X-RateLimit-* headers. 3 paced requests (no XFF): Limit=100, Remaining=99→98→97 (decremented correctly). LIMITER_ACTIVE=YES.
+- Phase 2: Same-XFF bucket test (XFF=10.10.10.1, 3 requests): Remaining=99→98→97. Proved same-XFF requests share a bucket (decrement by 2 across 3 requests).
+- Phase 3: Changed-XFF challenge (XFF=10.10.10.2, .3, .4): Each returned Remaining=99 (fresh bucket). When switching from XFF=10.10.10.1 (at 97) to XFF=10.10.10.2, Remaining went UP from 97 to 99 — impossible within the same bucket. This proved a fresh bucket was allocated for each distinct XFF value.
+- Phase 4: Controlled threshold proof — Exhausted XFF=10.10.10.7 with 5 requests (99→98→97→96→95), then immediately switched to XFF=10.10.10.8: Remaining=99 (FRESH BUCKET). Decisive proof: Remaining went UP from 95 to 99 when ONLY the XFF changed. Attacker obtains unlimited fresh buckets by spoofing X-Forwarded-For.
+- Phase 5: Fail-open mode = CODE_VERIFIED (general bucket is fail-open per src/lib/rate-limit.ts:8). Runtime fail-open NOT TESTED (no controlled failure mechanism in dev — in-memory limiter always available).
+- Phase 6: NO_USER_IDENTITY_IN_KEY = CODE_VERIFIED (key = 'rl:general:<ip>', no userId). Classified as abuse-policy weakness, not automatically a bypass vulnerability.
+- Initial script verdict logic had a bug (threshold >5 instead of >0 for detecting Remaining increase). Raw evidence was always clear. Corrected verdict: P4 CONFIRMED.
+
+Stage Summary:
+- P4 = CONFIRMED: CLIENT_CONTROLLED_RATE_LIMIT_KEY
+- Evidence: X-RateLimit-Remaining reset from 95 to 99 when only X-Forwarded-For changed (10.10.10.7 → 10.10.10.8)
+- Same XFF = same bucket (decrements). Different XFF = fresh bucket (resets to 99).
+- Attacker can bypass rate limiting entirely by rotating X-Forwarded-For header
+- No need to exhaust 100 requests — single header change resets the bucket
+- Fail-open mode (CODE_VERIFIED) + IP-only key (CODE_VERIFIED) compound the issue
+- Authoritative S4B state: P1 CONFIRMED, P2 CONFIRMED, P3 DOWNGRADED, P4 CONFIRMED
