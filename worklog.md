@@ -12553,3 +12553,40 @@ Stage Summary:
 - Defect is UI-only; does not affect any security invariant
 - Evidence checkpoint: 515c87a on origin/main
 - Final verdict: S4A VERIFIED with UI deficiency noted for follow-up
+
+---
+Task ID: S4A-REPAIR-10
+Agent: S4A Unblock-UI-Reachability Repair Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4A-UNBLOCK-UI-REACHABILITY-REPAIR-10 — Minimal product repair to surface persisted BLOCKED connections in blocker's UI, making the existing authorized PATCH UNBLOCK operation reachable via browser. Then targeted browser closure.
+
+Work Log:
+- Read worklog + prior closure-09 context. Understood the defect: FriendsScreen `friends = connections.filter(c => c.status === 'ACCEPTED')` excluded BLOCKED connections, so Unblock control disappeared after reload.
+- Read src/lib/types.ts (SocialConnection type lacks blockedBy), src/lib/social-store.ts (connections sourced from GET /api/social/connections), src/hooks/use-auth.tsx (useAuth provides user.userId), and the full friends-screen.tsx.
+- Identified that the API did not return `blockedBy` — the UI cannot determine who the blocker is without it. This is a data-exposure gap, not an authorization issue.
+- Repair file 1: src/lib/types.ts — added `blockedBy?: string | null` to SocialConnection type (5 lines, type addition)
+- Repair file 2: src/app/api/social/connections/route.ts — added `blockedBy: r.blockedBy ?? null` to GET response (5 lines, data-exposure only — does NOT change any authorization logic)
+- Repair file 3: src/components/snak/screens/friends-screen.tsx — added:
+  - Ban icon import + useAuth import
+  - `blocked` useMemo (deduplicated by peer userId)
+  - "Blocked" section JSX (renders after "Your Friends")
+  - BlockedRow component (blocker → Unblock button; blocked party → read-only "Blocked" label)
+- Lint: 0 errors. Dev server recompiled successfully.
+- Targeted browser closure (FLOW 1): A blocks B via browser → reload → **Blocked section + Unblock control VISIBLE** (was NOT_FOUND in closure-09!) → browser Unblock click → PATCH 2xx → DOM removal → reload → DB pair rows=0, PENDING=0, ACCEPTED=0, BLOCKED=0
+- Targeted browser closure (FLOW 2): B-side negative → B sees Blocked section with "Blocked" label → no Unblock/Unfriend controls → reload persists → API PATCH UNBLOCK → 403 → API DELETE → 403 → DB BLOCKED intact
+- Targeted S1/S2/S3 smoke: all PASS (reciprocal ACCEPTED, like/duplicate/unlike, deterministic dedupKey)
+- Source diff: 3 files, 130 insertions, 0 deletions, no existing logic changed
+- Committed: ab5a9e4 (source) + cc99b8e (evidence)
+- Pushed to origin/main: 515c87a..cc99b8e
+- LOCAL_HEAD == REMOTE_MAIN = cc99b8e
+
+Stage Summary:
+- UI_REACHABILITY_REPAIR = PASS
+- Unblock control now reachable after page reload (the original defect — FIXED)
+- Only blocker sees Unblock button; blocked party sees read-only "Blocked" label
+- Backend PATCH UNBLOCK contract unchanged (existing authorized operation)
+- No new connection/notification created by unblock
+- Legacy NULL blockedBy = fail-closed (no Unblock for anyone)
+- All 9 repair contracts satisfied
+- S1/S2/S3 regression smoke PASS
+- Lint: 0 errors
+- Evidence checkpoint: cc99b8e on origin/main
