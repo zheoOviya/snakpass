@@ -138,18 +138,16 @@ export function SocialScreen({ initialSubTab = 'feed', className }: SocialScreen
   }
 
   async function handleLike(activity: SocialActivity) {
-    // Optimistic UI — the like action is a server call routed through a
-    // POST /api/social/activities/[id]/like endpoint (Task 6A owns). We
-    // skip that here to avoid touching API code; we surface a toast so the
-    // user gets feedback. The store's next refresh will sync server state.
+    // S1 Reconstruction: Like persistence is NOT implemented at S1 (S2 wave
+    // owns the Like model + API). The old handler showed a false "Liked"/"Unliked"
+    // toast implying persistence — that was a FALSE_SUCCESS_STATE. Now we
+    // truthfully tell the user likes are coming soon (no persistence implied).
     if (likingId) return
     setLikingId(activity.id)
     try {
-      // Best-effort: fire-and-forget. If Task 6A exposes a like endpoint,
-      // we could call it here; for now just acknowledge the tap.
       toast({
-        title: activity.likedByMe ? 'Unliked' : 'Liked',
-        description: `${activity.actorName}'s activity ${activity.likedByMe ? 'unliked' : 'liked'}.`,
+        title: 'Likes coming soon',
+        description: `You'll be able to like ${activity.actorName}'s activity in a future release.`,
       })
     } finally {
       setLikingId(null)

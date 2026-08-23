@@ -157,6 +157,13 @@ export const GET = (req: NextRequest) =>
         verb: r.verb,
         objectType: r.objectType,
         objectId: r.objectId,
+        // S1 Reconstruction: project metadata top-level fields so the client
+        // SocialFeedCard can read restaurantName/dishName directly. The client
+        // type expects these as top-level fields (not nested in metadata).
+        restaurantName: typeof sanitizedMetadata.restaurantName === 'string' ? sanitizedMetadata.restaurantName : undefined,
+        restaurantId: typeof sanitizedMetadata.restaurantId === 'string' ? sanitizedMetadata.restaurantId : undefined,
+        dishName: typeof sanitizedMetadata.dishName === 'string' ? sanitizedMetadata.dishName : undefined,
+        targetUserName: typeof sanitizedMetadata.targetUserName === 'string' ? sanitizedMetadata.targetUserName : undefined,
         metadata: sanitizedMetadata,
         visibility: r.visibility,
         createdAt: r.createdAt.toISOString(),

@@ -247,36 +247,64 @@ export interface GroupOrderItem {
   note?: string
 }
 
-/** A social connection between two consumers (blueprint §18 Social Graph). */
+/** A social connection between two consumers (blueprint §18 Social Graph).
+ *
+ * S1 Reconstruction: canonical field names match the server API response
+ * from GET /api/social/connections. The server returns `userId` (the OTHER
+ * user's id), `name`, `phone`, `avatarColor`, and status values
+ * 'PENDING_SENT' | 'PENDING_RECEIVED' | 'ACCEPTED' | 'BLOCKED' | 'REJECTED'.
+ * The old `friendId`/`friendName`/`friendAvatarUrl`/`friendCampusName` fields
+ * and `PENDING_IN`/`PENDING_OUT` statuses have been removed — they caused
+ * the Friends UI to never render pending requests. */
 export interface SocialConnection {
   id: string
-  /** The current user's ID. */
+  /** The OTHER user's ID (the peer — friend or request sender). */
   userId: string
-  /** The other user's ID. */
-  friendId: string
-  friendName: string
-  friendAvatarUrl?: string
-  friendCampusName?: string
-  /** 'PENDING_OUT' | 'PENDING_IN' | 'ACCEPTED' | 'BLOCKED'. */
+  /** The other user's display name. */
+  name: string
+  /** The other user's phone (for search/friend identification). */
+  phone?: string
+  /** Deterministic avatar color (derived from userId hash). */
+  avatarColor?: string
+  /** 'PENDING_SENT' | 'PENDING_RECEIVED' | 'ACCEPTED' | 'BLOCKED' | 'REJECTED'. */
   status: string
+  /** 'sent' (I sent the request) or 'received' (they sent it to me). */
+  direction?: 'sent' | 'received'
+  /** Optional friend-request message. */
+  message?: string | null
   /** ISO date — connection requested/accepted. */
   createdAt: string
   /** ISO date — connection accepted (if status === 'ACCEPTED'). */
-  acceptedAt?: string
+  acceptedAt?: string | null
 }
 
 /**
  * A Venmo-style social activity entry. CRITICAL: NEVER includes payment amount
  * (blueprint §6 P2 — Social should improve utility, not expose spending).
+ *
+ * S1 Reconstruction: verbs are UPPERCASE (ORDERED, EARNED_REWARD, GIFTED,
+ * JOINED_GROUP, FRIEND_ADDED) matching the server's VERBS constant in
+ * social-activity.ts. The server returns metadata as a JSON object — the
+ * client projects restaurantName/dishName from it. visibility field added
+ * to support PRIVATE filtering. likeCount/commentCount/likedByMe default
+ * to 0/false at S1 (S2 will implement real persistence).
  */
 export interface SocialActivity {
   id: string
   actorId: string
   actorName: string
+  /** Deterministic avatar color (derived from actorId hash). */
+  actorAvatarColor?: string
   actorAvatarUrl?: string
-  /** Verb — 'ordered_from' | 'earned_reward' | 'received_gift' |
-   *  'sent_gift' | 'joined_group' | 'rated' | 'redeemed_reward'. */
+  /** Verb — UPPERCASE: 'ORDERED' | 'EARNED_REWARD' | 'GIFTED' |
+   *  'JOINED_GROUP' | 'FRIEND_ADDED'. */
   verb: string
+  /** Object type — 'Restaurant' | 'MenuItem' | 'Gift' | 'GroupOrder'. */
+  objectType?: string
+  /** Object ID (restaurantId, menuItemId, etc.). */
+  objectId?: string
+  /** Visibility — 'FRIENDS' | 'PUBLIC' | 'PRIVATE'. */
+  visibility?: string
   /** Target restaurant (if any). */
   restaurantId?: string
   restaurantName?: string
@@ -288,12 +316,14 @@ export interface SocialActivity {
   /** Optional target user (for gift/received_gift activities). */
   targetUserId?: string
   targetUserName?: string
+  /** Raw metadata object (server returns this as JSON). */
+  metadata?: Record<string, unknown>
   /** ISO timestamp. */
   createdAt: string
-  /** Engagement counts. */
+  /** Engagement counts (default 0 at S1 — S2 implements persistence). */
   likeCount?: number
   commentCount?: number
-  /** Has the current user liked this activity? */
+  /** Has the current user liked this activity? (default false at S1). */
   likedByMe?: boolean
 }
 

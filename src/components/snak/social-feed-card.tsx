@@ -17,13 +17,12 @@ import type { SocialActivity } from '@/lib/types'
  * - NEVER shows payment amount (Social should improve utility, not expose spending).
  * - Like + comment buttons with counts.
  *
- * Verbs supported (drives icon + copy):
- * - 'ordered_from' → "ordered from {restaurant}"
- * - 'earned_reward' → "earned {N} reward points" (gold sparkle)
- * - 'received_gift' / 'sent_gift' → "received a gift from {target}" (violet gift)
- * - 'joined_group' → "joined a group order at {restaurant}" (rose users)
- * - 'rated' → "rated {restaurant} ⭐" (gold star)
- * - 'redeemed_reward' → "redeemed a reward at {restaurant}"
+ * Verbs supported (drives icon + copy) — UPPERCASE matching server VERBS constant:
+ * - 'ORDERED' → "ordered from {restaurant}" (teal star)
+ * - 'EARNED_REWARD' → "earned reward points" (gold sparkle)
+ * - 'GIFTED' → "sent a gift to {target}" (violet gift)
+ * - 'JOINED_GROUP' → "joined a group order at {restaurant}" (rose users)
+ * - 'FRIEND_ADDED' → "is now friends with {target}" (violet gift)
  *
  * States:
  * - Default
@@ -56,13 +55,17 @@ interface VerbConfig {
   Icon: React.ComponentType<{ className?: string }>
 }
 
+// S1 Reconstruction: verb keys are UPPERCASE matching the server's VERBS constant
+// (ORDERED, EARNED_REWARD, GIFTED, JOINED_GROUP, FRIEND_ADDED). The old snake_case
+// keys (ordered_from, earned_reward, etc.) never matched → every activity rendered
+// as the fallback. The fallback is 'ORDERED' (teal star, "ordered from a restaurant").
 const VERBS: Record<string, VerbConfig> = {
-  ordered_from: {
+  ORDERED: {
     text: (a) => `ordered from ${a.restaurantName ?? 'a restaurant'}`,
     accent: 'teal',
     Icon: Star,
   },
-  earned_reward: {
+  EARNED_REWARD: {
     text: (a) =>
       a.dishName
         ? `earned reward points on ${a.dishName}`
@@ -70,30 +73,20 @@ const VERBS: Record<string, VerbConfig> = {
     accent: 'gold',
     Icon: Sparkles,
   },
-  redeemed_reward: {
-    text: (a) => `redeemed a reward at ${a.restaurantName ?? 'a restaurant'}`,
-    accent: 'gold',
-    Icon: Sparkles,
-  },
-  received_gift: {
-    text: (a) => `received a gift from ${a.targetUserName ?? 'a friend'}`,
-    accent: 'violet',
-    Icon: Gift,
-  },
-  sent_gift: {
+  GIFTED: {
     text: (a) => `sent a gift to ${a.targetUserName ?? 'a friend'}`,
     accent: 'violet',
     Icon: Gift,
   },
-  joined_group: {
+  JOINED_GROUP: {
     text: (a) => `joined a group order at ${a.restaurantName ?? 'a restaurant'}`,
     accent: 'rose',
     Icon: Users,
   },
-  rated: {
-    text: (a) => `rated ${a.restaurantName ?? 'a restaurant'}`,
-    accent: 'gold',
-    Icon: Star,
+  FRIEND_ADDED: {
+    text: (a) => `is now friends with ${a.targetUserName ?? 'a friend'}`,
+    accent: 'violet',
+    Icon: Gift,
   },
 }
 
@@ -112,7 +105,7 @@ export function SocialFeedCard({
   className,
 }: SocialFeedCardProps) {
   const prefersReduced = useReducedMotion()
-  const verb = VERBS[activity.verb] ?? VERBS.ordered_from!
+  const verb = VERBS[activity.verb] ?? VERBS.ORDERED!
   const accent = ACCENT_CLASSES[verb.accent]
   const liked = !!activity.likedByMe
   const likeCount = activity.likeCount ?? 0

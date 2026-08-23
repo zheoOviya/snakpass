@@ -219,14 +219,14 @@ export function SendGiftFlow({
               connections?: SocialConnection[]
             }
             const conn = (data.connections ?? []).find(
-              (c) => c.friendId === preselectedFriendId && c.status === 'ACCEPTED',
+              (c) => c.userId === preselectedFriendId && c.status === 'ACCEPTED',
             )
             if (conn) {
               loadedFriend = {
-                id: conn.friendId,
-                name: conn.friendName,
-                avatarUrl: conn.friendAvatarUrl,
-                campusName: conn.friendCampusName,
+                id: conn.userId,
+                name: conn.name,
+                avatarUrl: undefined,
+                campusName: undefined,
               }
             }
           }
@@ -649,10 +649,10 @@ function FriendPickerStep({ selected, onSelect }: FriendPickerStepProps) {
 
   const showSearchResults = query.trim().length > 0
   const list = showSearchResults ? searchResults : connections.map((c) => ({
-    id: c.friendId,
-    name: c.friendName,
-    avatarUrl: c.friendAvatarUrl,
-    campusName: c.friendCampusName,
+    id: c.userId,
+    name: c.name,
+    avatarUrl: undefined,
+    campusName: undefined,
   }))
 
   function initials(name: string) {

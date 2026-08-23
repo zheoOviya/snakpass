@@ -40,7 +40,7 @@ export function AppShell({ persona, children }: { persona: keyof typeof PERSONAS
   // Read-only — the store itself is owned by Task 1C and refreshed by
   // HomeScreen + SocialScreen mounts.
   const hasPendingSocial = useSocial(
-    (s) => s.connections.some((c) => c.status === 'PENDING_IN'),
+    (s) => s.connections.some((c) => c.status === 'PENDING_RECEIVED'),
   )
 
   async function handleLogout() {

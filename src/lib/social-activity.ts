@@ -149,8 +149,8 @@ export interface RecordActivityParams {
   objectId: string
   /** Optional metadata — sensitive keys will be stripped before storage. */
   metadata?: Record<string, unknown>
-  /** Visibility — 'FRIENDS' (default) | 'PUBLIC'. */
-  visibility?: 'FRIENDS' | 'PUBLIC'
+  /** Visibility — 'FRIENDS' (default) | 'PUBLIC' | 'PRIVATE'. */
+  visibility?: 'FRIENDS' | 'PUBLIC' | 'PRIVATE'
   /**
    * Optional idempotency key — activities are append-only (each event creates
    * a new row), but dedup is nice for retry safety. When provided, the helper

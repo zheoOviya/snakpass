@@ -7,8 +7,8 @@
 // Per blueprint §18 SOCIAL GRAPH + DESIGN_SYSTEM.md §5.2.7 (Friends list):
 //  - Search bar (debounced 250ms) → GET /api/social/search?q=
 //  - Pending requests section:
-//      • Incoming (status === 'PENDING_IN') — Accept / Reject buttons
-//      • Outgoing (status === 'PENDING_OUT') — "Pending" label
+//      • Incoming (status === 'PENDING_RECEIVED') — Accept / Reject buttons
+//      • Outgoing (status === 'PENDING_SENT') — "Pending" label
 //  - Current friends list (status === 'ACCEPTED'):
 //      avatar + name + phone + "Message" (placeholder toast) + "Unfriend" button
 //  - Search results: each row shows "Add friend" button (calls sendRequest).
@@ -119,11 +119,13 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
 
   // ── Derived slices ─────────────────────────────────────────────────────────
   const pendingIn = React.useMemo(
-    () => connections.filter((c) => c.status === 'PENDING_IN'),
+    // S1 Reconstruction: server returns 'PENDING_RECEIVED' (they sent to me)
+    () => connections.filter((c) => c.status === 'PENDING_RECEIVED'),
     [connections],
   )
   const pendingOut = React.useMemo(
-    () => connections.filter((c) => c.status === 'PENDING_OUT'),
+    // S1 Reconstruction: server returns 'PENDING_SENT' (I sent to them)
+    () => connections.filter((c) => c.status === 'PENDING_SENT'),
     [connections],
   )
   const friends = React.useMemo(
@@ -132,7 +134,7 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
         .filter((c) => c.status === 'ACCEPTED')
         // newest accepted first (acceptedAt ?? createdAt fallback)
         .sort((a, b) => {
-          const at = (t?: string) => (t ? new Date(t).getTime() : 0)
+          const at = (t?: string | null) => (t ? new Date(t).getTime() : 0)
           return at(b.acceptedAt) - at(a.acceptedAt)
         }),
     [connections],
@@ -140,7 +142,7 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
 
   // Set of friend IDs (any status) for client-side exclusion of search results.
   const connectedIds = React.useMemo(
-    () => new Set(connections.map((c) => c.friendId)),
+    () => new Set(connections.map((c) => c.userId)),
     [connections],
   )
 
@@ -207,7 +209,7 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
       await acceptRequest(conn.id)
       toast({
         title: 'Friend request accepted',
-        description: `${conn.friendName} is now your friend.`,
+        description: `${conn.name} is now your friend.`,
       })
     } catch (e) {
       toast({
@@ -223,7 +225,7 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
       await declineRequest(conn.id)
       toast({
         title: 'Request declined',
-        description: `${conn.friendName}'s request was dismissed.`,
+        description: `${conn.name}'s request was dismissed.`,
       })
     } catch (e) {
       toast({
@@ -237,14 +239,14 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
   async function handleUnfriend(conn: SocialConnection) {
     // Optimistic confirmation — friend removal is destructive.
     const ok = window.confirm(
-      `Unfriend ${conn.friendName}? They won't be notified, but you'll need to send a new request to reconnect.`,
+      `Unfriend ${conn.name}? They won't be notified, but you'll need to send a new request to reconnect.`,
     )
     if (!ok) return
     try {
-      await unfollow(conn.friendId)
+      await unfollow(conn.userId)
       toast({
         title: 'Unfriended',
-        description: `${conn.friendName} is no longer your friend.`,
+        description: `${conn.name} is no longer your friend.`,
       })
     } catch (e) {
       toast({
@@ -259,7 +261,7 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
     // Placeholder — messaging is on the Wave 8+ roadmap (blueprint §22).
     toast({
       title: 'Messaging coming soon',
-      description: `You'll be able to message ${conn.friendName} in a future release.`,
+      description: `You'll be able to message ${conn.name} in a future release.`,
     })
   }
 
@@ -536,15 +538,14 @@ function PendingRequestRow({ conn, direction, onAccept, onReject }: PendingReque
     <Card className="overflow-hidden">
       <CardContent className="flex items-center gap-3 p-3">
         <Avatar className="h-10 w-10 ring-2 ring-violet-300 ring-offset-2 ring-offset-background">
-          {conn.friendAvatarUrl && <AvatarImage src={conn.friendAvatarUrl} alt="" />}
           <AvatarFallback className="bg-gradient-to-br from-violet-400 to-violet-600 text-xs font-bold text-white">
-            {initials(conn.friendName) || '?'}
+            {initials(conn.name) || '?'}
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-foreground">{conn.friendName}</p>
+          <p className="truncate text-sm font-semibold text-foreground">{conn.name}</p>
           <p className="truncate text-xs text-muted-foreground">
-            {conn.friendCampusName ?? 'SnakZap user'}
+            {conn.phone ?? 'SnakZap user'}
           </p>
         </div>
         {direction === 'in' ? (
@@ -555,7 +556,7 @@ function PendingRequestRow({ conn, direction, onAccept, onReject }: PendingReque
               onClick={() => run('accept')}
               disabled={busy !== null}
               className="h-8 bg-violet-600 px-3 text-xs hover:bg-violet-700"
-              aria-label={`Accept ${conn.friendName}'s friend request`}
+              aria-label={`Accept ${conn.name}'s friend request`}
             >
               {busy === 'accept' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -571,7 +572,7 @@ function PendingRequestRow({ conn, direction, onAccept, onReject }: PendingReque
               onClick={() => run('reject')}
               disabled={busy !== null}
               className="h-8 px-3 text-xs"
-              aria-label={`Decline ${conn.friendName}'s friend request`}
+              aria-label={`Decline ${conn.name}'s friend request`}
             >
               {busy === 'reject' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -607,15 +608,14 @@ function FriendRow({ conn, onMessage, onUnfriend }: FriendRowProps) {
     <Card className="overflow-hidden">
       <CardContent className="flex items-center gap-3 p-3">
         <Avatar className="h-10 w-10 ring-2 ring-teal-300 ring-offset-2 ring-offset-background">
-          {conn.friendAvatarUrl && <AvatarImage src={conn.friendAvatarUrl} alt="" />}
           <AvatarFallback className="bg-gradient-to-br from-teal-400 to-emerald-600 text-xs font-bold text-white">
-            {initials(conn.friendName) || '?'}
+            {initials(conn.name) || '?'}
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-semibold text-foreground">{conn.friendName}</p>
-          {conn.friendCampusName && (
-            <p className="truncate text-xs text-muted-foreground">{conn.friendCampusName}</p>
+          <p className="truncate text-sm font-semibold text-foreground">{conn.name}</p>
+          {conn.phone && (
+            <p className="truncate text-xs text-muted-foreground">{conn.phone}</p>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
@@ -625,7 +625,7 @@ function FriendRow({ conn, onMessage, onUnfriend }: FriendRowProps) {
             variant="outline"
             onClick={onMessage}
             className="h-8 px-2.5 text-xs"
-            aria-label={`Message ${conn.friendName}`}
+            aria-label={`Message ${conn.name}`}
           >
             <MessageCircle className="h-3.5 w-3.5" aria-hidden="true" />
             <span className="sr-only sm:inline">Message</span>
@@ -644,7 +644,7 @@ function FriendRow({ conn, onMessage, onUnfriend }: FriendRowProps) {
             }}
             disabled={busy}
             className="h-8 px-2.5 text-xs text-muted-foreground hover:bg-danger-50 hover:text-danger-700 dark:hover:bg-danger-950/30 dark:hover:text-danger-300"
-            aria-label={`Unfriend ${conn.friendName}`}
+            aria-label={`Unfriend ${conn.name}`}
           >
             {busy ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />

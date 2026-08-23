@@ -33,7 +33,7 @@ import {
 //   objectType: string,   // 'Restaurant' | 'MenuItem' | 'Gift' | 'GroupOrder'
 //   objectId: string,     // the id of the referenced object
 //   metadata?: object,    // optional — sensitive keys are stripped
-//   visibility?: 'FRIENDS' | 'PUBLIC'  // default 'FRIENDS'
+//   visibility?: 'FRIENDS' | 'PUBLIC' | 'PRIVATE'  // default 'FRIENDS'
 // }
 //
 // CRITICAL: Sanitize metadata — strip `amount`, `total`, `price`, `paymentId`,
@@ -59,7 +59,7 @@ import {
 
 const IDEMPOTENCY_RESOURCE_TYPE = 'SocialActivity'
 const ALLOWED_VERBS = new Set<string>(Object.values(VERBS))
-const ALLOWED_VISIBILITY = new Set(['FRIENDS', 'PUBLIC'])
+const ALLOWED_VISIBILITY = new Set(['FRIENDS', 'PUBLIC', 'PRIVATE'])
 
 // Validated body shape.
 interface ActivityBody {
@@ -67,7 +67,7 @@ interface ActivityBody {
   objectType: string
   objectId: string
   metadata?: Record<string, unknown>
-  visibility?: 'FRIENDS' | 'PUBLIC'
+  visibility?: 'FRIENDS' | 'PUBLIC' | 'PRIVATE'
 }
 
 /** Detect sensitive keys in a metadata object (recursively, case-insensitive). */
@@ -147,10 +147,26 @@ export const POST = (req: NextRequest) =>
     const objectType = typeof body.objectType === 'string' ? body.objectType.trim() : ''
     const objectId = typeof body.objectId === 'string' ? body.objectId.trim() : ''
     const metadata = body.metadata ?? {}
-    const visibility: 'FRIENDS' | 'PUBLIC' =
-      typeof body.visibility === 'string' && body.visibility === 'PUBLIC'
-        ? 'PUBLIC'
-        : 'FRIENDS'
+    // S1 Reconstruction: validate-before-default. Unknown visibility values
+    // are rejected with 400 (NOT silently coerced to FRIENDS). PRIVATE is now
+    // a valid visibility level (actor-only — feed route excludes it).
+    let visibility: 'FRIENDS' | 'PUBLIC' | 'PRIVATE'
+    if (typeof body.visibility === 'string') {
+      const v = body.visibility.trim().toUpperCase()
+      if (v === 'FRIENDS' || v === 'PUBLIC' || v === 'PRIVATE') {
+        visibility = v
+      } else {
+        return apiError(
+          'VALIDATION_ERROR',
+          `Invalid visibility '${body.visibility}'`,
+          400,
+          { field: 'visibility', allowed: ['FRIENDS', 'PUBLIC', 'PRIVATE'] },
+          traceId,
+        ) as unknown as NextResponse
+      }
+    } else {
+      visibility = 'FRIENDS' // default when omitted
+    }
 
     // -------------------------------------------------------------------------
     // Validate.

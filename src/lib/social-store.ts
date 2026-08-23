@@ -84,8 +84,10 @@ export const useSocial = create<SocialState>()((set, get) => ({
       }
 
       if (feedRes.ok) {
-        const data = (await feedRes.json()) as { feed?: SocialActivity[] }
-        feed = data.feed ?? []
+        // S1 Reconstruction: server returns { activities: [...] }, NOT { feed: [...] }.
+        // The old `data.feed` key never matched → feed was permanently empty.
+        const data = (await feedRes.json()) as { activities?: SocialActivity[] }
+        feed = data.activities ?? []
       } else {
         const body = await feedRes.json().catch(() => ({}))
         errors.push(body?.error || `feed (${feedRes.status})`)
@@ -168,13 +170,16 @@ export const useSocial = create<SocialState>()((set, get) => ({
 
   unfollow: async (targetUserId: string) => {
     if (!targetUserId) throw new Error('targetUserId required')
-    // Find the local connection id for this peer (if any).
-    const conn = get().connections.find((c) => c.friendId === targetUserId)
+    // S1 Reconstruction: use canonical `userId` field (NOT `friendId`).
+    // The server returns connections with `userId` = the OTHER user's id.
+    const conn = get().connections.find((c) => c.userId === targetUserId)
+    if (!conn) {
+      throw new Error('Connection not found — refresh and try again')
+    }
     const csrfFetch = (await import('./csrf-client')).csrfFetch
-    const endpoint = conn
-      ? `/api/social/connections/${conn.id}`
-      : `/api/social/connections?targetUserId=${encodeURIComponent(targetUserId)}`
-    const res = await csrfFetch(endpoint, {
+    // DELETE /api/social/connections/[id] — requires connection id in path.
+    // The old query-param fallback (`?targetUserId=`) was never handled by the route.
+    const res = await csrfFetch(`/api/social/connections/${conn.id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
     })
@@ -185,7 +190,7 @@ export const useSocial = create<SocialState>()((set, get) => ({
     // Optimistic: remove the edge to this peer (friendships are bidirectional —
     // server deletes both rows; we only have the local edge in state).
     set((s) => ({
-      connections: s.connections.filter((c) => c.friendId !== targetUserId),
+      connections: s.connections.filter((c) => c.userId !== targetUserId),
     }))
   },
 }))
