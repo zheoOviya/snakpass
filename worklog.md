@@ -12639,3 +12639,32 @@ Stage Summary:
 - No need to exhaust 100 requests — single header change resets the bucket
 - Fail-open mode (CODE_VERIFIED) + IP-only key (CODE_VERIFIED) compound the issue
 - Authoritative S4B state: P1 CONFIRMED, P2 CONFIRMED, P3 DOWNGRADED, P4 CONFIRMED
+
+---
+Task ID: S4B-REPAIR-03
+Agent: Social Privacy & Abuse Repair Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4B-PRIVACY-ABUSE-REPAIR-03 — Implement P1 (PII minimization + enumeration resistance), P2 (canUnblock projection), P4 (rate-limit hardening). P3 explicitly untouched.
+
+Work Log:
+- Phase 0: Baseline locked — HEAD=e36949d, source diff=0 since cc99b8e. Fingerprints recorded for 6 files.
+- P1-A: Removed 'phone' from /api/social/search response projection. Updated SocialSearchUser type (removed phone). SearchResultRow renders 'SnakZap user' label instead of phone.
+- P1-B: Added enumeration resistance — digit-only queries min 4 chars, name queries min 3 chars. MAX_RESULTS=20 retained.
+- P2: Replaced raw 'blockedBy' userId with server-derived 'canUnblock' boolean. canUnblock = (status===BLOCKED && blockedBy===session.userId). Legacy NULL → false (fail-closed). Updated SocialConnection type, GET /api/social/connections route, FriendsScreen BlockedRow. Removed useAuth import (no longer needed). Backend S4A authorization unchanged.
+- P4-A: getClientIP now trusts x-real-ip only (set by trusted proxy like Caddy). Ignores x-forwarded-for entirely. Applied to both src/lib/rate-limit.ts and src/middleware.ts.
+- P4-B: Added route-local per-user rate limiter in /api/social/search (20/min/user, fail-closed, in-memory). Independent of middleware IP bucket. Rotating XFF/IP cannot reset per-user quota.
+- P4-C: Added 'search' rate-limit bucket (30/min/IP, fail-closed) in middleware classifyPath. Only /api/social/search affected.
+- Phase 5 Negative Suite: N1-N14 ALL PASS (unauth 401, 1/2/3-char → [], no phone in response, no raw blockedBy, canUnblock true/false correct, legacy NULL fail-closed, S4A 403/200 preserved). N15 XFF spoof: PASS (Remaining continues 27→26→25 on XFF change, no reset). N17 per-user quota: PASS (DAVE gets fresh per-user quota). N18 fail-closed: CODE_VERIFIED.
+- Phase 6 Browser: Search results screenshot captured — no phone in DOM, 'SnakZap user' label visible, network response hasPhone=false. Block metadata: API proof confirmed canUnblock=true for blocker, canUnblock=false for blocked party, no raw blockedBy in response.
+- Phase 7 Regression: S1 (request→accept→reciprocal ACCEPTED) PASS. S2 (like 200/count=1, unlike 200/count=0) PASS. S3 (1 FRIEND_REQUEST_RECEIVED) PASS. S4A (block/unblock preserved per N13/N14) PASS.
+- Phase 8 Static: Lint 0 errors, 0 new TS errors.
+- Phase 9: Source committed (62c31d2) + evidence committed (756760b). Pushed to origin/main (cc99b8e..756760b). LOCAL_HEAD == REMOTE_MAIN.
+
+Stage Summary:
+- P1 PASS: No phone in search response (API + UI). Enumeration resistance (digit min=4, name min=3).
+- P2 PASS: canUnblock boolean replaces raw blockedBy. No userId leak to blocked party. S4A authorization preserved.
+- P4-A PASS: XFF no longer trusted. getClientIP uses x-real-ip only.
+- P4-B PASS: Per-user rate limit (20/min/user) in route handler. Rotating XFF/IP cannot reset.
+- P4-C PASS: Search fail-closed bucket (30/min/IP). 503 on limiter failure.
+- P3 untouched (DOWNGRADED, no repair).
+- All 8 S4B matrix contracts PASS.
+- Evidence checkpoint: 756760b on origin/main.
