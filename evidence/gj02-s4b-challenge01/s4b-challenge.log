@@ -1,0 +1,192 @@
+=============================================================================
+BASELINE
+=============================================================================
+HEAD: fb5341de52de0b25a9b9df7d7c4907c8d6954371
+origin/main: cc99b8ef55fd39080b644526af19255630fc3571
+S4A checkpoint cc99b8e ancestor: cc99b8e S4A Repair-10: evidence + targeted browser closure s
+Source diff (src/+prisma/) since cc99b8e: 0
+ lines (expected 0)
+
+=== Setup fresh users ===
+  ALICE: dbuid=cmt64k0lb004..
+  BOB: dbuid=cmt64k0rm004..
+  CAROL: dbuid=cmt64k0xy004..
+  DAVE: dbuid=cmt64k14a004..
+
+=== Establish relationships ===
+  ALICE→BOB ACCEPTED
+  ALICE blocked CAROL
+  DB ALICE→CAROL: BLOCKED blockedBy=cmt64k0lb004
+
+=============================================================================
+P1 — SEARCH PHONE EXPOSURE + ENUMERATION
+=============================================================================
+
+  --- P1.1: ALICE searches BOB's full phone (BOB is a friend) ---
+  Response: {"users":[]}
+HTTP=200 T=0.022465s
+
+  --- P1.2: ALICE searches CAROL's full phone (CAROL is BLOCKED) ---
+  Response: {"users":[]}
+HTTP=200
+
+  --- P1.3: ALICE searches DAVE's full phone (DAVE is unrelated) ---
+  Response: {"users":[{"id":"cmt64k14a004mqp86nvfc3ech","name":"User 8004","phone":"+919999998004","avatarColor":"amber"}]}
+HTTP=200
+  (Is DAVE's full phone exposed?)
+
+  --- P1.4: ALICE searches partial phone '98004' (last 5 digits) ---
+  Response: {"users":[{"id":"cmt64k14a004mqp86nvfc3ech","name":"User 8004","phone":"+919999998004","avatarColor":"amber"}]}
+
+  --- P1.5: ALICE searches '98' (2-char broad query) ---
+  count=7
+  cmt64k14a004.. User 8004 phone=+919999998004
+  cmt1oh42u001.. User 4598 phone=+15551234598
+  cmt1g6wq9003.. Rahul Mehta phone=+919876500012
+
+  --- P1.6: ALICE searches '999' (common substring, enumeration attempt) ---
+  count=20
+
+  --- P1.7: Unauthenticated search (no cookie) ---
+  Response: {"error":{"code":"AUTHENTICATION_REQUIRED","message":"Authentication required","traceId":"5c580024-7bc8-40e4-afac-c2c7f47fa1a6"}}
+HTTP=401
+
+  --- P1.8: Empty query ---
+  Response: {"users":[]}
+HTTP=200
+
+  --- P1.9: 1-char query ---
+  Response: {"users":[]}
+HTTP=200
+
+=============================================================================
+P2 — BLOCK METADATA DISCLOSURE
+=============================================================================
+  Context: ALICE blocked CAROL. ALICE is the blocker, CAROL is the blocked party.
+
+  --- P2.1: CAROL (blocked party) GET /api/social/connections ---
+  Response:
+  CAROL sees 2 connections:
+    id=cmt64n6df005.. userId=cmt64k0lb004.. name=User 8001 status=BLOCKED blockedBy=cmt64k0lb004
+    id=cmt64n6as005.. userId=cmt64k0lb004.. name=User 8001 status=BLOCKED blockedBy=cmt64k0lb004
+
+  --- P2.2: ALICE (blocker) GET /api/social/connections ---
+  Response:
+  ALICE sees 4 connections:
+    id=cmt64n6df005.. userId=cmt64k0xy004.. name=User 8003 status=BLOCKED blockedBy=cmt64k0lb004
+    id=cmt64n6as005.. userId=cmt64k0xy004.. name=User 8003 status=BLOCKED blockedBy=cmt64k0lb004
+    id=cmt64n69i005.. userId=cmt64k0rm004.. name=User 8002 status=ACCEPTED blockedBy=NULL/missing
+    id=cmt64n671005.. userId=cmt64k0rm004.. name=User 8002 status=ACCEPTED blockedBy=NULL/missing
+
+  --- P2.3: Does CAROL's response reveal ALICE's userId as the blocker? ---
+  CAROL response blockedBy values:
+    conn cmt64n6df005.. blockedBy=cmt64k0lb004
+    conn cmt64n6as005.. blockedBy=cmt64k0lb004
+  ALICE's actual userId: cmt64k0lb004..
+  (Does CAROL learn ALICE's userId from blockedBy field?)
+
+=============================================================================
+P3 — SEARCH INPUT ABUSE
+=============================================================================
+
+  --- P3.1: Very large query (10,000 chars) ---
+  Response: {"users":[]}
+  HTTP=200 T=0.028437s
+
+  --- P3.2: Unicode-heavy query ---
+  Response: {"users":[]}
+HTTP=200 T=0.019153s
+
+  --- P3.3: Special chars / SQL-injection-like ---
+  Response: {"users":[]}
+HTTP=200
+
+  --- P3.4: Repeated rapid queries (20 in succession, same IP) ---
+  (general rate limit is 100/min — should all pass)
+    query 1: HTTP=200 T=0.018368s
+    query 2: HTTP=200 T=0.014007s
+    query 3: HTTP=200 T=0.014680s
+    query 4: HTTP=200 T=0.013272s
+    query 5: HTTP=200 T=0.014942s
+    query 6: HTTP=200 T=0.015506s
+    query 7: HTTP=200 T=0.015268s
+    query 8: HTTP=200 T=0.014447s
+    query 9: HTTP=200 T=0.013331s
+    query 10: HTTP=200 T=0.012364s
+    query 11: HTTP=200 T=0.011912s
+    query 12: HTTP=200 T=0.012756s
+    query 13: HTTP=200 T=0.013825s
+    query 14: HTTP=200 T=0.011296s
+    query 15: HTTP=200 T=0.012794s
+    query 16: HTTP=200 T=0.012858s
+    query 17: HTTP=200 T=0.013974s
+    query 18: HTTP=200 T=0.019482s
+    query 19: HTTP=200 T=0.012166s
+    query 20: HTTP=200 T=0.013551s
+
+  --- P3.5: 110 rapid queries (exceed general 100/min limit) ---
+  (EVIDENCE_TEST_MODE may skip rate limiting — check headers)
+  Status codes: 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 200 
+  Unique codes: 200 
+
+  --- P3.6: Response header check (rate-limit headers) ---
+x-ratelimit-skipped: evidence-test-mode
+x-trace-id: dbd42b1c-0af5-422a-af2c-a5fc4ac5b934
+
+=============================================================================
+P4 — RATE LIMIT IDENTITY CHALLENGE
+=============================================================================
+  --- P4.1: Code trace ---
+  getClientIP (src/lib/rate-limit.ts:69-75 + src/middleware.ts:63-69):
+    - Reads x-forwarded-for header FIRST (trusted blindly)
+    - Takes first value after split by comma
+    - Falls back to x-real-ip, then 'unknown'
+
+  classifyPath('/api/social/search') → 'general' (line 60)
+    → fail-open mode (general limit = 100/min, but allows if limiter fails)
+
+  Rate-limit key: 'rl:general:<ip>' (IP-only, no authenticated user identity)
+
+  --- P4.2: X-Forwarded-For spoof test ---
+  Send 5 queries with XFF=1.2.3.4, then 5 with XFF=5.6.7.8 — do they share a bucket?
+  (EVIDENCE_TEST_MODE check: if rate limiting skipped, this test is inconclusive)
+
+  First, check if rate limiting is active:
+  Response headers:
+x-ratelimit-skipped: evidence-test-mode
+x-trace-id: dc82e997-2352-4afc-8b7e-55a6bdba646e
+
+  Send 5 queries with XFF=1.2.3.4:
+    1: HTTP=200
+    2: HTTP=200
+    3: HTTP=200
+    4: HTTP=200
+    5: HTTP=200
+  Send 5 queries with XFF=5.6.7.8 (different spoofed IP):
+    1: HTTP=200
+    2: HTTP=200
+    3: HTTP=200
+    4: HTTP=200
+    5: HTTP=200
+  Send 5 queries with NO XFF (real IP):
+    1: HTTP=200
+    2: HTTP=200
+    3: HTTP=200
+    4: HTTP=200
+    5: HTTP=200
+
+  --- P4.3: Multiple XFF values (comma-separated) ---
+  X-Forwarded-For: 1.1.1.1, 2.2.2.2, 3.3.3.3 (which value is used?)
+  Code: forwarded.split(',')[0].trim() → takes FIRST value (1.1.1.1)
+  HTTP=200
+
+  --- P4.4: Does rate limit apply to authenticated-user identity or IP? ---
+  Run 100 requests rapidly from ALICE, then check if BOB (different user, same IP) can still search:
+  (If IP-keyed, ALICE's 100 requests would block BOB too)
+  Sending 100 ALICE requests...
+  Now BOB (different user, same IP) tries to search:
+  BOB response: {"users":[{"id":"cmt64k14a004mqp86nvfc3ech","name":"User 8004","phone":"+919999998004","avatarColor":"amber"},{"id":"cmt64k0xy004hqp86y51hhlk1","name":"User 8003","phone":"+919999998003","avatarColor":"orange"},{"id":"cmt647uln0032qp86cqliif85","name":"User 5002","phone":"+919999995002","avatarColor":"pink"},{"id":"cmt647u99002xqp86sqvy1lol","name":"User 5001","phone":"+919999995001","avatarColor":"emerald"},{"id":"cmt604vwh0007qp3mu9hz2i7y","name":"User 3002","phone":"+919999993002","avatarColor":"emerald"},{"id":"cmt604vmo0002qp3mnhdtqaqt","name":"User 3001","phone":"+919999993001","avatarColor":"orange"},{"id":"cmt5zvdfz0007qpehbd88jo2m","name":"User 2002","phone":"+919999992002","avatarColor":"fuchsia"},{"id":"cmt5zvd5m0002qpehqx04mcet","name":"User 2001","phone":"+919999992001","avatarColor":"pink"},{"id":"cmt5w4cr90007qpcz51ianxpv","name":"User 1002","phone":"+919999991002","avatarColor":"pink"},{"id":"cmt5w4cdd0002qpczoxm1nfis","name":"User 1001","phone":"+919999991001","avatarColor":"emerald"},{"id":"cmt5vbyck0002qpwwjvvwikqd","name":"User 9901","phone":"+919999999901","avatarColor":"violet"},{"id":"cmt5pz7z10007qk0qyd37j909","name":"User 0902","phone":"+919999900902","avatarColor":"rose"},{"id":"cmt5pz7hh0002qk0qhakulexv","name":"User 0901","phone":"+919999900901","avatarColor":"amber"},{"id":"cmt5olhh70007qkkb9kauffrt","name":"User 0702","phone":"+919999900702","avatarColor":"amber"},{"id":"cmt5olh7x0002qkkbnvnytubu","name":"User 0701","phone":"+919999900701","avatarColor":"violet"},{"id":"cmt5mlkkn000cqkg2f82zxxb7","name":"User 0603","phone":"+919999900603","avatarColor":"teal"},{"id":"cmt5mlk5k0007qkg2rumlaeno","name":"User 0602","phone":"+919999900602","avatarColor":"emerald"},{"id":"cmt5mljrk0002qkg2gm5ophtk","name":"User 0601","phone":"+919999900601","avatarColor":"amber"},{"id":"cmt5lci60000cqkn1nq959iv1","name":"User 0503","phone":"+919999900503","avatarColor":"teal"},{"id":"cmt5lchzh0007qkn1lssre27x","name":"User 0502","phone":"+919999900502","avatarColor":"fuchsia"}]}
+HTTP=200
+  (If BOB gets 200, then either rate limit skipped (test mode) or IP-bucketing not blocking)
+
+=== S4B CHALLENGE COMPLETE ===
