@@ -1183,16 +1183,20 @@ model Like {
 model Notification {
   id            String   @id @default(cuid())
   userId        String   // recipient
-  // ORDER_READY | GIFT_RECEIVED | GIFT_REDEEMED | FRIEND_REQUEST |
-  // GROUP_ORDER_INVITE | REWARD_EARNED | REWARD_EXPIRING | ORDER_ACCEPTED | SYSTEM
+  // UPPERCASE: FRIEND_REQUEST_RECEIVED | FRIEND_REQUEST_ACCEPTED | SOCIAL_ACTIVITY_LIKED |
+  // GIFT_RECEIVED | GIFT_REDEEMED | ORDER_ACCEPTED | REWARD_EARNED |
+  // GROUP_ORDER_CONFIRMED | GROUP_ORDER_CANCELLED | SYSTEM
   type          String
   title         String
   body          String
   // JSON: deep link + action buttons + context
   data          String   @default("{}")
+  // GJ-02 S3: deterministic dedup key for exactly-once notification per source event
+  dedupKey      String?
   readAt        DateTime?
   createdAt     DateTime @default(now())
 
+  @@unique([userId, dedupKey])  // exactly-one notification per user per source event
   @@index([userId, readAt])
   @@index([type, createdAt])
 }

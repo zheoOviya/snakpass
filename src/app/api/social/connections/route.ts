@@ -304,21 +304,32 @@ export const POST = (req: NextRequest) =>
         })
 
         // 4. Send a Notification to the followee.
+        // S3: deterministic dedupKey + UPPERCASE type + P2002 idempotent
         const followerName = session.name ?? session.phone
-        await tx.notification.create({
-          data: {
-            userId: followeeId,
-            type: 'friend_request',
-            title: 'New friend request',
-            body: `${followerName} wants to be your friend`,
-            data: JSON.stringify({
-              connectionId: connection.id,
-              followerId: session.userId,
-              followerName,
-              message,
-            }),
-          },
-        })
+        const dedupKey = `FRIEND_REQUEST_RECEIVED:${connection.id}`
+        try {
+          await tx.notification.create({
+            data: {
+              userId: followeeId,
+              type: 'FRIEND_REQUEST_RECEIVED',
+              title: 'New friend request',
+              body: `${followerName} wants to be your friend`,
+              data: JSON.stringify({
+                connectionId: connection.id,
+                followerId: session.userId,
+                followerName,
+                message,
+              }),
+              dedupKey,
+            },
+          })
+        } catch (e: unknown) {
+          if (e !== null && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
+            // idempotent — notification already exists
+          } else {
+            throw e
+          }
+        }
 
         // 5. Audit log.
         await tx.auditLog.create({

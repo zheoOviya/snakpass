@@ -329,21 +329,32 @@ export const PATCH = (
         })
 
         // Send a Notification to the follower: "X accepted your friend request!".
+        // S3: deterministic dedupKey + UPPERCASE type + P2002 idempotent
         const followeeName = session.name ?? session.phone
-        await tx.notification.create({
-          data: {
-            userId: conn.followerId,
-            type: 'friend_request_accepted',
-            title: 'Friend request accepted! 🎉',
-            body: `${followeeName} accepted your friend request!`,
-            data: JSON.stringify({
-              connectionId,
-              followeeId: session.userId,
-              followeeName,
-              followerId: conn.followerId,
-            }),
-          },
-        })
+        const dedupKey = `FRIEND_REQUEST_ACCEPTED:${connectionId}`
+        try {
+          await tx.notification.create({
+            data: {
+              userId: conn.followerId,
+              type: 'FRIEND_REQUEST_ACCEPTED',
+              title: 'Friend request accepted! 🎉',
+              body: `${followeeName} accepted your friend request!`,
+              data: JSON.stringify({
+                connectionId,
+                followeeId: session.userId,
+                followeeName,
+                followerId: conn.followerId,
+              }),
+              dedupKey,
+            },
+          })
+        } catch (e: unknown) {
+          if (e !== null && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
+            // idempotent — notification already exists
+          } else {
+            throw e
+          }
+        }
 
         await tx.auditLog.create({
           data: {

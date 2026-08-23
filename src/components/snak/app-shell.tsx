@@ -3,7 +3,7 @@
 import * as React from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { LogOut, Zap, Home } from 'lucide-react'
+import { Bell, LogOut, Zap, Home } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useAuth } from '@/hooks/use-auth'
 import { useToast } from '@/hooks/use-toast'
@@ -11,6 +11,7 @@ import { useCampus } from '@/lib/campus-store'
 import { useUI } from '@/lib/ui-store'
 import { useSocial } from '@/lib/social-store'
 import { csrfFetch } from '@/lib/csrf-client'
+import { useNotifications } from '@/lib/notification-store'
 import { CampusSelector } from '@/components/snak/campus-selector'
 import { BottomNav } from '@/components/snak/bottom-nav'
 import type { Campus } from '@/lib/types'
@@ -79,6 +80,8 @@ export function AppShell({ persona, children }: { persona: keyof typeof PERSONAS
                 <p className="text-[11px] leading-tight text-muted-foreground">{user.email ?? user.phone}</p>
               </div>
             )}
+            {/* GJ-02 S3: Notification bell with unread badge */}
+            <NotificationBell />
             <Button asChild variant="ghost" size="icon" className="h-9 w-9" title="Home">
               <Link href="/"><Home className="h-4 w-4" /></Link>
             </Button>
@@ -245,5 +248,72 @@ function CampusChip({ onSwitched }: { onSwitched?: () => void }) {
       }
       compact
     />
+  )
+}
+
+// GJ-02 S3: NotificationBell — bell icon with unread badge
+// Repair-C: Bell open is a READ-ONLY toggle. It must NOT mutate server state.
+function NotificationBell() {
+  const { unreadCount, refresh } = useNotifications()
+  const [open, setOpen] = React.useState(false)
+
+  React.useEffect(() => { refresh() }, [refresh])
+
+  return (
+    <div className="relative">
+      <Button
+        variant="ghost"
+        size="icon"
+        className="h-9 w-9 relative"
+        title="Notifications"
+        aria-label={`Notifications${unreadCount > 0 ? `, ${unreadCount} unread` : ''}`}
+        onClick={() => setOpen(!open)}
+      >
+        <Bell className="h-4 w-4" />
+        {unreadCount > 0 && (
+          <span className="absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-rose-500 px-1 text-[10px] font-bold text-white">
+            {unreadCount > 99 ? '99+' : unreadCount}
+          </span>
+        )}
+      </Button>
+      {open && (
+        <div className="absolute right-0 top-full mt-2 w-80 max-h-96 overflow-y-auto rounded-lg border bg-popover shadow-lg z-50">
+          <NotificationList />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function NotificationList() {
+  const { notifications, isLoading, unreadCount, markAsRead, markAllAsRead } = useNotifications()
+
+  if (isLoading) return <div className="p-4 text-sm text-muted-foreground">Loading...</div>
+  if (notifications.length === 0) return <div className="p-4 text-sm text-muted-foreground">No notifications</div>
+
+  return (
+    <div>
+      {unreadCount > 0 && (
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-popover px-3 py-2">
+          <span className="text-xs font-medium text-muted-foreground">{unreadCount} unread</span>
+          <Button type="button" variant="ghost" size="sm" className="h-7 px-2 text-xs hover:bg-accent" onClick={() => markAllAsRead()}>
+            Mark all read
+          </Button>
+        </div>
+      )}
+      <div className="divide-y">
+        {notifications.slice(0, 10).map((n) => (
+          <button
+            key={n.id}
+            className={`w-full p-3 text-left hover:bg-accent ${!n.read ? 'bg-teal-50 dark:bg-teal-950/20' : ''}`}
+            onClick={() => markAsRead(n.id)}
+          >
+            <p className="text-sm font-medium">{n.title}</p>
+            <p className="text-xs text-muted-foreground">{n.body}</p>
+            <p className="text-[10px] text-muted-foreground mt-1">{new Date(n.createdAt).toLocaleString()}</p>
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }

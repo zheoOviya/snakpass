@@ -89,6 +89,33 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
       }
     }
 
+    // S3: Create SOCIAL_ACTIVITY_LIKED notification for the activity actor
+    // Only on NEW like (not on duplicate/idempotent). No self-notification.
+    // dedupKey ensures exactly-one notification per (activityId, likerId).
+    // Unlike → notification remains (historical retention). Re-like → P2002 dedup.
+    if (isNewLike && activity.actorId !== session.userId) {
+      const dedupKey = `SOCIAL_ACTIVITY_LIKED:${activityId}:${session.userId}`
+      try {
+        await db.notification.create({
+          data: {
+            userId: activity.actorId,
+            type: 'SOCIAL_ACTIVITY_LIKED',
+            title: 'Someone liked your activity',
+            body: 'Your activity received a new like',
+            data: JSON.stringify({ activityId, likerId: session.userId }),
+            dedupKey,
+          },
+        })
+        logInfo('social-like-notification-created', { activityId, likerId: session.userId, recipientId: activity.actorId }, traceId)
+      } catch (e: unknown) {
+        if (e !== null && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
+          logInfo('social-like-notification-already-exists', { activityId, likerId: session.userId }, traceId)
+        } else {
+          logInfo('social-like-notification-failed', { activityId, error: e instanceof Error ? e.message : String(e) }, traceId)
+        }
+      }
+    }
+
     // Count likes for this activity (authoritative DB count)
     const likeCount = await db.like.count({ where: { activityId } })
 

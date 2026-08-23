@@ -327,20 +327,19 @@ export interface SocialActivity {
   likedByMe?: boolean
 }
 
-/** A user notification (blueprint §33 Phase 1 — bell + dropdown). */
+/** A user notification (GJ-02 S3 — durable, bell + list). */
 export interface Notification {
   id: string
-  userId: string
-  /** 'order' | 'reward' | 'gift' | 'social' | 'group' | 'system' | 'campus'. */
+  /** UPPERCASE type: FRIEND_REQUEST_RECEIVED | FRIEND_REQUEST_ACCEPTED |
+   *  SOCIAL_ACTIVITY_LIKED | GIFT_RECEIVED | GIFT_REDEEMED | ORDER_ACCEPTED |
+   *  REWARD_EARNED | GROUP_ORDER_CONFIRMED | GROUP_ORDER_CANCELLED | SYSTEM */
   type: string
-  /** Short title — "Order ready", "Gift received", "Friend request". */
   title: string
-  /** Longer body text. */
-  body?: string
-  /** Optional deep-link URL ("/orders/SNZ-12345"). */
-  href?: string
-  /** Optional icon emoji or lucide name override. */
-  icon?: string
+  body: string
+  /** Parsed JSON data: { activityId?, likerId?, connectionId?, ... } */
+  data: Record<string, unknown>
+  /** ISO date string when read, or null if unread. */
+  readAt: string | null
   /** Whether the user has read it. */
   read: boolean
   /** ISO timestamp. */
