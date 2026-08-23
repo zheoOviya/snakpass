@@ -257,6 +257,41 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
     }
   }
 
+  // S4A: Block + Unblock handlers (authorized by S4A repair directive Phase 7)
+  async function handleBlock(conn: SocialConnection) {
+    const ok = window.confirm(`Block ${conn.name}? They won't be able to send you requests or see your friends-only content.`)
+    if (!ok) return
+    try {
+      const csrfFetch = (await import('@/lib/csrf-client')).csrfFetch
+      const res = await csrfFetch(`/api/social/connections/${conn.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'BLOCK' }),
+      })
+      if (!res.ok) throw new Error(`Failed (${res.status})`)
+      toast({ title: 'Blocked', description: `${conn.name} has been blocked.` })
+      await refresh()
+    } catch (e) {
+      toast({ title: 'Could not block', description: (e as Error).message, variant: 'destructive' })
+    }
+  }
+
+  async function handleUnblock(conn: SocialConnection) {
+    try {
+      const csrfFetch = (await import('@/lib/csrf-client')).csrfFetch
+      const res = await csrfFetch(`/api/social/connections/${conn.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'UNBLOCK' }),
+      })
+      if (!res.ok) throw new Error(`Failed (${res.status})`)
+      toast({ title: 'Unblocked', description: `${conn.name} has been unblocked.` })
+      await refresh()
+    } catch (e) {
+      toast({ title: 'Could not unblock', description: (e as Error).message, variant: 'destructive' })
+    }
+  }
+
   async function handleSendMessage(conn: SocialConnection) {
     // Placeholder — messaging is on the Wave 8+ roadmap (blueprint §22).
     toast({
@@ -498,6 +533,8 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
                       conn={c}
                       onMessage={() => handleSendMessage(c)}
                       onUnfriend={() => handleUnfriend(c)}
+                      onBlock={() => handleBlock(c)}
+                      onUnblock={() => handleUnblock(c)}
                     />
                   </motion.li>
                 ))}
@@ -600,9 +637,11 @@ interface FriendRowProps {
   conn: SocialConnection
   onMessage: () => void
   onUnfriend: () => void
+  onBlock: () => void
+  onUnblock: () => void
 }
 
-function FriendRow({ conn, onMessage, onUnfriend }: FriendRowProps) {
+function FriendRow({ conn, onMessage, onUnfriend, onBlock, onUnblock }: FriendRowProps) {
   const [busy, setBusy] = React.useState(false)
   return (
     <Card className="overflow-hidden">
@@ -653,6 +692,33 @@ function FriendRow({ conn, onMessage, onUnfriend }: FriendRowProps) {
             )}
             <span className="sr-only sm:inline">Unfriend</span>
           </Button>
+          {conn.status === 'BLOCKED' ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={async () => { setBusy(true); try { await onUnblock() } finally { setBusy(false) } }}
+              disabled={busy}
+              className="h-8 px-2.5 text-xs"
+              aria-label={`Unblock ${conn.name}`}
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
+              <span className="sr-only sm:inline">Unblock</span>
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={async () => { setBusy(true); try { await onBlock() } finally { setBusy(false) } }}
+              disabled={busy}
+              className="h-8 px-2.5 text-xs"
+              aria-label={`Block ${conn.name}`}
+            >
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
+              <span className="sr-only sm:inline">Block</span>
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
