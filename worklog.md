@@ -12520,3 +12520,36 @@ Stage Summary:
 - Credential hygiene: CLEAN
 - To unblock: a GitHub PAT with repo scope must be provided via env var (GH_TOKEN/GITHUB_TOKEN), ephemeral askpass script, gh CLI, or temporary credential helper — ALL require the PAT value from an external source
 - NO CODE CHANGES. NO GIT MUTATIONS. AUTH + PUSH ONLY honored (push not attempted — no credentials).
+
+---
+Task ID: S4A-CLOSURE-09
+Agent: S4A End-to-End Browser Security Verification Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4A-BROWSER-SECURITY-CLOSURE-09 — Execute complete Block/Unblock security lifecycle against unchanged remote-backed S4A source. NO product source edits. Evidence-only.
+
+Work Log:
+- Phase 0: Baseline locked — HEAD=6515b13, origin/main=6515b13, source diff src/+prisma/ since a78cf5d = 0, ancestors a35a8df + d87b11a present
+- Phase 1: Created fresh users A(+919999995001) + B(+919999995002) via API OTP flow, set campusId, established A→B + B→A ACCEPTED pair, created A's FRIENDS activity (S4A-Closure09-Secret-Dosa) + PUBLIC positive-control (S4A-Closure09-Public-Samosa)
+- Phase 2: Browser auth harness — API session → agent-browser cookies set (snakzap_session HttpOnly + snakzap_csrf) → /api/auth/me returns expected userId → reload persists. Both A and B verified.
+- Phase 3: Accepted-friend positive control — A navigated Social→Friends, B visible as ACCEPTED, Block control (aria-label "Block User 5002") + Unfriend control visible. Reload persists.
+- Phase 4: A blocks B (browser click) — PATCH BLOCK succeeded, DOM showed Unblock control transiently, DB A→B + B→A both BLOCKED with blockedBy=A, PENDING=0
+- Phase 5: B reconnect blocked — B searched for A, POST B→A friend request → 403, pair remains BLOCKED, PENDING delta=0, 0 new FRIEND_REQUEST_RECEIVED notifications
+- Phase 6: FRIENDS privacy isolation — B's feed, A's FRIENDS activity absent (API confirmed 0 found), pair remains BLOCKED
+- Phase 7: Blocked Like protection — POST B likes A's FRIENDS activity → 403, Like rows delta=0, SOCIAL_ACTIVITY_LIKED notif=0
+- Phase 8: B cannot remove block — DELETE blocked → 403, PATCH UNBLOCK by B → 403, pair BLOCKED intact with blockedBy=A
+- Phase 9: Backend unblock via API (PATCH UNBLOCK by A → 200, rows removed, 0 PENDING/ACCEPTED/BLOCKED). UI DEFECT FOUND: Unblock button unreachable after page reload (FriendsScreen friends filter excludes BLOCKED connections). Evidence captured in P9-DEFECT-unblock-unreachable.png + button aria-label dump.
+- Phase 10: Post-unblock recovery — B searched A, found, clicked "Send friend request to User 5001", DB B→A PENDING, exactly 1 PENDING, +1 new FRIEND_REQUEST_RECEIVED notification
+- Phase 11: Notification causality — 0 FRIEND_REQUEST_RECEIVED during block, 1 after unblock, historical FRIEND_REQUEST_ACCEPTED retained
+- Phase 12: Legacy NULL fail-closed — 6/6 challenges (C request, D request, C DELETE, D DELETE, C UNBLOCK, D UNBLOCK) all returned 403, DB unchanged
+- Phase 13: S1/S2/S3 regression — S1 (request→accept→reciprocal ACCEPTED + FRIENDS privacy), S2 (like→1, duplicate→1, unlike→0), S3 (1 deterministic FRIEND_REQUEST_RECEIVED with dedupKey) all PASS
+- Phase 16: Lint clean (0 errors), source diff=0, working tree clean
+- Phase 17: Committed evidence + scripts, pushed to origin/main (6515b13..515c87a), LOCAL_HEAD == REMOTE_MAIN verified, credential hygiene confirmed (PAT not persisted, temp artifacts removed)
+
+Stage Summary:
+- ALL 8 security invariants (B1-B8) PASS at backend level
+- S4A backend repair VERIFIED via browser + API + DB
+- S4A Block UI VERIFIED (Phase 4: browser click → PATCH BLOCK → DB mutation)
+- S4A Unblock UI DEFECT: Unblock button unreachable after page reload (FriendsScreen friends filter excludes BLOCKED connections from rendering)
+- Backend PATCH UNBLOCK works correctly (proven via API in Phase 9)
+- Defect is UI-only; does not affect any security invariant
+- Evidence checkpoint: 515c87a on origin/main
+- Final verdict: S4A VERIFIED with UI deficiency noted for follow-up

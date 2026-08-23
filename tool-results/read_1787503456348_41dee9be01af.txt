@@ -1,0 +1,789 @@
+     1→'use client'
+     2→
+     3→// src/components/snak/screens/friends-screen.tsx
+     4→//
+     5→// FriendsScreen — Friends sub-tab content for the Social screen (Wave 6 Task 6B).
+     6→//
+     7→// Per blueprint §18 SOCIAL GRAPH + DESIGN_SYSTEM.md §5.2.7 (Friends list):
+     8→//  - Search bar (debounced 250ms) → GET /api/social/search?q=
+     9→//  - Pending requests section:
+    10→//      • Incoming (status === 'PENDING_RECEIVED') — Accept / Reject buttons
+    11→//      • Outgoing (status === 'PENDING_SENT') — "Pending" label
+    12→//  - Current friends list (status === 'ACCEPTED'):
+    13→//      avatar + name + phone + "Message" (placeholder toast) + "Unfriend" button
+    14→//  - Search results: each row shows "Add friend" button (calls sendRequest).
+    15→//    Already-connected users are excluded client-side.
+    16→//
+    17→// State sourcing:
+    18→//  - Reads `connections` + mutation methods from `useSocial` (Task 1C owns the
+    19→//    store — we CALL its methods, never modify it).
+    20→//  - Search results are fetched locally (the social-store has no `search`
+    21→//    method by design — search is a transient, non-cached query).
+    22→//
+    23→// Governance (Task 6B):
+    24→//  - Does NOT touch any API route (Task 6A owns /api/social/**).
+    25→//  - Does NOT touch social-store.ts (Task 1C owns).
+    26→//  - Does NOT touch consumer-view.tsx (Task 3A owns the tab routing).
+    27→//  - Resilient to missing endpoints — surfaces a soft "Couldn't load" toast.
+    28→
+    29→import * as React from 'react'
+    30→import { motion, AnimatePresence, useReducedMotion, type Variants } from 'framer-motion'
+    31→import {
+    32→  Search,
+    33→  UserPlus,
+    34→  Check,
+    35→  X,
+    36→  MessageCircle,
+    37→  UserMinus,
+    38→  Clock,
+    39→  Loader2,
+    40→  AlertCircle,
+    41→} from 'lucide-react'
+    42→import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+    43→import { Button } from '@/components/ui/button'
+    44→import { Input } from '@/components/ui/input'
+    45→import { Card, CardContent } from '@/components/ui/card'
+    46→import { cn } from '@/lib/utils'
+    47→import { useToast } from '@/hooks/use-toast'
+    48→import { useSocial } from '@/lib/social-store'
+    49→import { EmptyState } from '@/components/snak/empty-state'
+    50→import { SocialFeedSkeleton } from '@/components/snak/skeleton-loader'
+    51→import type { SocialConnection } from '@/lib/types'
+    52→
+    53→// ─────────────────────────────────────────────────────────────────────────────
+    54→// Motion presets — stagger pattern per DESIGN_SYSTEM.md §6.4
+    55→// ─────────────────────────────────────────────────────────────────────────────
+    56→
+    57→const LIST_CONTAINER: Variants = {
+    58→  hidden: {},
+    59→  show: { transition: { staggerChildren: 0.04, delayChildren: 0.02 } },
+    60→}
+    61→const LIST_ITEM: Variants = {
+    62→  hidden: { opacity: 0, y: 8 },
+    63→  show: {
+    64→    opacity: 1,
+    65→    y: 0,
+    66→    transition: { duration: 0.26, ease: [0.3, 0, 0, 1] },
+    67→  },
+    68→}
+    69→
+    70→// ─────────────────────────────────────────────────────────────────────────────
+    71→// Types
+    72→// ─────────────────────────────────────────────────────────────────────────────
+    73→
+    74→/** A user result from GET /api/social/search?q=. The backend may evolve the
+    75→ *  shape; we tolerate missing fields and only require `id` + `name`. */
+    76→export interface SocialSearchUser {
+    77→  id: string
+    78→  name: string
+    79→  phone?: string
+    80→  avatarUrl?: string
+    81→  campusName?: string
+    82→}
+    83→
+    84→export interface FriendsScreenProps {
+    85→  /** Optional className override (host can wrap with extra padding). */
+    86→  className?: string
+    87→}
+    88→
+    89→// ─────────────────────────────────────────────────────────────────────────────
+    90→// Helpers
+    91→// ─────────────────────────────────────────────────────────────────────────────
+    92→
+    93→function initials(name: string): string {
+    94→  return name
+    95→    .split(' ')
+    96→    .map((p) => p[0])
+    97→    .filter(Boolean)
+    98→    .slice(0, 2)
+    99→    .join('')
+   100→    .toUpperCase()
+   101→}
+   102→
+   103→// ─────────────────────────────────────────────────────────────────────────────
+   104→// FriendsScreen
+   105→// ─────────────────────────────────────────────────────────────────────────────
+   106→
+   107→export function FriendsScreen({ className }: FriendsScreenProps) {
+   108→  const prefersReduced = useReducedMotion()
+   109→  const { toast } = useToast()
+   110→
+   111→  // ── social-store hooks (Task 1C) ─────────────────────────────────────────
+   112→  const connections = useSocial((s) => s.connections)
+   113→  const isLoading = useSocial((s) => s.isLoading)
+   114→  const refresh = useSocial((s) => s.refresh)
+   115→  const sendRequest = useSocial((s) => s.sendRequest)
+   116→  const acceptRequest = useSocial((s) => s.acceptRequest)
+   117→  const declineRequest = useSocial((s) => s.declineRequest)
+   118→  const unfollow = useSocial((s) => s.unfollow)
+   119→
+   120→  // ── Derived slices ─────────────────────────────────────────────────────────
+   121→  const pendingIn = React.useMemo(
+   122→    // S1 Reconstruction: server returns 'PENDING_RECEIVED' (they sent to me)
+   123→    () => connections.filter((c) => c.status === 'PENDING_RECEIVED'),
+   124→    [connections],
+   125→  )
+   126→  const pendingOut = React.useMemo(
+   127→    // S1 Reconstruction: server returns 'PENDING_SENT' (I sent to them)
+   128→    () => connections.filter((c) => c.status === 'PENDING_SENT'),
+   129→    [connections],
+   130→  )
+   131→  const friends = React.useMemo(
+   132→    () =>
+   133→      connections
+   134→        .filter((c) => c.status === 'ACCEPTED')
+   135→        // newest accepted first (acceptedAt ?? createdAt fallback)
+   136→        .sort((a, b) => {
+   137→          const at = (t?: string | null) => (t ? new Date(t).getTime() : 0)
+   138→          return at(b.acceptedAt) - at(a.acceptedAt)
+   139→        }),
+   140→    [connections],
+   141→  )
+   142→
+   143→  // Set of friend IDs (any status) for client-side exclusion of search results.
+   144→  const connectedIds = React.useMemo(
+   145→    () => new Set(connections.map((c) => c.userId)),
+   146→    [connections],
+   147→  )
+   148→
+   149→  // ── Search state (local — not in social-store by design) ───────────────────
+   150→  const [query, setQuery] = React.useState('')
+   151→  const [debounced, setDebounced] = React.useState('')
+   152→  const [results, setResults] = React.useState<SocialSearchUser[]>([])
+   153→  const [searching, setSearching] = React.useState(false)
+   154→  const [searchError, setSearchError] = React.useState<string | null>(null)
+   155→  // Track outgoing requests that succeeded locally so we can flip the row's
+   156→  // button to "Pending" without waiting for a refresh.
+   157→  const [pendingSentIds, setPendingSentIds] = React.useState<Set<string>>(new Set())
+   158→
+   159→  // 250ms debounce — only triggers a fetch when query length ≥ 2.
+   160→  React.useEffect(() => {
+   161→    const q = query.trim()
+   162→    if (q === debounced) return
+   163→    const t = setTimeout(() => setDebounced(q), 250)
+   164→    return () => clearTimeout(t)
+   165→  }, [query, debounced])
+   166→
+   167→  // Fetch search results whenever the debounced query changes.
+   168→  React.useEffect(() => {
+   169→    const q = debounced.trim()
+   170→    if (q.length < 2) {
+   171→      setResults([])
+   172→      setSearchError(null)
+   173→      setSearching(false)
+   174→      return
+   175→    }
+   176→    let cancelled = false
+   177→    setSearching(true)
+   178→    setSearchError(null)
+   179→    fetch(`/api/social/search?q=${encodeURIComponent(q)}`, {
+   180→      headers: { 'Content-Type': 'application/json' },
+   181→    })
+   182→      .then(async (res) => {
+   183→        if (!res.ok) {
+   184→          const body = await res.json().catch(() => ({}))
+   185→          throw new Error(body?.error || `Search failed (${res.status})`)
+   186→        }
+   187→        const data = (await res.json()) as { users?: SocialSearchUser[] }
+   188→        if (!cancelled) {
+   189→          setResults(data.users ?? [])
+   190→        }
+   191→      })
+   192→      .catch((err) => {
+   193→        if (!cancelled) {
+   194→          setSearchError(err instanceof Error ? err.message : 'Search failed')
+   195→          setResults([])
+   196→        }
+   197→      })
+   198→      .finally(() => {
+   199→        if (!cancelled) setSearching(false)
+   200→      })
+   201→    return () => {
+   202→      cancelled = true
+   203→    }
+   204→  }, [debounced])
+   205→
+   206→  // ── Action handlers ─────────────────────────────────────────────────────────
+   207→  async function handleAccept(conn: SocialConnection) {
+   208→    try {
+   209→      await acceptRequest(conn.id)
+   210→      toast({
+   211→        title: 'Friend request accepted',
+   212→        description: `${conn.name} is now your friend.`,
+   213→      })
+   214→    } catch (e) {
+   215→      toast({
+   216→        title: 'Could not accept request',
+   217→        description: (e as Error).message,
+   218→        variant: 'destructive',
+   219→      })
+   220→    }
+   221→  }
+   222→
+   223→  async function handleReject(conn: SocialConnection) {
+   224→    try {
+   225→      await declineRequest(conn.id)
+   226→      toast({
+   227→        title: 'Request declined',
+   228→        description: `${conn.name}'s request was dismissed.`,
+   229→      })
+   230→    } catch (e) {
+   231→      toast({
+   232→        title: 'Could not decline request',
+   233→        description: (e as Error).message,
+   234→        variant: 'destructive',
+   235→      })
+   236→    }
+   237→  }
+   238→
+   239→  async function handleUnfriend(conn: SocialConnection) {
+   240→    // Optimistic confirmation — friend removal is destructive.
+   241→    const ok = window.confirm(
+   242→      `Unfriend ${conn.name}? They won't be notified, but you'll need to send a new request to reconnect.`,
+   243→    )
+   244→    if (!ok) return
+   245→    try {
+   246→      await unfollow(conn.userId)
+   247→      toast({
+   248→        title: 'Unfriended',
+   249→        description: `${conn.name} is no longer your friend.`,
+   250→      })
+   251→    } catch (e) {
+   252→      toast({
+   253→        title: 'Could not unfriend',
+   254→        description: (e as Error).message,
+   255→        variant: 'destructive',
+   256→      })
+   257→    }
+   258→  }
+   259→
+   260→  // S4A: Block + Unblock handlers (authorized by S4A repair directive Phase 7)
+   261→  async function handleBlock(conn: SocialConnection) {
+   262→    const ok = window.confirm(`Block ${conn.name}? They won't be able to send you requests or see your friends-only content.`)
+   263→    if (!ok) return
+   264→    try {
+   265→      const csrfFetch = (await import('@/lib/csrf-client')).csrfFetch
+   266→      const res = await csrfFetch(`/api/social/connections/${conn.id}`, {
+   267→        method: 'PATCH',
+   268→        headers: { 'Content-Type': 'application/json' },
+   269→        body: JSON.stringify({ action: 'BLOCK' }),
+   270→      })
+   271→      if (!res.ok) throw new Error(`Failed (${res.status})`)
+   272→      toast({ title: 'Blocked', description: `${conn.name} has been blocked.` })
+   273→      await refresh()
+   274→    } catch (e) {
+   275→      toast({ title: 'Could not block', description: (e as Error).message, variant: 'destructive' })
+   276→    }
+   277→  }
+   278→
+   279→  async function handleUnblock(conn: SocialConnection) {
+   280→    try {
+   281→      const csrfFetch = (await import('@/lib/csrf-client')).csrfFetch
+   282→      const res = await csrfFetch(`/api/social/connections/${conn.id}`, {
+   283→        method: 'PATCH',
+   284→        headers: { 'Content-Type': 'application/json' },
+   285→        body: JSON.stringify({ action: 'UNBLOCK' }),
+   286→      })
+   287→      if (!res.ok) throw new Error(`Failed (${res.status})`)
+   288→      toast({ title: 'Unblocked', description: `${conn.name} has been unblocked.` })
+   289→      await refresh()
+   290→    } catch (e) {
+   291→      toast({ title: 'Could not unblock', description: (e as Error).message, variant: 'destructive' })
+   292→    }
+   293→  }
+   294→
+   295→  async function handleSendMessage(conn: SocialConnection) {
+   296→    // Placeholder — messaging is on the Wave 8+ roadmap (blueprint §22).
+   297→    toast({
+   298→      title: 'Messaging coming soon',
+   299→      description: `You'll be able to message ${conn.name} in a future release.`,
+   300→    })
+   301→  }
+   302→
+   303→  async function handleAddFriend(user: SocialSearchUser) {
+   304→    try {
+   305→      await sendRequest(user.id)
+   306→      setPendingSentIds((s) => new Set(s).add(user.id))
+   307→      toast({
+   308→        title: 'Friend request sent',
+   309→        description: `Waiting for ${user.name} to accept.`,
+   310→      })
+   311→    } catch (e) {
+   312→      toast({
+   313→        title: 'Could not send request',
+   314→        description: (e as Error).message,
+   315→        variant: 'destructive',
+   316→      })
+   317→    }
+   318→  }
+   319→
+   320→  function handleRefresh() {
+   321→    refresh().catch(() => {
+   322→      /* best-effort — store surfaces its own error */
+   323→    })
+   324→  }
+   325→
+   326→  const hasSearchQuery = debounced.trim().length >= 2
+   327→  const filteredResults = React.useMemo(
+   328→    () => results.filter((u) => !connectedIds.has(u.id) && !pendingSentIds.has(u.id)),
+   329→    [results, connectedIds, pendingSentIds],
+   330→  )
+   331→
+   332→  // ── Loading skeleton ─────────────────────────────────────────────────────────
+   333→  if (isLoading && connections.length === 0) {
+   334→    return (
+   335→      <div className="space-y-3" role="status" aria-label="Loading friends">
+   336→        <span className="sr-only">Loading your friends…</span>
+   337→        {Array.from({ length: 4 }).map((_, i) => (
+   338→          <SocialFeedSkeleton key={i} />
+   339→        ))}
+   340→      </div>
+   341→    )
+   342→  }
+   343→
+   344→  return (
+   345→    <div className={cn('space-y-5', className)}>
+   346→      {/* ── Search bar ─────────────────────────────────────────────────────── */}
+   347→      <div className="relative">
+   348→        <Search
+   349→          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+   350→          aria-hidden="true"
+   351→        />
+   352→        <Input
+   353→          type="search"
+   354→          value={query}
+   355→          onChange={(e) => setQuery(e.target.value)}
+   356→          placeholder="Search by name or phone…"
+   357→          aria-label="Search for friends"
+   358→          className="h-11 rounded-xl pl-9 pr-9"
+   359→        />
+   360→        {query && (
+   361→          <button
+   362→            type="button"
+   363→            onClick={() => setQuery('')}
+   364→            aria-label="Clear search"
+   365→            className="snak-focus-ring absolute right-2.5 top-1/2 -translate-y-1/2 rounded-full p-1 text-muted-foreground transition hover:bg-muted"
+   366→          >
+   367→            <X className="h-4 w-4" aria-hidden="true" />
+   368→          </button>
+   369→        )}
+   370→      </div>
+   371→
+   372→      {/* ── SEARCH RESULTS mode ─────────────────────────────────────────────── */}
+   373→      {hasSearchQuery && (
+   374→        <section aria-label="Search results" className="space-y-2">
+   375→          <header className="flex items-center justify-between gap-2">
+   376→            <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+   377→              {searching
+   378→                ? 'Searching…'
+   379→                : `${filteredResults.length} ${filteredResults.length === 1 ? 'result' : 'results'}`}
+   380→            </h2>
+   381→          </header>
+   382→
+   383→          {searching ? (
+   384→            <div className="space-y-2">
+   385→              {Array.from({ length: 3 }).map((_, i) => (
+   386→                <SocialFeedSkeleton key={i} />
+   387→              ))}
+   388→            </div>
+   389→          ) : searchError ? (
+   390→            <Card>
+   391→              <CardContent className="flex items-center gap-2 p-4 text-sm text-muted-foreground">
+   392→                <AlertCircle className="h-4 w-4 text-danger-600" aria-hidden="true" />
+   393→                <span>{searchError}</span>
+   394→              </CardContent>
+   395→            </Card>
+   396→          ) : filteredResults.length === 0 ? (
+   397→            <EmptyState
+   398→              variant="no-friends"
+   399→              title="No users found"
+   400→              description={
+   401→                results.length === 0
+   402→                  ? `No one matching "${debounced}". Try a different name or phone.`
+   403→                  : 'Everyone matching your search is already your friend or has a pending request.'
+   404→              }
+   405→              className="py-8"
+   406→            />
+   407→          ) : (
+   408→            <motion.ul
+   409→              variants={LIST_CONTAINER}
+   410→              initial={prefersReduced ? false : 'hidden'}
+   411→              animate="show"
+   412→              className="space-y-2"
+   413→            >
+   414→              <AnimatePresence>
+   415→                {filteredResults.map((u) => (
+   416→                  <motion.li key={u.id} variants={LIST_ITEM} exit={{ opacity: 0 }}>
+   417→                    <SearchResultRow
+   418→                      user={u}
+   419→                      pending={pendingSentIds.has(u.id)}
+   420→                      onAdd={() => handleAddFriend(u)}
+   421→                    />
+   422→                  </motion.li>
+   423→                ))}
+   424→              </AnimatePresence>
+   425→            </motion.ul>
+   426→          )}
+   427→        </section>
+   428→      )}
+   429→
+   430→      {/* ── DEFAULT mode (no active search) ────────────────────────────────── */}
+   431→      {!hasSearchQuery && (
+   432→        <motion.div
+   433→          variants={LIST_CONTAINER}
+   434→          initial={prefersReduced ? false : 'hidden'}
+   435→          animate="show"
+   436→          className="space-y-5"
+   437→        >
+   438→          {/* Pending incoming requests */}
+   439→          <section aria-labelledby="friends-pending-in">
+   440→            <header className="mb-2 flex items-center justify-between gap-2">
+   441→              <h2
+   442→                id="friends-pending-in"
+   443→                className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+   444→              >
+   445→                <span className="h-1.5 w-1.5 rounded-full bg-violet-500" aria-hidden="true" />
+   446→                Incoming Requests
+   447→                {pendingIn.length > 0 && (
+   448→                  <span className="rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-bold text-violet-700 dark:bg-violet-950/60 dark:text-violet-300">
+   449→                    {pendingIn.length}
+   450→                  </span>
+   451→                )}
+   452→              </h2>
+   453→              <button
+   454→                type="button"
+   455→                onClick={handleRefresh}
+   456→                className="text-xs font-medium text-muted-foreground transition hover:text-foreground"
+   457→                aria-label="Refresh friends list"
+   458→              >
+   459→                Refresh
+   460→              </button>
+   461→            </header>
+   462→
+   463→            {pendingIn.length === 0 ? (
+   464→              <p className="rounded-lg bg-muted/40 px-3 py-3 text-xs text-muted-foreground">
+   465→                No pending requests.
+   466→              </p>
+   467→            ) : (
+   468→              <motion.ul variants={LIST_CONTAINER} className="space-y-2">
+   469→                {pendingIn.map((c) => (
+   470→                  <motion.li key={c.id} variants={LIST_ITEM}>
+   471→                    <PendingRequestRow
+   472→                      conn={c}
+   473→                      direction="in"
+   474→                      onAccept={() => handleAccept(c)}
+   475→                      onReject={() => handleReject(c)}
+   476→                    />
+   477→                  </motion.li>
+   478→                ))}
+   479→              </motion.ul>
+   480→            )}
+   481→          </section>
+   482→
+   483→          {/* Pending outgoing requests */}
+   484→          {pendingOut.length > 0 && (
+   485→            <section aria-labelledby="friends-pending-out">
+   486→              <h2
+   487→                id="friends-pending-out"
+   488→                className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+   489→              >
+   490→                <Clock className="h-3 w-3" aria-hidden="true" />
+   491→                Sent Requests
+   492→                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground">
+   493→                  {pendingOut.length}
+   494→                </span>
+   495→              </h2>
+   496→              <motion.ul variants={LIST_CONTAINER} className="space-y-2">
+   497→                {pendingOut.map((c) => (
+   498→                  <motion.li key={c.id} variants={LIST_ITEM}>
+   499→                    <PendingRequestRow conn={c} direction="out" />
+   500→                  </motion.li>
+   501→                ))}
+   502→              </motion.ul>
+   503→            </section>
+   504→          )}
+   505→
+   506→          {/* Current friends list */}
+   507→          <section aria-labelledby="friends-list">
+   508→            <h2
+   509→              id="friends-list"
+   510→              className="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground"
+   511→            >
+   512→              <span className="h-1.5 w-1.5 rounded-full bg-teal-500" aria-hidden="true" />
+   513→              Your Friends
+   514→              {friends.length > 0 && (
+   515→                <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground">
+   516→                  {friends.length}
+   517→                </span>
+   518→              )}
+   519→            </h2>
+   520→
+   521→            {friends.length === 0 ? (
+   522→              <EmptyState
+   523→                variant="no-friends"
+   524→                title="No friends yet"
+   525→                description="Search by name or phone above to find people you know on SnakZap."
+   526→                className="py-6"
+   527→              />
+   528→            ) : (
+   529→              <motion.ul variants={LIST_CONTAINER} className="space-y-2">
+   530→                {friends.map((c) => (
+   531→                  <motion.li key={c.id} variants={LIST_ITEM}>
+   532→                    <FriendRow
+   533→                      conn={c}
+   534→                      onMessage={() => handleSendMessage(c)}
+   535→                      onUnfriend={() => handleUnfriend(c)}
+   536→                      onBlock={() => handleBlock(c)}
+   537→                      onUnblock={() => handleUnblock(c)}
+   538→                    />
+   539→                  </motion.li>
+   540→                ))}
+   541→              </motion.ul>
+   542→            )}
+   543→          </section>
+   544→        </motion.div>
+   545→      )}
+   546→    </div>
+   547→  )
+   548→}
+   549→
+   550→// ═══════════════════════════════════════════════════════════════════════════
+   551→// Row components
+   552→// ═══════════════════════════════════════════════════════════════════════════
+   553→
+   554→interface PendingRequestRowProps {
+   555→  conn: SocialConnection
+   556→  direction: 'in' | 'out'
+   557→  onAccept?: () => void
+   558→  onReject?: () => void
+   559→}
+   560→
+   561→function PendingRequestRow({ conn, direction, onAccept, onReject }: PendingRequestRowProps) {
+   562→  const [busy, setBusy] = React.useState<'accept' | 'reject' | null>(null)
+   563→
+   564→  async function run(action: 'accept' | 'reject') {
+   565→    setBusy(action)
+   566→    try {
+   567→      if (action === 'accept') await onAccept?.()
+   568→      else await onReject?.()
+   569→    } finally {
+   570→      setBusy(null)
+   571→    }
+   572→  }
+   573→
+   574→  return (
+   575→    <Card className="overflow-hidden">
+   576→      <CardContent className="flex items-center gap-3 p-3">
+   577→        <Avatar className="h-10 w-10 ring-2 ring-violet-300 ring-offset-2 ring-offset-background">
+   578→          <AvatarFallback className="bg-gradient-to-br from-violet-400 to-violet-600 text-xs font-bold text-white">
+   579→            {initials(conn.name) || '?'}
+   580→          </AvatarFallback>
+   581→        </Avatar>
+   582→        <div className="min-w-0 flex-1">
+   583→          <p className="truncate text-sm font-semibold text-foreground">{conn.name}</p>
+   584→          <p className="truncate text-xs text-muted-foreground">
+   585→            {conn.phone ?? 'SnakZap user'}
+   586→          </p>
+   587→        </div>
+   588→        {direction === 'in' ? (
+   589→          <div className="flex shrink-0 items-center gap-1.5">
+   590→            <Button
+   591→              type="button"
+   592→              size="sm"
+   593→              onClick={() => run('accept')}
+   594→              disabled={busy !== null}
+   595→              className="h-8 bg-violet-600 px-3 text-xs hover:bg-violet-700"
+   596→              aria-label={`Accept ${conn.name}'s friend request`}
+   597→            >
+   598→              {busy === 'accept' ? (
+   599→                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+   600→              ) : (
+   601→                <Check className="h-3.5 w-3.5" aria-hidden="true" />
+   602→              )}
+   603→              Accept
+   604→            </Button>
+   605→            <Button
+   606→              type="button"
+   607→              size="sm"
+   608→              variant="outline"
+   609→              onClick={() => run('reject')}
+   610→              disabled={busy !== null}
+   611→              className="h-8 px-3 text-xs"
+   612→              aria-label={`Decline ${conn.name}'s friend request`}
+   613→            >
+   614→              {busy === 'reject' ? (
+   615→                <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+   616→              ) : (
+   617→                <X className="h-3.5 w-3.5" aria-hidden="true" />
+   618→              )}
+   619→              Reject
+   620→            </Button>
+   621→          </div>
+   622→        ) : (
+   623→          <span
+   624→            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-[11px] font-medium text-muted-foreground"
+   625→            aria-label="Waiting for response"
+   626→          >
+   627→            <Clock className="h-3 w-3" aria-hidden="true" />
+   628→            Pending
+   629→          </span>
+   630→        )}
+   631→      </CardContent>
+   632→    </Card>
+   633→  )
+   634→}
+   635→
+   636→interface FriendRowProps {
+   637→  conn: SocialConnection
+   638→  onMessage: () => void
+   639→  onUnfriend: () => void
+   640→  onBlock: () => void
+   641→  onUnblock: () => void
+   642→}
+   643→
+   644→function FriendRow({ conn, onMessage, onUnfriend, onBlock, onUnblock }: FriendRowProps) {
+   645→  const [busy, setBusy] = React.useState(false)
+   646→  return (
+   647→    <Card className="overflow-hidden">
+   648→      <CardContent className="flex items-center gap-3 p-3">
+   649→        <Avatar className="h-10 w-10 ring-2 ring-teal-300 ring-offset-2 ring-offset-background">
+   650→          <AvatarFallback className="bg-gradient-to-br from-teal-400 to-emerald-600 text-xs font-bold text-white">
+   651→            {initials(conn.name) || '?'}
+   652→          </AvatarFallback>
+   653→        </Avatar>
+   654→        <div className="min-w-0 flex-1">
+   655→          <p className="truncate text-sm font-semibold text-foreground">{conn.name}</p>
+   656→          {conn.phone && (
+   657→            <p className="truncate text-xs text-muted-foreground">{conn.phone}</p>
+   658→          )}
+   659→        </div>
+   660→        <div className="flex shrink-0 items-center gap-1.5">
+   661→          <Button
+   662→            type="button"
+   663→            size="sm"
+   664→            variant="outline"
+   665→            onClick={onMessage}
+   666→            className="h-8 px-2.5 text-xs"
+   667→            aria-label={`Message ${conn.name}`}
+   668→          >
+   669→            <MessageCircle className="h-3.5 w-3.5" aria-hidden="true" />
+   670→            <span className="sr-only sm:inline">Message</span>
+   671→          </Button>
+   672→          <Button
+   673→            type="button"
+   674→            size="sm"
+   675→            variant="ghost"
+   676→            onClick={async () => {
+   677→              setBusy(true)
+   678→              try {
+   679→                await onUnfriend()
+   680→              } finally {
+   681→                setBusy(false)
+   682→              }
+   683→            }}
+   684→            disabled={busy}
+   685→            className="h-8 px-2.5 text-xs text-muted-foreground hover:bg-danger-50 hover:text-danger-700 dark:hover:bg-danger-950/30 dark:hover:text-danger-300"
+   686→            aria-label={`Unfriend ${conn.name}`}
+   687→          >
+   688→            {busy ? (
+   689→              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+   690→            ) : (
+   691→              <UserMinus className="h-3.5 w-3.5" aria-hidden="true" />
+   692→            )}
+   693→            <span className="sr-only sm:inline">Unfriend</span>
+   694→          </Button>
+   695→          {conn.status === 'BLOCKED' ? (
+   696→            <Button
+   697→              type="button"
+   698→              size="sm"
+   699→              variant="ghost"
+   700→              onClick={async () => { setBusy(true); try { await onUnblock() } finally { setBusy(false) } }}
+   701→              disabled={busy}
+   702→              className="h-8 px-2.5 text-xs"
+   703→              aria-label={`Unblock ${conn.name}`}
+   704→            >
+   705→              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
+   706→              <span className="sr-only sm:inline">Unblock</span>
+   707→            </Button>
+   708→          ) : (
+   709→            <Button
+   710→              type="button"
+   711→              size="sm"
+   712→              variant="ghost"
+   713→              onClick={async () => { setBusy(true); try { await onBlock() } finally { setBusy(false) } }}
+   714→              disabled={busy}
+   715→              className="h-8 px-2.5 text-xs"
+   716→              aria-label={`Block ${conn.name}`}
+   717→            >
+   718→              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : null}
+   719→              <span className="sr-only sm:inline">Block</span>
+   720→            </Button>
+   721→          )}
+   722→        </div>
+   723→      </CardContent>
+   724→    </Card>
+   725→  )
+   726→}
+   727→
+   728→interface SearchResultRowProps {
+   729→  user: SocialSearchUser
+   730→  pending: boolean
+   731→  onAdd: () => void
+   732→}
+   733→
+   734→function SearchResultRow({ user, pending, onAdd }: SearchResultRowProps) {
+   735→  const [busy, setBusy] = React.useState(false)
+   736→  return (
+   737→    <Card className="overflow-hidden">
+   738→      <CardContent className="flex items-center gap-3 p-3">
+   739→        <Avatar className="h-10 w-10">
+   740→          {user.avatarUrl && <AvatarImage src={user.avatarUrl} alt="" />}
+   741→          <AvatarFallback className="bg-muted text-xs font-bold text-foreground">
+   742→            {initials(user.name) || '?'}
+   743→          </AvatarFallback>
+   744→        </Avatar>
+   745→        <div className="min-w-0 flex-1">
+   746→          <p className="truncate text-sm font-semibold text-foreground">{user.name}</p>
+   747→          <p className="truncate text-xs text-muted-foreground">
+   748→            {user.phone ?? user.campusName ?? 'SnakZap user'}
+   749→          </p>
+   750→        </div>
+   751→        {pending ? (
+   752→          <span
+   753→            className="inline-flex shrink-0 items-center gap-1 rounded-full bg-violet-100 px-2.5 py-1 text-[11px] font-medium text-violet-700 dark:bg-violet-950/60 dark:text-violet-300"
+   754→            aria-label="Request sent, waiting for response"
+   755→          >
+   756→            <Clock className="h-3 w-3" aria-hidden="true" />
+   757→            Pending
+   758→          </span>
+   759→        ) : (
+   760→          <Button
+   761→            type="button"
+   762→            size="sm"
+   763→            onClick={async () => {
+   764→              setBusy(true)
+   765→              try {
+   766→                await onAdd()
+   767→              } finally {
+   768→                setBusy(false)
+   769→              }
+   770→            }}
+   771→            disabled={busy}
+   772→            className="h-8 shrink-0 bg-violet-600 px-3 text-xs hover:bg-violet-700"
+   773→            aria-label={`Send friend request to ${user.name}`}
+   774→          >
+   775→            {busy ? (
+   776→              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+   777→            ) : (
+   778→              <UserPlus className="h-3.5 w-3.5" aria-hidden="true" />
+   779→            )}
+   780→            Add friend
+   781→          </Button>
+   782→        )}
+   783→      </CardContent>
+   784→    </Card>
+   785→  )
+   786→}
+   787→
+   788→export default FriendsScreen
+   789→
