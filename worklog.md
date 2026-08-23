@@ -12205,3 +12205,34 @@ Stage Summary:
 - Credential hygiene: CLEAN (no PAT values persisted or printed)
 - To unblock: a SEPARATE directive must authorize git merge origin/main (safest — preserves both histories, creates merge commit) or git rebase origin/main (rewrites local SHAs — S1 checkpoint 682a4b1 would change). After reconciliation, git push would succeed.
 - NO CODE CHANGES. GIT MUTATIONS: git fetch only (authorized by Step 4). No push/merge/rebase/reset/force.
+
+---
+Task ID: SNAKZAP-REMOTE-HISTORY-RECONCILIATION-PLAN-FIRST-05
+Agent: IDE Git History Reconciliation Auditor
+Task: SNAKZAP-REMOTE-HISTORY-RECONCILIATION-PLAN-FIRST-05 — Compare 4 remote-only commits against 31 local-only commits and determine safe reconciliation strategy without mutating either history. READ/PLAN/SIMULATE ONLY: no merge/rebase/reset/cherry-pick/push.
+
+Work Log:
+- STEP 1 (Freeze Graph): Local HEAD=f220760, Remote HEAD=afef005b, Merge-base=a6cbbba (Wave-5 5C M10, Aug 17 02:22), S1 checkpoint=682a4b1. Working tree clean. 4 remote-only commits, 32 local-only commits (31 + 1 evidence commit from prior session).
+- STEP 2 (Remote-Only Commit Inventory): Inspected all 4 commits with full content diffs:
+  1. 472765f — Wave-5 5C Consolidated Closure Review (DOCS ONLY — WAVE5_5C_CONSOLIDATED_CLOSURE_REVIEW.md, 237 lines). No code changes.
+  2. a5ea269 — Wave-5 5C CLASS-C CONSOLIDATED CLOSED (DOCS ONLY — WAVE5_EVIDENCE.md update + worklog). No code changes.
+  3. 53b5dcd — Wave-5 Gateway Idempotency Key READ/PLAN-FIRST Gate Review (DOCS ONLY — WAVE5_GATEWAY_IDEMPOTENCY_GATE_REVIEW.md, 421 lines). No code changes.
+  4. afef005 — Wave-5 Gateway Idempotency Key Foundation (IMPLEMENTATION — 5 source files: razorpay.ts, payments/route.ts, payments/refund/route.ts, evidence-verify/route.ts, outbox-publisher/index.ts).
+- STEP 3 (Local Equivalent Mapping): afef005 ↔ local cd4ae6a "Gateway Idempotency implementation — 8 additive edits". Classification: SUPERSEDED_BY_LOCAL. Local re-implemented the same gateway idempotency key feature (capture + refund key in outbox payload) PLUS added order-creation idempotency (createRazorpayOrder accepts idempotencyKey parameter, payments/route.ts generates 2 keys). The other 3 remote commits have NO local equivalent (NO_EQUIVALENT — documentation-only, Wave-8 recovery bypassed these reviews).
+- STEP 4 (File Overlap Matrix): 5 source files overlap (razorpay.ts, payments/route.ts, payments/refund/route.ts, evidence-verify/route.ts, outbox-publisher/index.ts). All changed on both sides. 0 S1 files overlap (remote didn't touch any social/ files). 0 P0-06/P0-07 files overlap. Conflict risk: MEDIUM for razorpay.ts + payments/route.ts (local superset), LOW for others (identical changes or comment-only differences).
+- STEP 5 (Merge Simulation): git merge-tree (merge-base, HEAD, origin/main) → 0 textual conflict markers (zero <<<<<<< ======= >>>>>>>). 6 files changed on both sides, all resolve textually. WAVE5_5C_CONSOLIDATED_CLOSURE_REVIEW.md added on both sides with IDENTICAL content (same blob SHA 819032b). WAVE5_GATEWAY_IDEMPOTENCY_GATE_REVIEW.md added only on remote (clean add). WAVE5_EVIDENCE.md changed on both sides (local has old version, remote has updated closure text — would resolve to remote's version in clean merge). Source files differ but merge textually clean — local supersedes remote in all cases.
+- STEP 6 (Protected Invariant Review): ALL invariants intact in local tree: P0-06 (state-invariants.ts present), P0-07 (pickup-attribution.ts present), I-13 (R2-D1 binding check), M9/M10 reEnqueueProhibited ×4, Gateway idempotency (local has superset: gateway + order keys), Firebase eliminated (0 refs in src/), Supabase sole auth (present), realPayments OFF (default=false), pickupAttributionEnforcement OFF, invariantChecker OFF, requestHashEnforcement OFF. Remote has NO changes that would regress any of these.
+- STEP 7 (Strategy Recommendation): REMOTE_CONTENT_SUPERSEDED. Remote's 4 commits contain NO unique code — afef005 is a SUBSET of local's cd4ae6a. Remote's unique value is documentation-only (2 review docs + updated WAVE5_EVIDENCE.md). Recommended: Option A (Normal Merge) — git merge origin/main. Creates merge commit preserving 682a4b1 as ancestor, S1 source unchanged, textually clean merge (0 conflicts). After merge: git push would be fast-forward safe. Alternative (force push) NOT recommended — would destroy remote's unique documentation.
+- STEP 8 (S1 Impact): 682a4b1 preserved as ancestor (YES — merge creates commit on top of HEAD). S1 source content unchanged (NO — remote didn't touch any S1 files). Browser evidence NOT invalidated (NO — S1 source unchanged, any evidence remains valid).
+
+Stage Summary:
+- VERDICT: REMOTE_CONTENT_SUPERSEDED
+- Remote's 4 commits: 3 documentation-only + 1 implementation (afef005)
+- afef005 code is a SUBSET of local cd4ae6a (local has same gateway key + additional order-creation idempotency)
+- Remote's unique value: 2 review documents (WAVE5_5C_CONSOLIDATED_CLOSURE_REVIEW.md, WAVE5_GATEWAY_IDEMPOTENCY_GATE_REVIEW.md) + updated WAVE5_EVIDENCE.md
+- Merge is textually clean (0 conflict markers)
+- All protected invariants intact
+- S1 checkpoint (682a4b1) preserved as ancestor, source unchanged
+- Recommended: Option A (Normal Merge) — safe, preserves both histories, fast-forward after merge
+- Force push NOT recommended (would destroy remote's unique documentation)
+- NO CODE CHANGES. NO GIT MUTATIONS. READ/PLAN/SIMULATE ONLY honored.
