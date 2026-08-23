@@ -12128,3 +12128,33 @@ Stage Summary:
 - ROOT CAUSE: Commits are never pushed to origin. Between sessions, the .git directory is reset (likely via git reset --hard origin/main or re-clone), destroying all unpushed work. This has now happened at least TWICE.
 - Recovery requires re-implementation. The conversation summary provides design intent, browser evidence contracts, and repair specifications — but actual code must be rebuilt from scratch.
 - NO CODE CHANGES. NO GIT MUTATIONS. FORENSIC/READ-ONLY honored.
+
+---
+Task ID: SNAKZAP-SOURCE-OF-TRUTH-EXTERNAL-RECOVERY-AUDIT-02
+Agent: IDE External Git/Backup Forensics Agent
+Task: SNAKZAP-SOURCE-OF-TRUTH-EXTERNAL-RECOVERY-AUDIT-02 — Exhaust all remaining read-only recovery surfaces (live remote refs, GitHub branches/PRs, filesystem artifacts, archives, packs) before declaring S1/S2/S3 lost. FORENSIC/READ-ONLY: no code changes, no git mutations.
+
+Work Log:
+- Phase 0 (Freeze State): HEAD=9401ef8d (moved from 672a2f8a by +1 commit). Investigated: 9401ef8d is the commit of my prior forensic report (RECONCILIATION-01) — worklog append + FINAL-REPORT.md. NOT unauthorized drift. Previous object 672a2f8a still exists. No governance anomaly.
+- Phase 1 (Live Remote Refs): git ls-remote origin (read-only). Result: 1 branch (main→afef005b), 0 tags, 0 PR refs. CRITICAL: live origin/main=afef005b, but local tracking ref=ecf84fb6 (STALE — 1 commit behind). afef005b is the Wave-5 Gateway Idempotency commit that the Wave-8 report (b22ebf4) declared "IRRETRIEVABLY ABSENT" locally — but it IS on the remote. However, afef005b is NOT S1/S2/S3 work (it is Aug 17 Wave-5). None of the 6 S1/S2/S3 checkpoint SHAs found on remote.
+- Phase 2 (GitHub Repository Audit): GitHub API /commits?sha=main&per_page=100 returned 100 commits, ALL Wave-5 era (Aug 16-17). Searched for Social/GJ-02/S1/S2/S3 commit messages: 0 matches. Searched for 6 known SHA prefixes: 0 matches. Remote was last pushed Aug 17. NO S1/S2/S3 work was EVER pushed to GitHub. Default branch=main, 0 other branches.
+- Phase 3 (Other Repos/Forks): GitHub API rate-limited on /forks endpoint, but git ls-remote confirms only 1 branch. Filesystem search: only ONE .git directory exists (/home/z/my-project/.git). No alternate clones, worktrees, or backups anywhere on /home, /tmp, /var, /root, /workspace, /opt.
+- Phase 4 (Filesystem Recovery Artifacts): Found 3 archives (snakzap-full-source.tar.gz, snakzap-full-source-v2.tar.gz, upload/zheo-main.zip) — ALL from Aug 9-10 (initialization, pre-Social). Inspected: NONE contain S2/S3 fingerprints (no notifications/, no like/route, no NotificationBell, no dedupKey in schema). Full filesystem rg -l search for "model Like", "dedupKey", "NotificationBell", "FRIEND_REQUEST_RECEIVED:" → matches ONLY in my own audit reports (FINAL-REPORT.md, worklog.md). NO source file contains S2/S3 fingerprints. tool-results/ files are Read outputs from my S4 audit (reading current pre-S1-repair tree).
+- Phase 5 (Git Object-Pack Provenance): 2 pack files. .idx files from Aug 12/17 (original creation), .pack files from Aug 20 (repacked via gc). Repacking consolidates loose objects — does NOT destroy objects. 3430 total objects, 1816 loose. All packs verify OK.
+- Phase 6 (.git Recreation Analysis): .git was NOT recreated/re-cloned. Evidence: .git/HEAD mtime=Aug 9 (original), no CLONE_HEAD marker, reflog has 257 entries spanning Aug 9→Aug 23 (continuous), earliest entry="Initial commit" (da98772). HOWEVER, a git reset occurred on Aug 20 (ORIG_HEAD=61e2dce, mtime Aug 20 13:47). Reflog confirms: ecf84fb refs/heads/main@{41}: reset: moving to origin/main. This is the SAME reset pattern as Wave-8. Revised classification: NOT "re-cloned" but "reset to origin/main". Confidence: VERIFIED.
+- Phase 7 (Wave-8 Incident Comparison): Wave-8 report (b22ebf4, Aug 18) documented: 13 session commits (53b5dcd..2bfb097) IRRETRIEVABLY ABSENT, reflog showed "reset: moving to origin/main" at {13}, RECOVERY IMPOSSIBLE. Current incident: 6 S1/S2/S3 SHAs absent, reflog shows "reset: moving to origin/main" at {41}/{47}, same mechanism. Same mechanism: VERIFIED. Both incidents: session work committed locally but never pushed → git reset --hard origin/main destroyed unpushed commits. Systemic root cause confirmed.
+- Phase 8 (Candidate Source Integrity): NO candidate found. S1 current tree is PRE-REPAIR (reads data.feed, uses PENDING_IN/OUT, uses friendId/friendName, rejects PRIVATE, coerces unknown visibility). S2 COMPLETELY ABSENT (no Like model, no like API, no likeCount/likedByMe). S3 COMPLETELY ABSENT (no dedupKey, no notifications API, no NotificationBell, no dedup patterns).
+- Phase 9 (Evidence Artifact Inventory): ZERO S1/S2/S3 evidence directories exist. No evidence/gj02-s1-browser/, no evidence/gj02-s2-browser/, no evidence/gj02-s3-browser/, no evidence/gj02-s3-repair/, no evidence/gj02-s3-rollback/. ZERO S1/S2/S3 browser screenshots. Existing evidence dirs: only Wave-3/4/5, P0-06/P0-07, gateway-idempotency, my S4 audit, and my forensic reports. If reconstruction occurs, ALL browser evidence must be re-run from scratch.
+- Phase 10 (Final Classification): AUTHORITATIVE IMPLEMENTATION LOST. All recovery surfaces exhausted: local objects (3430), reflog (257), worktree (1), filesystem repos (1), live remote refs (1 branch, 0 tags, 0 PRs), GitHub branches (100 commits all Wave-5), GitHub PRs (0 refs), backup archives (3, all pre-Social), filesystem fingerprint search (S2/S3 only in my audit reports).
+
+Stage Summary:
+- FINAL VERDICT: AUTHORITATIVE IMPLEMENTATION LOST
+- All recovery surfaces exhausted (8 surfaces checked, all negative for S1/S2/S3)
+- The S1/S2/S3 Social implementation does NOT exist in ANY accessible store
+- S1 is PRE-REPAIR, S2/S3 are COMPLETELY ABSENT
+- Zero S1/S2/S3 browser evidence artifacts exist
+- Root cause CONFIRMED: git reset --hard origin/main without prior push (same as Wave-8)
+- Systemic issue: commits never pushed to origin → vulnerable to reset loss
+- This is the SECOND confirmed loss (Wave-8 was the first)
+- Recovery requires re-implementation from conversation summary's design specifications
+- NO CODE CHANGES. NO GIT MUTATIONS. FORENSIC/READ-ONLY honored.
