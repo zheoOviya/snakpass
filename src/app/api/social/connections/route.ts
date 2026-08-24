@@ -4,6 +4,7 @@ import { getSessionUser } from '@/lib/session'
 import { withErrorHandler, apiError } from '@/lib/errors'
 import { newTraceId, info as logInfo } from '@/lib/logger'
 import { avatarColorForUserId } from '@/lib/social-activity'
+import { auditWithTx } from '@/lib/audit'
 
 // ----------------------------------------------------------------------------
 // Wave 6 Task 6A — /api/social/connections
@@ -344,20 +345,13 @@ export const POST = (req: NextRequest) =>
           }
         }
 
-        // 5. Audit log.
-        await tx.auditLog.create({
-          data: {
-            actorId: session.userId,
-            actorRole: session.role,
-            action: 'FRIEND_REQUEST_SENT',
-            metadata: JSON.stringify({
-              connectionId: connection.id,
-              followerId: session.userId,
-              followeeId,
-              message,
-            }),
-          },
-        })
+        // 5. Audit log (S4C C2: uses chained auditWithTx, not direct tx.auditLog.create).
+        await auditWithTx(tx, 'FRIEND_REQUEST_SENT', {
+          connectionId: connection.id,
+          followerId: session.userId,
+          followeeId,
+          message,
+        }, session.userId, session.role)
 
         return {
           type: 'success' as const,

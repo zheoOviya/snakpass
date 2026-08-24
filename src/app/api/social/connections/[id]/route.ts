@@ -3,6 +3,7 @@ import { withTransaction, TransactionConflictError } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { withErrorHandler, apiError } from '@/lib/errors'
 import { newTraceId, info as logInfo } from '@/lib/logger'
+import { auditWithTx } from '@/lib/audit'
 
 // ----------------------------------------------------------------------------
 // Wave 6 Task 6A — /api/social/connections/[id]
@@ -229,18 +230,11 @@ export const PATCH = (
             },
           })
 
-          await tx.auditLog.create({
-            data: {
-              actorId: session.userId,
-              actorRole: session.role,
-              action: 'FRIEND_REQUEST_REJECTED',
-              metadata: JSON.stringify({
-                connectionId,
-                followerId: conn.followerId,
-                followeeId: conn.followeeId,
-              }),
-            },
-          })
+          await auditWithTx(tx, 'FRIEND_REQUEST_REJECTED', {
+            connectionId,
+            followerId: conn.followerId,
+            followeeId: conn.followeeId,
+          }, session.userId, session.role)
 
           return {
             type: 'success' as const,
@@ -272,19 +266,12 @@ export const PATCH = (
             data: { status: 'BLOCKED', blockedBy: session.userId },
           })
 
-          await tx.auditLog.create({
-            data: {
-              actorId: session.userId,
-              actorRole: session.role,
-              action: 'FRIEND_BLOCKED',
-              metadata: JSON.stringify({
-                connectionId,
-                blockedBy: session.userId,
-                followerId: conn.followerId,
-                followeeId: conn.followeeId,
-              }),
-            },
-          })
+          await auditWithTx(tx, 'FRIEND_BLOCKED', {
+            connectionId,
+            blockedBy: session.userId,
+            followerId: conn.followerId,
+            followeeId: conn.followeeId,
+          }, session.userId, session.role)
 
           return {
             type: 'success' as const,
@@ -342,19 +329,12 @@ export const PATCH = (
             },
           })
 
-          await tx.auditLog.create({
-            data: {
-              actorId: session.userId,
-              actorRole: session.role,
-              action: 'FRIEND_UNBLOCKED',
-              metadata: JSON.stringify({
-                connectionId,
-                unblockedBy: session.userId,
-                followerId: conn.followerId,
-                followeeId: conn.followeeId,
-              }),
-            },
-          })
+          await auditWithTx(tx, 'FRIEND_UNBLOCKED', {
+            connectionId,
+            unblockedBy: session.userId,
+            followerId: conn.followerId,
+            followeeId: conn.followeeId,
+          }, session.userId, session.role)
 
           return {
             type: 'success' as const,
@@ -428,19 +408,12 @@ export const PATCH = (
           }
         }
 
-        await tx.auditLog.create({
-          data: {
-            actorId: session.userId,
-            actorRole: session.role,
-            action: 'FRIEND_REQUEST_ACCEPTED',
-            metadata: JSON.stringify({
-              connectionId,
-              followerId: conn.followerId,
-              followeeId: conn.followeeId,
-              acceptedAt: now.toISOString(),
-            }),
-          },
-        })
+        await auditWithTx(tx, 'FRIEND_REQUEST_ACCEPTED', {
+          connectionId,
+          followerId: conn.followerId,
+          followeeId: conn.followeeId,
+          acceptedAt: now.toISOString(),
+        }, session.userId, session.role)
 
         return {
           type: 'success' as const,
@@ -606,19 +579,12 @@ export const DELETE = (
             data: { status: 'BLOCKED', blockedBy: session.userId },
           })
 
-          await tx.auditLog.create({
-            data: {
-              actorId: session.userId,
-              actorRole: session.role,
-              action: 'FRIEND_BLOCKED',
-              metadata: JSON.stringify({
-                connectionId,
-                blockedBy: session.userId,
-                followerId: conn.followerId,
-                followeeId: conn.followeeId,
-              }),
-            },
-          })
+          await auditWithTx(tx, 'FRIEND_BLOCKED', {
+            connectionId,
+            blockedBy: session.userId,
+            followerId: conn.followerId,
+            followeeId: conn.followeeId,
+          }, session.userId, session.role)
 
           return {
             type: 'success' as const,
@@ -642,19 +608,12 @@ export const DELETE = (
           },
         })
 
-        await tx.auditLog.create({
-          data: {
-            actorId: session.userId,
-            actorRole: session.role,
-            action: 'FRIEND_REMOVED',
-            metadata: JSON.stringify({
-              connectionId,
-              removedBy: session.userId,
-              followerId: conn.followerId,
-              followeeId: conn.followeeId,
-            }),
-          },
-        })
+        await auditWithTx(tx, 'FRIEND_REMOVED', {
+          connectionId,
+          removedBy: session.userId,
+          followerId: conn.followerId,
+          followeeId: conn.followeeId,
+        }, session.userId, session.role)
 
         return {
           type: 'success' as const,

@@ -1,5 +1,6 @@
 import { createHash } from 'crypto'
 import { db } from './db'
+import type { Prisma } from '@prisma/client'
 
 // P0-22 — Audit trail integrity (immutable, complete)
 // Direct Protector of I-07 (Audit Integrity).
@@ -26,7 +27,7 @@ function computeHash(
 }
 
 // Create an audit log entry with hash-chain linkage.
-// This is the ONLY sanctioned write path to the audit table.
+// This is the ONLY sanctioned write path to the audit table (non-transactional).
 export async function audit(
   action: string,
   metadata: Record<string, unknown> = {},
@@ -46,6 +47,52 @@ export async function audit(
   const hash = computeHash(prevHash, id, actorId ?? null, actorRole, action, metadataStr, createdAt)
 
   await db.auditLog.create({
+    data: {
+      id,
+      actorId: actorId ?? null,
+      actorRole,
+      action,
+      metadata: metadataStr,
+      createdAt,
+      prevHash,
+      hash,
+    },
+  })
+}
+
+// S4C C2 Repair: Transaction-aware audit write.
+//
+// This is the sanctioned write path for audit entries that MUST participate in
+// an existing withTransaction. It uses the same computeHash() logic as audit()
+// but reads the last entry's hash via the transaction client (tx), ensuring
+// the chain is consistent within the transaction snapshot.
+//
+// Historical data note: pre-S4C entries have empty hash + prevHash=GENESIS
+// (they were written via direct tx.auditLog.create without chain computation).
+// New entries written via auditWithTx chain to whatever the last entry's hash
+// is — even if that hash is empty/broken. The global auditIntegrityCheck() will
+// still report historical breakage, but NEW entries will have valid hashes and
+// correct prevHash linkage. Historical rows are NOT modified.
+export async function auditWithTx(
+  tx: Prisma.TransactionClient,
+  action: string,
+  metadata: Record<string, unknown> = {},
+  actorId?: string,
+  actorRole: string = 'SYSTEM',
+): Promise<void> {
+  // Get the last entry's hash (for chain linkage) — using tx, not db
+  const lastEntry = await tx.auditLog.findFirst({
+    orderBy: { createdAt: 'desc' },
+    select: { hash: true },
+  })
+  const prevHash = lastEntry?.hash || 'GENESIS'
+
+  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+  const createdAt = new Date()
+  const metadataStr = JSON.stringify(metadata)
+  const hash = computeHash(prevHash, id, actorId ?? null, actorRole, action, metadataStr, createdAt)
+
+  await tx.auditLog.create({
     data: {
       id,
       actorId: actorId ?? null,

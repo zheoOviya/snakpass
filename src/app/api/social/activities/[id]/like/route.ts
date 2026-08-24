@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/lib/db'
+import { db, withTransaction, TransactionConflictError } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { withErrorHandler, apiError } from '@/lib/errors'
 import { newTraceId, info as logInfo } from '@/lib/logger'
@@ -69,51 +69,84 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
       return apiError('AUTHORIZATION_DENIED', 'You cannot like this activity', 403, undefined, traceId) as unknown as NextResponse
     }
 
-    // Idempotent Like: create if not exists
+    // S4C C1 Repair: Like + SOCIAL_ACTIVITY_LIKED notification are now ATOMIC.
+    // Both writes happen inside a single withTransaction(). If the notification
+    // fails (non-P2002), the Like is also rolled back — no orphan Likes without
+    // notifications. P2002 on notification (dedupKey conflict from a previous
+    // like cycle) is caught internally and does NOT abort the transaction.
+    //
+    // Idempotency preserved:
+    //   - findUnique first to check existing like (avoids P2002 on create)
+    //   - If concurrent insert wins, P2002 on create → withTransaction retries
+    //     → findUnique finds existing → returns isNewLike=false (idempotent)
+    //   - Notification dedupKey P2002 caught internally (idempotent)
+    //   - Self-like: no notification created (documented branch, not a gap)
     let isNewLike = false
     try {
-      await db.like.create({
-        data: {
-          userId: session.userId,
-          activityId,
-        },
-      })
-      isNewLike = true
-      logInfo('social-like-created', { activityId, userId: session.userId }, traceId)
-    } catch (e: unknown) {
-      // P2002 = unique constraint violation → already liked (idempotent)
-      if (e !== null && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
-        logInfo('social-like-already-exists', { activityId, userId: session.userId }, traceId)
-      } else {
-        throw e
-      }
-    }
-
-    // S3: Create SOCIAL_ACTIVITY_LIKED notification for the activity actor
-    // Only on NEW like (not on duplicate/idempotent). No self-notification.
-    // dedupKey ensures exactly-one notification per (activityId, likerId).
-    // Unlike → notification remains (historical retention). Re-like → P2002 dedup.
-    if (isNewLike && activity.actorId !== session.userId) {
-      const dedupKey = `SOCIAL_ACTIVITY_LIKED:${activityId}:${session.userId}`
-      try {
-        await db.notification.create({
-          data: {
-            userId: activity.actorId,
-            type: 'SOCIAL_ACTIVITY_LIKED',
-            title: 'Someone liked your activity',
-            body: 'Your activity received a new like',
-            data: JSON.stringify({ activityId, likerId: session.userId }),
-            dedupKey,
-          },
+      const result = await withTransaction(async (tx) => {
+        // Check if like already exists (idempotent read)
+        const existing = await tx.like.findUnique({
+          where: { userId_activityId: { userId: session.userId, activityId } },
+          select: { id: true },
         })
-        logInfo('social-like-notification-created', { activityId, likerId: session.userId, recipientId: activity.actorId }, traceId)
-      } catch (e: unknown) {
-        if (e !== null && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
-          logInfo('social-like-notification-already-exists', { activityId, likerId: session.userId }, traceId)
-        } else {
-          logInfo('social-like-notification-failed', { activityId, error: e instanceof Error ? e.message : String(e) }, traceId)
+
+        if (existing) {
+          return { isNewLike: false }
         }
+
+        // Create the Like
+        await tx.like.create({
+          data: { userId: session.userId, activityId },
+        })
+
+        // Create notification IF needed (same transaction — atomic with Like)
+        // Self-like policy: the actor does NOT receive a notification for
+        // liking their own activity. This is an intentional product decision,
+        // not an atomicity gap — the Like commits without a notification by
+        // design.
+        if (activity.actorId !== session.userId) {
+          const dedupKey = `SOCIAL_ACTIVITY_LIKED:${activityId}:${session.userId}`
+          try {
+            await tx.notification.create({
+              data: {
+                userId: activity.actorId,
+                type: 'SOCIAL_ACTIVITY_LIKED',
+                title: 'Someone liked your activity',
+                body: 'Your activity received a new like',
+                data: JSON.stringify({ activityId, likerId: session.userId }),
+                dedupKey,
+              },
+            })
+          } catch (e: unknown) {
+            // P2002 = notification already exists from a previous like cycle.
+            // This is idempotent — the Like still commits. NOT an atomicity gap.
+            if (e !== null && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
+              logInfo('social-like-notification-already-exists', { activityId, likerId: session.userId }, traceId)
+            } else {
+              throw e // Non-P2002 → transaction rolls back (Like also rolled back)
+            }
+          }
+        }
+
+        return { isNewLike: true }
+      })
+      isNewLike = result.isNewLike
+      if (isNewLike) {
+        logInfo('social-like-created', { activityId, userId: session.userId }, traceId)
+      } else {
+        logInfo('social-like-already-exists', { activityId, userId: session.userId }, traceId)
       }
+    } catch (error) {
+      if (error instanceof TransactionConflictError) {
+        return apiError(
+          'CONFLICT',
+          'Like conflicted with a concurrent request. Please retry.',
+          409,
+          undefined,
+          traceId,
+        ) as unknown as NextResponse
+      }
+      throw error
     }
 
     // Count likes for this activity (authoritative DB count)
