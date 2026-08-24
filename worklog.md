@@ -12689,3 +12689,26 @@ Stage Summary:
 - Per-user limiter provides defense-in-depth (keyed on userId, not IP)
 - No code changes made (evidence/trace only)
 - Evidence saved to evidence/gj02-s4b-challenge04/p4-boundary-results.log
+
+---
+Task ID: S4C-CHALLENGE-01
+Agent: Social Integrity & Concurrency Auditor (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4C-INTEGRITY-CONCURRENCY-CHALLENGE-01 — READ/TRACE/RUNTIME challenge of S4C integrity/concurrency findings. NO code changes. Four clusters: C1 Like+notification atomicity, C2 audit integrity, C3 reciprocal connection integrity, C4 concurrency/idempotency.
+
+Work Log:
+- Phase 0: Baseline locked — HEAD=eeda6cd, source diff=0 since S4B checkpoint 756760b.
+- C1 (Like/notification atomicity): Code-traced src/app/api/social/activities/[id]/like/route.ts. Like creation (line 75 db.like.create) and notification creation (line 99 db.notification.create) are NOT in the same transaction — no withTransaction wrapper. Compare to connections/[id]/route.ts which uses withTransaction(async (tx) => {...}). If notification creation throws non-P2002, Like persists but notification is lost. Runtime fault injection BLOCKED (dev server instability). Classification: CONFIRMED (code-verified CROSS_RECORD_ATOMICITY_GAP).
+- C2 (Audit integrity): Code-traced src/lib/audit.ts (audit() helper with hash-chain) vs social routes. ALL 7 social audit writes use direct tx.auditLog.create WITHOUT prevHash/hash computation. Runtime: auditIntegrityCheck() returns ok=false, brokenCount=450/231 entries. 224 entries have empty hash, 225 have prevHash=GENESIS (wrong). Hash chain completely broken. Classification: CONFIRMED (runtime-verified AUDIT_CHAIN_BYPASSED).
+- C3 (Connection reciprocal integrity): Code-traced @@unique([followerId, followeeId]) constraint + ACCEPT state machine (409 on non-PENDING) + upsert on reverse edge. These DB-level constraints prevent duplicate/orphan rows. Runtime BLOCKED (dev server instability). Classification: REJECT_FINDING (DB_CONSTRAINT_PREVENTS_DUPLICATES).
+- C4 (Concurrency/idempotency): Code-traced @@unique([userId, activityId]) on Like + P2002 catch + dedupKey on notifications + state machine on ACCEPT. All mutations idempotent at DB level. Runtime BLOCKED. Classification: REJECT_FINDING (UNIQUE_CONSTRAINT_ENFORCES_IDEMPOTENCY).
+- Regression guard: S4A/S4B source unchanged (diff=0). S4A block auth, S4B phone/canUnblock/XFF all intact.
+
+Stage Summary:
+- C1 CONFIRMED: Like + notification NOT transactional (code-verified, not runtime-verified)
+- C2 CONFIRMED: Audit hash-chain broken for ALL social mutations (runtime-verified)
+- C3 REJECT: DB unique constraints + state machine prevent duplicates (code-verified)
+- C4 REJECT: Unique constraints + P2002 enforce idempotency (code-verified)
+- Two confirmed findings (C1, C2) require S4C implementation
+- Two findings rejected (C3, C4) — no repair needed
+- No code changes made (challenge only)
+- S4C_IMPLEMENTATION_PLAN_READY
