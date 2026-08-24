@@ -288,6 +288,27 @@ model AuditLog {
   // This makes tampering DETECTABLE; true PREVENTION requires storage-level WORM (production).
   prevHash  String   @default("GENESIS") // hash of previous entry; "GENESIS" for first
   hash      String   @default("") // SHA-256(prevHash + id + actorId + actorRole + action + metadata + createdAt)
+
+  // S4C Repair-07: Explicit predecessor-linked append chain.
+  // Eliminates inferred ordering — each entry explicitly names its predecessor.
+  // Historical rows have these as NULL (pre-cutover). Post-cutover rows are non-null.
+  prevAuditId  String?  // exact predecessor AuditLog.id (null for GENESIS or legacy)
+  chainOrdinal BigInt?  // monotonic append ordinal (null for legacy)
+  hashVersion  Int      @default(1) // 1=legacy hash, 2=explicit-chain hash
+}
+
+// S4C Repair-07: Singleton audit chain head state.
+// This is the serialization authority for audit appends — the "chain head"
+// is the last appended entry. Writers read this, create a new entry pointing
+// to the current head, then advance the head in the SAME transaction.
+// This eliminates race conditions and inferred ordering.
+model AuditChainState {
+  id           String   @id  // singleton: "GLOBAL"
+  headAuditId  String?  // current chain head AuditLog.id (null = GENESIS)
+  headHash     String   @default("GENESIS")  // current chain head hash
+  nextOrdinal  BigInt   @default(1)  // next chainOrdinal for new entry
+  version      Int      @default(0)  // optimistic-lock version for safe updates
+  updatedAt    DateTime @updatedAt
 }
 
 model KillSwitch {
