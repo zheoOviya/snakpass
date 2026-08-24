@@ -28,6 +28,10 @@ function computeHash(
 
 // Create an audit log entry with hash-chain linkage.
 // This is the ONLY sanctioned write path to the audit table (non-transactional).
+//
+// S4C Ordering Repair-05: Uses deterministic total order (createdAt DESC, id DESC)
+// for predecessor selection. This ensures writer and checker always agree on
+// chain order, even when timestamps collide.
 export async function audit(
   action: string,
   metadata: Record<string, unknown> = {},
@@ -35,11 +39,16 @@ export async function audit(
   actorRole: string = 'SYSTEM',
 ): Promise<void> {
   // Get the last entry's hash (for chain linkage)
+  // S4C Ordering Repair-05: compound orderBy for deterministic tie-breaking
   const lastEntry = await db.auditLog.findFirst({
-    orderBy: { createdAt: 'desc' },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: { hash: true },
   })
-  const prevHash = lastEntry?.hash || 'GENESIS'
+
+  // S4C Boundary Repair-04: FAIL-CLOSED CONTIGUOUS APPEND.
+  // Chain to the immediate predecessor's STORED hash, even if empty.
+  // GENESIS only when NO previous row exists (true first entry).
+  const prevHash = lastEntry === null ? 'GENESIS' : (lastEntry?.hash ?? '')
 
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   const createdAt = new Date()
@@ -88,8 +97,9 @@ export async function auditWithTx(
   actorRole: string = 'SYSTEM',
 ): Promise<void> {
   // Get the last entry's hash (for chain linkage) — using tx, not db
+  // S4C Ordering Repair-05: compound orderBy for deterministic tie-breaking
   const lastEntry = await tx.auditLog.findFirst({
-    orderBy: { createdAt: 'desc' },
+    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     select: { hash: true },
   })
 
@@ -148,8 +158,10 @@ export async function auditIntegrityCheck(): Promise<{
   totalCount: number
   firstBrokenEntry?: { id: string; action: string; issue: string }
 }> {
+  // S4C Ordering Repair-05: deterministic total order (createdAt ASC, id ASC)
+  // ensures checker walks entries in exactly the same order the writer chained them.
   const entries = await db.auditLog.findMany({
-    orderBy: { createdAt: 'asc' },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     select: { id: true, actorId: true, actorRole: true, action: true, metadata: true, createdAt: true, prevHash: true, hash: true },
   })
 
