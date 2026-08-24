@@ -3,24 +3,16 @@
 // Zustand store for the user's social graph — friends (bidirectional follows)
 // + friend activity feed.
 //
+// S4D Repair-03: Cursor-based pagination for feed.
+//   - refresh(): fetches first page (no cursor), replaces feed
+//   - loadNextFeedPage(): fetches next page using stored nextCursor, appends
+//
 // Wraps:
 //   - GET   /api/social/connections           → SocialConnection[]
-//   - GET   /api/social/feed                  → SocialActivity[] (paginated)
-//   - POST  /api/social/connections           → send friend request
+//   - GET   /api/social/feed?cursor=...        → { activities, nextCursor, hasMore }
+//   - POST  /api/social/connections            → send friend request
 //   - PATCH /api/social/connections/[id]      → accept/decline friend request
-//   - DELETE /api/social/connections/[id]     → unfollow / unfriend
-//
-// SSR safety: NOT persisted (social graph is server-authoritative). Re-fetched
-// on every mount.
-//
-// Type contract: uses the UI types from src/lib/types (Wave 1B — single source
-// of truth for the client/server API shape).
-//
-// Governance (blueprint §18 SOCIAL GRAPH + plan §1.E):
-//   - Bidirectional follow = friend request + accept (server creates both edges)
-//   - Activity feed NEVER exposes payment amounts (server-enforced via Zod)
-//   - Privacy: FRIENDS default, PUBLIC opt-in, PRIVATE
-//   - shareOrderItems is a user setting (per-user opt-in for item-level activity)
+//   - DELETE /api/social/connections/[id]      → unfollow / unfriend
 
 'use client'
 
@@ -37,11 +29,19 @@ export interface SocialState {
   isLoading: boolean
   error: string | null
 
+  // S4D: Cursor pagination state
+  nextCursor: string | null
+  hasMore: boolean
+  loadingMore: boolean
+
   /** S2: Allow direct feed updates (optimistic + reconcile for likes). */
   setFeed: (updater: (prev: SocialActivity[]) => SocialActivity[]) => void
 
-  /** Re-fetch connections + feed. Idempotent read; safe to call repeatedly. */
+  /** Re-fetch connections + feed (first page). Replaces existing feed. */
   refresh: () => Promise<void>
+
+  /** S4D: Load next feed page using cursor. Appends to existing feed. */
+  loadNextFeedPage: () => Promise<void>
 
   /** Send a friend request to a target user. Server creates a PENDING connection. */
   sendRequest: (targetUserId: string, message?: string) => Promise<void>
@@ -66,6 +66,11 @@ export const useSocial = create<SocialState>()((set, get) => ({
   isLoading: false,
   error: null,
 
+  // S4D: Cursor pagination state
+  nextCursor: null,
+  hasMore: false,
+  loadingMore: false,
+
   setFeed: (updater) => set((state) => ({ feed: updater(state.feed) })),
 
   refresh: async () => {
@@ -79,6 +84,8 @@ export const useSocial = create<SocialState>()((set, get) => ({
       const errors: string[] = []
       let connections: SocialConnection[] = []
       let feed: SocialActivity[] = []
+      let nextCursor: string | null = null
+      let hasMore = false
 
       if (connRes.ok) {
         const data = (await connRes.json()) as { connections?: SocialConnection[] }
@@ -89,10 +96,14 @@ export const useSocial = create<SocialState>()((set, get) => ({
       }
 
       if (feedRes.ok) {
-        // S1 Reconstruction: server returns { activities: [...] }, NOT { feed: [...] }.
-        // The old `data.feed` key never matched → feed was permanently empty.
-        const data = (await feedRes.json()) as { activities?: SocialActivity[] }
+        const data = (await feedRes.json()) as {
+          activities?: SocialActivity[]
+          nextCursor?: string | null
+          hasMore?: boolean
+        }
         feed = data.activities ?? []
+        nextCursor = data.nextCursor ?? null
+        hasMore = data.hasMore ?? false
       } else {
         const body = await feedRes.json().catch(() => ({}))
         errors.push(body?.error || `feed (${feedRes.status})`)
@@ -101,6 +112,8 @@ export const useSocial = create<SocialState>()((set, get) => ({
       set({
         connections,
         feed,
+        nextCursor,
+        hasMore,
         isLoading: false,
         error: errors.length > 0 ? `Partial failure: ${errors.join('; ')}` : null,
       })
@@ -108,6 +121,50 @@ export const useSocial = create<SocialState>()((set, get) => ({
       set({
         isLoading: false,
         error: err instanceof Error ? err.message : 'Failed to refresh social feed',
+      })
+    }
+  },
+
+  // S4D: Load next feed page using cursor — appends, never replaces
+  loadNextFeedPage: async () => {
+    const state = get()
+    if (!state.hasMore || !state.nextCursor || state.loadingMore) return
+
+    set({ loadingMore: true })
+    try {
+      const feedRes = await fetch(
+        `/api/social/feed?limit=30&cursor=${encodeURIComponent(state.nextCursor)}`,
+        { headers: { 'Content-Type': 'application/json' } },
+      )
+
+      if (feedRes.ok) {
+        const data = (await feedRes.json()) as {
+          activities?: SocialActivity[]
+          nextCursor?: string | null
+          hasMore?: boolean
+        }
+        const newActivities = data.activities ?? []
+        // Append to existing feed, dedup by ID (defensive — API guarantees no duplicates)
+        const existingIds = new Set(state.feed.map((a) => a.id))
+        const uniqueNew = newActivities.filter((a) => !existingIds.has(a.id))
+
+        set((s) => ({
+          feed: [...s.feed, ...uniqueNew],
+          nextCursor: data.nextCursor ?? null,
+          hasMore: data.hasMore ?? false,
+          loadingMore: false,
+        }))
+      } else {
+        const body = await feedRes.json().catch(() => ({}))
+        set({
+          loadingMore: false,
+          error: body?.error || `Failed to load more (${feedRes.status})`,
+        })
+      }
+    } catch (err) {
+      set({
+        loadingMore: false,
+        error: err instanceof Error ? err.message : 'Failed to load more',
       })
     }
   },
@@ -124,7 +181,6 @@ export const useSocial = create<SocialState>()((set, get) => ({
       const body = await res.json().catch(() => ({}))
       throw new Error(body?.error || `Failed to send request (${res.status})`)
     }
-    // Optimistic: append the returned connection so the UI updates immediately.
     const data = (await res.json()) as { connection?: SocialConnection }
     if (data.connection) {
       set((s) => ({
@@ -145,7 +201,6 @@ export const useSocial = create<SocialState>()((set, get) => ({
       const body = await res.json().catch(() => ({}))
       throw new Error(body?.error || `Failed to accept request (${res.status})`)
     }
-    // Optimistic: flip the local connection status to ACCEPTED.
     set((s) => ({
       connections: s.connections.map((c) =>
         c.id === requestId
@@ -167,7 +222,6 @@ export const useSocial = create<SocialState>()((set, get) => ({
       const body = await res.json().catch(() => ({}))
       throw new Error(body?.error || `Failed to decline request (${res.status})`)
     }
-    // Optimistic: remove the declined request from the local list.
     set((s) => ({
       connections: s.connections.filter((c) => c.id !== requestId),
     }))
@@ -175,15 +229,11 @@ export const useSocial = create<SocialState>()((set, get) => ({
 
   unfollow: async (targetUserId: string) => {
     if (!targetUserId) throw new Error('targetUserId required')
-    // S1 Reconstruction: use canonical `userId` field (NOT `friendId`).
-    // The server returns connections with `userId` = the OTHER user's id.
     const conn = get().connections.find((c) => c.userId === targetUserId)
     if (!conn) {
       throw new Error('Connection not found — refresh and try again')
     }
     const csrfFetch = (await import('./csrf-client')).csrfFetch
-    // DELETE /api/social/connections/[id] — requires connection id in path.
-    // The old query-param fallback (`?targetUserId=`) was never handled by the route.
     const res = await csrfFetch(`/api/social/connections/${conn.id}`, {
       method: 'DELETE',
       headers: { 'Content-Type': 'application/json' },
@@ -192,8 +242,6 @@ export const useSocial = create<SocialState>()((set, get) => ({
       const body = await res.json().catch(() => ({}))
       throw new Error(body?.error || `Failed to unfollow (${res.status})`)
     }
-    // Optimistic: remove the edge to this peer (friendships are bidirectional —
-    // server deletes both rows; we only have the local edge in state).
     set((s) => ({
       connections: s.connections.filter((c) => c.userId !== targetUserId),
     }))

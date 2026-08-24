@@ -50,7 +50,7 @@ import type { SocialActivity } from '@/lib/types'
 // Constants + motion
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** Initial visible feed items. Pagination grows by this on each "Load more". */
+/** S4D Repair-03: Used for "all caught up" display threshold. */
 const FEED_PAGE_SIZE = 8
 
 const FEED_CONTAINER: Variants = {
@@ -90,10 +90,13 @@ export function SocialScreen({ initialSubTab = 'feed', className }: SocialScreen
   const isLoading = useSocial((s) => s.isLoading)
   const error = useSocial((s) => s.error)
   const refresh = useSocial((s) => s.refresh)
+  // S4D Repair-03: cursor pagination state from store
+  const hasMore = useSocial((s) => s.hasMore)
+  const loadingMore = useSocial((s) => s.loadingMore)
+  const loadNextFeedPage = useSocial((s) => s.loadNextFeedPage)
 
   // ── Local UI state ─────────────────────────────────────────────────────────
   const [subTab, setSubTab] = React.useState<SubTab>(initialSubTab)
-  const [visibleCount, setVisibleCount] = React.useState(FEED_PAGE_SIZE)
   const [refreshing, setRefreshing] = React.useState(false)
   const [likingId, setLikingId] = React.useState<string | null>(null)
 
@@ -105,21 +108,13 @@ export function SocialScreen({ initialSubTab = 'feed', className }: SocialScreen
     })
   }, [refresh])
 
-  // Reset visibleCount when the feed list reference changes (refresh / re-fetch).
-  React.useEffect(() => {
-    setVisibleCount(FEED_PAGE_SIZE)
-  }, [feed])
-
   const friendCount = React.useMemo(
     () => connections.filter((c) => c.status === 'ACCEPTED').length,
     [connections],
   )
 
-  const visibleFeed = React.useMemo(
-    () => feed.slice(0, visibleCount),
-    [feed, visibleCount],
-  )
-  const hasMore = feed.length > visibleCount
+  // S4D: feed is now server-paginated via cursor — no client slicing needed
+  const visibleFeed = feed
 
   // ── Handlers ───────────────────────────────────────────────────────────────
   async function handleRefresh() {
@@ -204,7 +199,10 @@ export function SocialScreen({ initialSubTab = 'feed', className }: SocialScreen
   }
 
   function handleLoadMore() {
-    setVisibleCount((c) => c + FEED_PAGE_SIZE)
+    // S4D: cursor-based server pagination
+    loadNextFeedPage().catch(() => {
+      toast({ title: 'Could not load more', variant: 'destructive' })
+    })
   }
 
   // ── Render ──────────────────────────────────────────────────────────────────

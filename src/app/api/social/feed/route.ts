@@ -8,42 +8,64 @@ import { avatarColorForUserId, sanitizeActivityMetadata } from '@/lib/social-act
 // ----------------------------------------------------------------------------
 // Wave 6 Task 6A — GET /api/social/feed
 // ----------------------------------------------------------------------------
+// S4D Repair-03: Cursor/keyset pagination (replaces offset pagination).
+//
 // Returns paginated activities from the current user's ACCEPTED friends.
 //
 // Auth: getSessionUser() required (401 if no session).
 // RBAC: any authenticated role.
 //
 // Query params:
-//   - page:  page number (1-indexed). Default 1. Min 1.
-//   - limit: page size. Default 20. Min 1. Max 100.
+//   - limit:  page size. Default 30. Min 1. Max 100.
+//   - cursor: opaque base64 cursor for next page. Omit for first page.
 //
-// Response shape (per task spec):
+// Response shape:
 //   {
-//     activities: [{
-//       id, actorId, actorName, actorAvatarColor, verb, objectType, objectId,
-//       metadata, visibility, createdAt
-//     }],
-//     total, page, limit, hasMore
+//     activities: [...],
+//     nextCursor: string | null,
+//     hasMore: boolean
 //   }
+//
+// S4D Cursor contract:
+//   Canonical ordering: (createdAt DESC, id DESC)
+//   Cursor encodes: { createdAt, id } of the last item in the current page.
+//   Next-page predicate:
+//     createdAt < cursor.createdAt
+//     OR (createdAt = cursor.createdAt AND id < cursor.id)
+//
+//   hasMore is determined via take = limit + 1 (no separate count query).
 //
 // CRITICAL PRIVACY (blueprint §18 + §6 P2):
 //   NEVER expose payment amounts. The metadata field is sanitized server-side
-//   on READ (defense-in-depth — the recording side also strips on WRITE via
-//   `recordActivity`/`sanitizeActivityMetadata`, but legacy rows or rows
-//   written by other code paths may have leaked sensitive keys).
+//   on READ (defense-in-depth).
 //
-// Feed composition:
-//   1. Query: SocialActivity rows where actorId ∈ (my accepted friends set)
-//      AND visibility ∈ ['FRIENDS', 'PUBLIC'] (PRIVATE activities are excluded).
-//   2. Paginate by createdAt DESC.
-//   3. Join with User (by actorId) to populate actorName + actorAvatarColor.
-//
-// Errors: 400 (invalid pagination) / 401 (no session) / 500 (internal).
+// Errors: 400 (invalid cursor/limit) / 401 (no session) / 500 (internal).
 // ----------------------------------------------------------------------------
 
-const DEFAULT_PAGE = 1
-const DEFAULT_LIMIT = 20
+const DEFAULT_LIMIT = 30
 const MAX_LIMIT = 100
+
+interface FeedCursor {
+  createdAt: string
+  id: string
+}
+
+function encodeCursor(cursor: FeedCursor): string {
+  return Buffer.from(JSON.stringify(cursor), 'utf8').toString('base64url')
+}
+
+function decodeCursor(raw: string): FeedCursor | null {
+  try {
+    const json = Buffer.from(raw, 'base64url').toString('utf8')
+    const parsed = JSON.parse(json) as { createdAt?: unknown; id?: unknown }
+    if (typeof parsed.createdAt !== 'string' || typeof parsed.id !== 'string') {
+      return null
+    }
+    return { createdAt: parsed.createdAt, id: parsed.id }
+  } catch {
+    return null
+  }
+}
 
 export const GET = (req: NextRequest) =>
   withErrorHandler(async () => {
@@ -64,22 +86,29 @@ export const GET = (req: NextRequest) =>
     // Parse + validate query params.
     // -------------------------------------------------------------------------
     const { searchParams } = new URL(req.url)
-    const pageRaw = searchParams.get('page') ?? String(DEFAULT_PAGE)
     const limitRaw = searchParams.get('limit') ?? String(DEFAULT_LIMIT)
+    const cursorRaw = searchParams.get('cursor')
 
-    const page = Math.max(1, Number.parseInt(pageRaw, 10) || DEFAULT_PAGE)
     const limitParsed = Number.parseInt(limitRaw, 10) || DEFAULT_LIMIT
     const limit = Math.min(MAX_LIMIT, Math.max(1, limitParsed))
 
+    // Decode cursor if present
+    let cursor: FeedCursor | null = null
+    if (cursorRaw) {
+      cursor = decodeCursor(cursorRaw)
+      if (!cursor) {
+        return apiError(
+          'VALIDATION_ERROR',
+          'Invalid cursor format',
+          400,
+          { field: 'cursor' },
+          traceId,
+        ) as unknown as NextResponse
+      }
+    }
+
     // -------------------------------------------------------------------------
-    // Step 1 — fetch the user's ACCEPTED friends (the people whose activities
-    // they're allowed to see). This is a single round-trip via the
-    // SocialConnection table.
-    //
-    // Note: a friend "follows me" (followeeId=me, status=ACCEPTED). Since
-    // friendship is bidirectional (2 rows per pair), we could equivalently
-    // query for "I follow them" (followerId=me, status=ACCEPTED). Use the
-    // followerId=me query because that's the edge this user controls.
+    // Step 1 — fetch the user's ACCEPTED friends.
     // -------------------------------------------------------------------------
     const friendEdges = await db.socialConnection.findMany({
       where: {
@@ -90,42 +119,67 @@ export const GET = (req: NextRequest) =>
     })
     const friendIds = friendEdges.map((e) => e.followeeId)
 
-    // No friends → empty feed (early return avoids an empty IN-clause query).
+    // No friends → empty feed (early return).
     if (friendIds.length === 0) {
       return NextResponse.json({
         activities: [],
-        total: 0,
-        page,
-        limit,
+        nextCursor: null,
         hasMore: false,
       })
     }
 
     // -------------------------------------------------------------------------
-    // Step 2 — paginated SocialActivity query. Filter:
+    // Step 2 — cursor-based SocialActivity query.
     //   - actorId ∈ friendIds (only friends' activities)
     //   - visibility ∈ ['FRIENDS', 'PUBLIC'] (exclude PRIVATE)
+    //   - S4D: cursor predicate replaces offset (skip)
+    //   - take = limit + 1 to determine hasMore without a count query
     // -------------------------------------------------------------------------
-    const where = {
+    const baseWhere = {
       actorId: { in: friendIds },
-      visibility: { in: ['FRIENDS', 'PUBLIC'] },
+      visibility: { in: ['FRIENDS', 'PUBLIC'] as const },
     }
 
-    const [total, rows] = await Promise.all([
-      db.socialActivity.count({ where }),
-      db.socialActivity.findMany({
-        where,
-        orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
-        take: limit,
-      }),
-    ])
+    // S4D: cursor predicate — (createdAt DESC, id DESC) keyset
+    // WHERE createdAt < cursor.createdAt
+    //    OR (createdAt = cursor.createdAt AND id < cursor.id)
+    const where = cursor
+      ? {
+          ...baseWhere,
+          OR: [
+            { createdAt: { lt: new Date(cursor.createdAt) } },
+            {
+              createdAt: new Date(cursor.createdAt),
+              id: { lt: cursor.id },
+            },
+          ],
+        }
+      : baseWhere
+
+    // take = limit + 1: if we get limit+1 rows, there's a next page
+    const rows = await db.socialActivity.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: limit + 1,
+    })
+
+    const hasMore = rows.length > limit
+    const pageRows = hasMore ? rows.slice(0, limit) : rows
+
+    // Build nextCursor from the last item in the page
+    let nextCursor: string | null = null
+    if (hasMore && pageRows.length > 0) {
+      const last = pageRows[pageRows.length - 1]
+      nextCursor = encodeCursor({
+        createdAt: last.createdAt.toISOString(),
+        id: last.id,
+      })
+    }
 
     // -------------------------------------------------------------------------
-    // Step 3 — batch-fetch actor profiles to populate actorName + avatarColor.
-    // (No Prisma relation between SocialActivity.actorId → User; manual join.)
+    // Step 3 — batch-fetch actor profiles.
     // -------------------------------------------------------------------------
-    const actorIds = Array.from(new Set(rows.map((r) => r.actorId)))
+    const actorIds = Array.from(new Set(pageRows.map((r) => r.actorId)))
     const actorUsers = actorIds.length
       ? await db.user.findMany({
           where: { id: { in: actorIds } },
@@ -138,7 +192,7 @@ export const GET = (req: NextRequest) =>
     // Step 4 — compose + sanitize each activity row.
     // -------------------------------------------------------------------------
     // S2: batch-fetch likeCount + likedByMe for all feed activities
-    const activityIds = rows.map((r) => r.id)
+    const activityIds = pageRows.map((r) => r.id)
     let likeCountMap = new Map<string, number>()
     let likedByMeSet = new Set<string>()
     if (activityIds.length > 0) {
@@ -154,14 +208,12 @@ export const GET = (req: NextRequest) =>
       }
     }
 
-    const activities = rows.map((r) => {
+    const activities = pageRows.map((r) => {
       const actor = actorMap.get(r.actorId)
-      // Parse the stored metadata JSON, then re-sanitize on READ (defense-in-depth).
       let parsedMetadata: unknown = {}
       try {
         parsedMetadata = JSON.parse(r.metadata)
       } catch {
-        // Corrupt JSON → treat as empty (don't fail the whole feed).
         parsedMetadata = {}
       }
       const sanitizedMetadata = sanitizeActivityMetadata(parsedMetadata)
@@ -174,16 +226,12 @@ export const GET = (req: NextRequest) =>
         verb: r.verb,
         objectType: r.objectType,
         objectId: r.objectId,
-        // S1 Reconstruction: project metadata top-level fields so the client
-        // SocialFeedCard can read restaurantName/dishName directly. The client
-        // type expects these as top-level fields (not nested in metadata).
         restaurantName: typeof sanitizedMetadata.restaurantName === 'string' ? sanitizedMetadata.restaurantName : undefined,
         restaurantId: typeof sanitizedMetadata.restaurantId === 'string' ? sanitizedMetadata.restaurantId : undefined,
         dishName: typeof sanitizedMetadata.dishName === 'string' ? sanitizedMetadata.dishName : undefined,
         targetUserName: typeof sanitizedMetadata.targetUserName === 'string' ? sanitizedMetadata.targetUserName : undefined,
         metadata: sanitizedMetadata,
         visibility: r.visibility,
-        // S2: authoritative like state from DB
         likeCount: likeCountMap.get(r.id) ?? 0,
         likedByMe: likedByMeSet.has(r.id),
         createdAt: r.createdAt.toISOString(),
@@ -192,9 +240,7 @@ export const GET = (req: NextRequest) =>
 
     return NextResponse.json({
       activities,
-      total,
-      page,
-      limit,
-      hasMore: page * limit < total,
+      nextCursor,
+      hasMore,
     })
   })
