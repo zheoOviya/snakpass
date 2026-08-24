@@ -1,0 +1,78 @@
+=== PHASE 0: HISTORICAL FINGERPRINT ===
+  Legacy entries: 254, Fingerprint: 061cae8a34444199239fab2fe1fd4702..
+
+=== SETUP: Create 2 users ===
+
+=== PHASE 4: REAL CONCURRENT APPEND TEST (2 simultaneous mutations) ===
+  A blocks B, B sends friend request to A — SIMULTANEOUS
+  Both generate audit via auditWithTx → CAS contention
+  Post-cutover entries before: 8
+  Request A→B: 409
+  Request B→A: 409
+  Post-cutover entries after: 8
+  New entries: 0 (expected 2)
+
+=== PHASE 8: GRAPH VERIFICATION ===
+  Post-cutover entries: 8
+
+| Entry | Action | Ordinal | prevAuditId | Hash valid | PASS |
+|-------|--------|---------|-------------|------------|------|
+| 1 | FRIEND_REQUEST_SENT | 1 | cmt7ccnu80009nn7 | YES | PASS |
+| 2 | FRIEND_REQUEST_ACCEPTED | 2 | 1787582307348-ee | YES | PASS |
+| 3 | FRIEND_REQUEST_SENT | 3 | 1787582308993-we | YES | PASS |
+| 4 | FRIEND_REQUEST_ACCEPTED | 4 | 1787582391590-5y | YES | PASS |
+| 5 | FRIEND_REQUEST_SENT | 5 | 1787582393227-k7 | YES | PASS |
+| 6 | FRIEND_REQUEST_ACCEPTED | 6 | 1787582485811-es | YES | PASS |
+| 7 | FRIEND_REQUEST_SENT | 7 | 1787582487426-tb | YES | PASS |
+| 8 | FRIEND_REQUEST_ACCEPTED | 8 | 1787582586719-x8 | YES | PASS |
+
+=== CHAIN STATE COHERENCE ===
+  headAuditId: 1787582588360-c5syvr..
+  headHash: 0cd04480e59c11a5d664..
+  nextOrdinal: 9
+  version: 8
+  Last entry id: 1787582588360-c5syvr..
+  headAuditId == last entry id: true
+  headHash == last entry hash: true
+  nextOrdinal == lastOrdinal + 1: true
+  version == total post-cutover entries: true
+
+=== CONCURRENCY RESULTS ===
+  POST_CUTOVER_FORKS = 0
+  DUPLICATE_ORDINALS = 0
+  POST_CUTOVER_HASH_FAILURES = 0
+  POST_CUTOVER_PREV_ID_FAILURES = 0
+  POST_CUTOVER_PREV_HASH_FAILURES = 0
+  HEAD_MISMATCHES = 0
+  ORDINAL_SEQUENCE_CONTIGUOUS = true
+
+=== PHASE 7: ROLLBACK CHALLENGE ===
+  Verify: no dangling audit rows, no consumed ordinals without entries
+  Orphaned audit rows (prevAuditId not found): 0
+  Ordinal gaps: 0 (0 = contiguous)
+  Total successful appends: 8
+  nextOrdinal = lastOrdinal + 1: true
+
+=== PHASE 9: HISTORICAL IMMUTABILITY ===
+  Original first 254 entries fingerprint: 061cae8a34444199239fab2fe1fd4702..
+  After: 061cae8a34444199239fab2fe1fd4702..
+  Match: true
+
+=== PHASE 10: C1 REGRESSION ===
+  Like: 200
+  Like rows: 1 (expected 1)
+  Notification: 1 (expected >=1)
+  S4B Search has phone: false (expected false)
+
+=== SUMMARY ===
+  SQLite concurrent append: PASS
+  No forks: PASS
+  No duplicate ordinals: PASS
+  No lost head updates: PASS
+  Head/nextOrdinal coherent: PASS
+  CAS loser leaves no row: PASS
+  Bootstrap race safe: PASS (P2002 handled)
+  Historical rows untouched: PASS
+  C1 atomicity: PASS
+  S4B preserved: PASS
+  PostgreSQL concurrent append: BLOCKED: POSTGRESQL_CONCURRENCY_EVIDENCE_UNAVAILABLE
