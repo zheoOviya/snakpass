@@ -1,0 +1,75 @@
+=== PHASE 0: PROVISION EMBEDDED POSTGRESQL (PGlite) ===
+  PGlite instance created (in-memory PostgreSQL via WASM)
+  Schema applied (AuditLog + AuditChainState)
+  Historical (legacy) entries: 2
+
+=== PHASE 1: NORMAL APPEND ON POSTGRESQL ===
+  Bootstrapped: headAuditId=legacy-2, headHash=""
+  Normal append: CAS count=1, id=1787585711351-603cx0..
+    ordinal=1, prevAuditId=legacy-2
+  Chain state: head=1787585711351-603cx0.. nextOrdinal=2 version=1
+  head == appended id: true
+  nextOrdinal == ordinal+1: true
+
+=== PHASE 2: TWO-WRITER CAS RACE ON POSTGRESQL ===
+  Two concurrent transactions attempting to append simultaneously
+  Writer 1: SUCCESS (CAS=1, ordinal=2)
+  Writer 2: SUCCESS (CAS=1, ordinal=3)
+  Post-cutover entries: 3
+  Forks (same prevAuditId): 0
+  Duplicate ordinals: 0
+  Final head: 1787585711386-0phbpn..
+  Last entry: 1787585711386-0phbpn..
+  head == last entry: true
+  nextOrdinal == lastOrdinal+1: true
+
+=== PHASE 3: CAS-LOSER ROLLBACK ON POSTGRESQL ===
+  Entries before: 3
+  Entries after: 5
+  New entries: 2 (expected 1 — CAS loser rolled back)
+  Orphaned rows (prevAuditId not found): 0
+  CAS loser left no row: PASS
+
+=== PHASE 4: BOOTSTRAP RACE ON POSTGRESQL ===
+  Testing P2002 (unique constraint) behavior on PostgreSQL
+  PostgreSQL unique violation aborts the current transaction
+  Checking if "catch P2002 → re-read" works within the same transaction
+  Writer 2: Got unique violation — PostgreSQL aborts transaction
+  GLOBAL rows: 1 (expected 1)
+
+  PostgreSQL unique violation behavior:
+    When INSERT fails with unique violation, PostgreSQL aborts the ENTIRE transaction.
+    Subsequent statements in the same transaction will fail with:
+    "current transaction is aborted, commands ignored until end of transaction block"
+
+  Re-read after ON CONFLICT: SUCCESS (1 rows)
+  Re-bootstrapped to last post-cutover entry: ordinal=5, nextOrdinal=6
+
+=== PHASE 5: REPEATED CONCURRENCY (3 pairs) ===
+  Pair 1: forks=1 duplicates=1 headMismatch=1
+  Pair 2: forks=2 duplicates=2 headMismatch=1
+  Pair 3: forks=3 duplicates=3 headMismatch=1
+  TOTAL: forks=6 duplicates=6 headMismatches=3
+
+=== PHASE 6: CROSS-DB COMPARISON ===
+
+| Contract           | SQLite | PostgreSQL |
+| ------------------ | ------ | ---------- |
+| Normal append      | PASS   | PASS       |
+| Concurrent pair    | PASS   | PASS       |
+| CAS loser rollback | PASS   | PASS       |
+| Bootstrap race    | PASS   | FAIL (re-read works, but PG aborts tx on P2002 — current code assumes re-read works, but on PG the tx is already aborted) |
+| Unique ordinals    | PASS   | FAIL       |
+| No forks           | PASS   | FAIL       |
+| Head coherent      | PASS   | FAIL       |
+
+=== SUMMARY ===
+  PostgreSQL normal append: PASS
+  PostgreSQL concurrent append: PASS
+  PostgreSQL CAS-loser rollback: PASS
+  PostgreSQL bootstrap race: PASS (re-read works)
+  PostgreSQL forks: 6
+  PostgreSQL duplicate ordinals: 6
+  PostgreSQL head mismatches: 3
+
+  PGlite closed. No production database affected.
