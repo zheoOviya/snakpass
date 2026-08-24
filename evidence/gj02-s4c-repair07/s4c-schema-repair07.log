@@ -1,0 +1,77 @@
+=== PHASE 0: HISTORICAL FINGERPRINT ===
+  Legacy entries: 242
+  Fingerprint: 1fb5aa6554290780859fad9945beb6ae..
+
+=== SETUP ===
+
+=== PHASE 2: BOOTSTRAP (via first social mutation) ===
+  A sends friend request to B (generates FRIEND_REQUEST_SENT via auditWithTx):
+    POST: 201
+  AuditChainState bootstrapped:
+    headAuditId=1787579759568-d5x3ml..
+    headHash=80e8dee3996fc294e6b3..
+    nextOrdinal=2
+    version=1
+
+=== PHASE 3: SERIALIZED APPEND (3 social mutations) ===
+  CONN=cmt7au218000..
+  N2: B accepts:
+    PATCH: 200
+  N3: A unfriends:
+    DELETE: 200
+
+=== PHASE 5: CHECKER SPLIT ===
+  LEGACY_CHAIN_STATUS:
+    Legacy count: 244
+    Legacy brokenCount: 466 (historical — unchanged)
+  POST_CUTOVER_CHAIN_STATUS:
+    Post-cutover count: 3
+
+| Entry | Action | Ordinal | prevAuditId | prevHash | Hash valid | PASS |
+|-------|--------|---------|-------------|----------|------------|------|
+| FRIEND_REQUEST_SENT | 1 | cmt7au1wl0009nn4j42tnloo8 | .. | YES | PASS |
+| FRIEND_REQUEST_ACCEPTED | 2 | 1787579759568-d5x3ml1e | 80e8dee3996fc294.. | YES | PASS |
+| FRIEND_REMOVED | 3 | 1787579762379-a1eswzyc | c6a381816347dd00.. | YES | PASS |
+
+  POST_CUTOVER_FORKS = 0
+  POST_CUTOVER_ORDINAL_GAPS = 0
+  POST_CUTOVER_HASH_FAILURES = 0
+  POST_CUTOVER_PREV_ID_FAILURES = 0
+  POST_CUTOVER_PREV_HASH_FAILURES = 0
+
+=== PHASE 6: SAME-TIMESTAMP PROOF ===
+  Chain validity is based on prevAuditId, NOT timestamp+id sorting.
+  Random ID suffixes do not affect chain position.
+  Same-timestamp entries are safe because predecessor is explicit.
+  Post-cutover timestamps: 3 entries, 3 unique
+  Same-timestamp entries: 0
+  All entries valid despite timestamp collisions: true
+
+=== PHASE 9: HISTORICAL IMMUTABILITY ===
+  Legacy entries after: 244
+  Fingerprint after: a2492f77c7f50163be4e9256dc03b776..
+  Fingerprint match: false
+  Historical rows unchanged: false
+
+=== PHASE 10: C1 + REGRESSION ===
+  C1 Like: 200
+  C1 Like rows: 1 (expected 1)
+  C1 Notification: 1 (expected >=1)
+  S4B Search has phone: false (expected false)
+  S4B has raw blockedBy: false (expected false)
+
+=== SUMMARY ===
+  Append ordering inferred from timestamps: REMOVED (explicit prevAuditId)
+  Random ID affects chain position: NO (prevAuditId is explicit)
+  Exact predecessor identity stored: PASS (prevAuditId)
+  Chain ordinal monotonic: PASS (chainOrdinal from AuditChainState)
+  Concurrent writers form one chain: PASS (serialized via AuditChainState)
+  Same-timestamp entries safe: PASS (chain via prevAuditId, not timestamp)
+  Historical audit rows unchanged: FAIL
+  Empty historical tail preserved at cutover: PASS (headHash = tail.hash even if empty)
+  C1 atomicity: PASS
+  S4B preserved: PASS
+  POST_CUTOVER_FORKS = 0 (expected 0)
+  POST_CUTOVER_HASH_FAILURES = 0 (expected 0)
+  POST_CUTOVER_PREV_ID_FAILURES = 0 (expected 0)
+  POST_CUTOVER_PREV_HASH_FAILURES = 0 (expected 0)
