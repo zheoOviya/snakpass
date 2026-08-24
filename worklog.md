@@ -12801,3 +12801,24 @@ Stage Summary:
 - PostgreSQL bootstrap race: FIXED (upsert instead of catch-P2002)
 - CAS mechanism verified on PGlite (embedded PostgreSQL): WHERE version=X returns 0 on stale version
 - Evidence checkpoint: 5c0653f on origin/main
+
+---
+Task ID: S4D-CHALLENGE-01
+Agent: Social Scale & Pagination Auditor (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4D-PAGINATION-PERFORMANCE-CHALLENGE-01 — Challenge S4D pagination/performance findings. NO code changes.
+
+Work Log:
+- D1 (Connections pagination): Code-traced GET /api/social/connections. No pagination (findMany with no skip/take). Loads ALL SocialConnection rows for user. Ordering: createdAt DESC (no secondary tiebreaker). Client (social-store) fetches with no pagination params. Runtime test with 52 connections: 20ms response, all 52 returned. Classification: DOWNGRADE — social connections naturally bounded by friend count (typically < 100). PRODUCT_POLICY_CHOICE.
+- D2 (Feed pagination): Code-traced GET /api/social/feed. Offset-based pagination (skip/take). Ordering: createdAt DESC (no secondary tiebreaker). hasMore: page*limit < total. Runtime test: fetched page 1 (limit=3, 3 activities), inserted new activity, fetched page 2 → DUPLICATE found (1 duplicate between pages). This is the known offset-pagination instability: concurrent insert between page fetches causes items to appear on both pages. Classification: CONFIRMED — OFFSET_PAGINATION_DUPLICATE_ON_CONCURRENT_INSERT.
+- D3 (Fan-out): Code-traced feed query shape: actorId IN (friendIds[]). Tested with 1, 10, 30 friends + activities. Latency: 19ms, 18ms, 22ms respectively. No failure threshold at 30 friends. IN-clause parameter count = friend count (bounded by natural social graph). Classification: REJECT_FINDING — NATURAL_SCALE_BOUND.
+- D4 (Search): Code-traced search query: WHERE (name CONTAINS q OR phone CONTAINS q) AND id NOT IN (excludedIds). User table has NO index on name (only phone unique, email unique, PK). Contains search = LIKE '%query%' (full table scan). Runtime: 141ms for "Use" query returning 20 results. S4B contracts intact (no phone, min length, cap, rate limit). Classification: DOWNGRADE — THEORETICAL_OPTIMIZATION (full-text search is future optimization, not a defect).
+- Regression guard: S4A/S4B/S4C source unchanged (diff=0 since ccb7610).
+
+Stage Summary:
+- D1: DOWNGRADE — no pagination, naturally bounded
+- D2: CONFIRMED — offset pagination duplicate on concurrent insert
+- D3: REJECT — fan-out bounded, no failure threshold
+- D4: DOWNGRADE — full table scan, theoretical optimization
+- 1 confirmed finding (D2) requires implementation
+- S4A/S4B/S4C intact
+- Evidence checkpoint: 135c619 on origin/main
