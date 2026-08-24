@@ -12845,3 +12845,25 @@ Stage Summary:
 - Page-2 like projection verified (likeCount=1, likedByMe=true)
 - Source unchanged (diff=0 from 77e4bbb)
 - Evidence checkpoint: 7dea23f on origin/main
+
+---
+Task ID: S4D-CLOSURE-05
+Agent: Cursor Browser Evidence Completion Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4D-BROWSER-EVIDENCE-CORRECTION-05 — Fill ALL missing browser-evidence cells. No N/A. No code changes.
+
+Work Log:
+- Source freeze verified: 77e4bbb, diff=0.
+- Test 1 (Initial feed reload): Browser navigated Social→Feed. Network: GET 200+cursor+hasMore. DOM: activity cards visible. Screenshots: T1-before-reload.png, T1-after-reload.png. Reload persistence: same state after hard reload. PASS.
+- Test 2 (Load More reload): Clicked Load More. DOM: cards appended (count increased). Screenshot: T2-after-load-more.png. Hard reload: fresh first page restored (not page 1+2 combined). Screenshot: T2-after-reload.png. Reload persistence: PASS.
+- Test 3 (Same-timestamp browser): 6 activities with identical createdAt. Real browser click on Load More. DOM: 6 unique SameTS refs visible. Screenshots: T3-page1-before.png, T3-page2-after.png. Reload + Load More: same 6 refs, stable ordering. Reload persistence: PASS.
+- Test 4 (Page-2 Like): All 5 proofs captured. Interaction: Social→Feed→Load More click. Network: cursor-bearing GET. DOM: liked activity (D5-Like-4) rendered on page 2. Screenshot: T4-page2-liked.png. Reload: liked activity persists. PASS.
+- Corrected matrix: 5 rows × 5 columns = 25/25 cells filled. Zero N/A.
+- Evidence: 7 screenshots + log. Pushed to origin/main (7dea23f..34a9172). LOCAL_HEAD == REMOTE_MAIN == 34a9172.
+
+Stage Summary:
+- All mandatory browser cells filled (no N/A)
+- Initial feed: reload persistence proven
+- Load More: reload returns fresh first page
+- Same-timestamp: real browser click, 6 unique refs, stable on reload
+- Page-2 Like: all 5 proofs explicit
+- Evidence checkpoint: 34a9172 on origin/main
