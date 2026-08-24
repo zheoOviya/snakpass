@@ -12668,3 +12668,24 @@ Stage Summary:
 - P3 untouched (DOWNGRADED, no repair).
 - All 8 S4B matrix contracts PASS.
 - Evidence checkpoint: 756760b on origin/main.
+
+---
+Task ID: S4B-CHALLENGE-04
+Agent: Trusted Proxy Boundary Verification Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4B-TRUSTED-IP-BOUNDARY-CHALLENGE-04 — Prove or falsify whether X-Real-IP is attacker-controlled. NO code changes.
+
+Work Log:
+- Phase 1: Read Caddyfile at /home/z/my-project/Caddyfile. Caddy listens on :81 (externally exposed), reverse-proxies to localhost:3000 (Next.js). Key line: `header_up X-Real-IP {remote_host}` — Caddy unconditionally overwrites X-Real-IP with the real client IP. Only port :81 is exposed externally; port :3000 is internal-only.
+- Phase 2+3: Runtime bucket challenge with X-Real-IP rotation. Created test user (+919999998888), sent paced requests observing X-RateLimit-Remaining header.
+- TEST A (Through Caddy :81): Same X-Real-IP (10.50.0.1) → Remaining 29→28→27. Changed X-Real-IP (10.50.0.2, 10.50.0.3) → Remaining 26→25 (continued decrementing, NO reset). VERDICT: X-Real-IP NOT attacker-controlled through proxy. Caddy overwrites it.
+- TEST B (Direct to app :3000): Same X-Real-IP (10.60.0.1) → Remaining 29→28→27. Changed X-Real-IP (10.60.0.2) → Remaining=29 (RESET! Fresh bucket!). Changed again (10.60.0.3) → Remaining=29 (RESET again!). VERDICT: X-Real-IP IS attacker-controlled when direct (no proxy overwrites it).
+- Phase 4: Port 3000 binds to *:3000 but only :81 is exposed externally. Direct app access classification: INTERNAL_ONLY (external = BLOCKED). External clients MUST go through Caddy → X-Real-IP is overwritten → NOT spoofable externally.
+- Phase 5: Per-user limiter (checkSearchUserLimit in search/route.ts) is keyed on session.userId, NOT IP. Rotating X-Real-IP does NOT affect per-user quota. USER_LIMIT_BYPASS = NO (code-verified). Defense-in-depth confirmed.
+
+Stage Summary:
+- TRUSTED_IP_BOUNDARY_VERIFIED
+- Through Caddy proxy: X-Real-IP is NOT attacker-controlled (Caddy overwrites with {remote_host})
+- Direct to app: X-Real-IP IS attacker-controlled, but only reachable internally (external = :81 only)
+- Per-user limiter provides defense-in-depth (keyed on userId, not IP)
+- No code changes made (evidence/trace only)
+- Evidence saved to evidence/gj02-s4b-challenge04/p4-boundary-results.log
