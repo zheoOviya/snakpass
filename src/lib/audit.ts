@@ -67,12 +67,19 @@ export async function audit(
 // but reads the last entry's hash via the transaction client (tx), ensuring
 // the chain is consistent within the transaction snapshot.
 //
-// Historical data note: pre-S4C entries have empty hash + prevHash=GENESIS
-// (they were written via direct tx.auditLog.create without chain computation).
-// New entries written via auditWithTx chain to whatever the last entry's hash
-// is — even if that hash is empty/broken. The global auditIntegrityCheck() will
-// still report historical breakage, but NEW entries will have valid hashes and
-// correct prevHash linkage. Historical rows are NOT modified.
+// S4C Boundary Repair-04 (FAIL-CLOSED CONTIGUOUS APPEND policy):
+// The prevHash MUST chain to the immediate predecessor's STORED hash value,
+// even if that hash is empty ("") or malformed. This preserves a contiguous
+// append history — new entries do NOT skip or normalize broken predecessors.
+//
+// GENESIS is used ONLY when there is NO previous audit row (true first entry).
+// If a previous row exists but its hash is empty, the new entry's prevHash
+// will be "" (the stored predecessor value), NOT "GENESIS".
+//
+// Historical data note: pre-S4C entries have empty hash + prevHash=GENESIS.
+// The global auditIntegrityCheck() will still report historical breakage,
+// but NEW entries will have valid hashes and contiguous prevHash linkage.
+// Historical rows are NOT modified.
 export async function auditWithTx(
   tx: Prisma.TransactionClient,
   action: string,
@@ -85,7 +92,11 @@ export async function auditWithTx(
     orderBy: { createdAt: 'desc' },
     select: { hash: true },
   })
-  const prevHash = lastEntry?.hash || 'GENESIS'
+
+  // S4C Boundary Repair-04: FAIL-CLOSED CONTIGUOUS APPEND.
+  // Chain to the immediate predecessor's STORED hash, even if empty.
+  // GENESIS only when NO previous row exists (true first entry).
+  const prevHash = lastEntry === null ? 'GENESIS' : (lastEntry?.hash ?? '')
 
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   const createdAt = new Date()
