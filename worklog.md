@@ -12822,3 +12822,26 @@ Stage Summary:
 - 1 confirmed finding (D2) requires implementation
 - S4A/S4B/S4C intact
 - Evidence checkpoint: 135c619 on origin/main
+
+---
+Task ID: S4D-CLOSURE-04
+Agent: Social Feed Cursor Browser Evidence Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4D-BROWSER-CURSOR-CLOSURE-04 — Browser evidence for cursor pagination. NO code changes.
+
+Work Log:
+- Source freeze verified: checkpoint 77e4bbb, diff=0.
+- Test A (Initial feed): Browser navigated Social→Feed. Network: GET /api/social/feed?limit=3 → 200, nextCursor=present, hasMore=true. DOM: activity cards visible. Screenshot: A1-initial-feed.png. PASS.
+- Test B (Load More): Clicked "Load more" button. Network: cursor-bearing GET detected. DOM: cards appended (count increased). Duplicate IDs: 0. Screenshot: B1-after-load-more.png. PASS.
+- Test C (Inter-page insertion): Page 1 loaded, A7 inserted (newer than boundary), Load More clicked. A7 NOT in continuation (ABSENT). 0 duplicates. Reload: A7 PRESENT on fresh first page. Screenshots: C1-continuation-no-A7.png, C2-reload-A7-visible.png. PASS.
+- Test D (Same-timestamp): 6 activities with identical createdAt. Page 1: 3 IDs, Page 2: 3 IDs. Union: 6, Intersection: 0. Ordering: id DESC CORRECT. Repeat stability: PASS. Corrected previous "5 activities / 6 IDs" inconsistency — fixture was actually 6 activities.
+- Test E (Page-2 Like): Target D4-Like-4 on page 2. API: likeCount=1, likedByMe=true. DOM: liked activity rendered on page 2. Reload: persists. Screenshot: E1-page2-liked-activity.png. PASS.
+- API Correlation: Malformed cursor → 400. End cursor → empty + hasMore=false + nextCursor=null. PRIVATE excluded. Non-friend excluded. Blocked actor: S4A source unchanged. ALL PASS.
+- Evidence: 5 screenshots + log. Pushed to origin/main (31dd051..7dea23f). LOCAL_HEAD == REMOTE_MAIN == 7dea23f.
+
+Stage Summary:
+- All 5 browser proofs captured (Interaction, Network, DOM, Screenshot, Reload)
+- 0 duplicates across all pagination flows
+- Same-timestamp deterministic via (createdAt DESC, id DESC)
+- Page-2 like projection verified (likeCount=1, likedByMe=true)
+- Source unchanged (diff=0 from 77e4bbb)
+- Evidence checkpoint: 7dea23f on origin/main
