@@ -12712,3 +12712,27 @@ Stage Summary:
 - Two findings rejected (C3, C4) — no repair needed
 - No code changes made (challenge only)
 - S4C_IMPLEMENTATION_PLAN_READY
+
+---
+Task ID: S4C-REPAIR-04
+Agent: Audit Chain Boundary Repair Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4C-AUDIT-CHAIN-BOUNDARY-REPAIR-04 — Make auditWithTx append contiguously to immediate predecessor's stored hash, even if empty. No history skipping.
+
+Work Log:
+- Phase 0: Baseline locked — HEAD=5a40338 (reset to origin/main to recover S4C work). C1 present, auditWithTx present, 0 unchained writes. Historical fingerprint recorded.
+- Phase 1: Minimal repair — changed auditWithTx predecessor selection from `lastEntry?.hash || 'GENESIS'` to `lastEntry === null ? 'GENESIS' : (lastEntry?.hash ?? '')`. This preserves empty string as legitimate stored predecessor value. GENESIS only for true first entry (no previous row). File: src/lib/audit.ts (1 file, 18 insertions, 7 deletions).
+- Phase 2: Ordering challenge — all 231 existing entries have unique createdAt values. Social mutations are transactional (serialized), so concurrent writes with identical timestamps are extremely unlikely. Ordering is deterministic. PASS.
+- Phase 3+4: Created 3 social mutations (friend request, accept, unfriend). N1's immediate predecessor is AUTH_OTP_LOGIN with empty hash. N1 stored prevHash="" (empty) — chains contiguously to predecessor's empty hash, NOT GENESIS. N2 prevHash=N1.hash, N3 prevHash=N2.hash. All 3 entries: hash match=YES, prevHash match=YES.
+- Phase 5: New-only checker. NEW_ENTRY_COUNT=3, NEW_HASH_FAILURES=0, NEW_PREVHASH_FAILURES=0. PASS.
+- Phase 6: Historical immutability — historical rows unchanged (fingerprint match for pre-repair entries). PASS.
+- Phase 7: C1 regression — Like=1, notif=1 (atomic), duplicate Like=1 (idempotent). PASS.
+- Phase 8: Lint 0 errors. 0 unchained writes.
+- Phase 9: Committed c8e826b (source) + 3896117 (evidence). Pushed to origin/main. LOCAL_HEAD == REMOTE_MAIN == 3896117.
+
+Stage Summary:
+- C2 boundary repair VERIFIED: N1 chains to immediate predecessor's empty hash (contiguous append)
+- No history skipping — GENESIS only for true first entry
+- New entries form valid sub-chain among themselves (N2→N1, N3→N2)
+- Historical rows untouched
+- C1 atomicity preserved
+- Evidence checkpoint: 3896117 on origin/main
