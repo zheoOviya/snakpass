@@ -79,6 +79,13 @@ function isRetryableConflict(error: unknown): boolean {
            error.code === 'P1008' || error.code === 'P2002' ||
            error.code === 'P2024'
   }
+  // S4C Repair-08: AuditConcurrencyError is retryable.
+  // When auditWithTx's CAS fails (concurrent writer won the chain head),
+  // the entire business transaction should retry — including the audit append.
+  // This ensures the business mutation + audit append remain atomic.
+  if (error instanceof Error && error.name === 'AuditConcurrencyError') {
+    return true
+  }
   return false
 }
 

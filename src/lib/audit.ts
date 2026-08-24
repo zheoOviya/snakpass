@@ -69,6 +69,7 @@ async function ensureChainState(tx: Prisma.TransactionClient | typeof db): Promi
   headAuditId: string | null
   headHash: string
   nextOrdinal: bigint
+  version: number
 }> {
   // Try to find existing chain state
   let state = await tx.auditChainState.findUnique({
@@ -80,6 +81,7 @@ async function ensureChainState(tx: Prisma.TransactionClient | typeof db): Promi
       headAuditId: state.headAuditId,
       headHash: state.headHash,
       nextOrdinal: state.nextOrdinal,
+      version: state.version,
     }
   }
 
@@ -89,68 +91,111 @@ async function ensureChainState(tx: Prisma.TransactionClient | typeof db): Promi
     select: { id: true, hash: true },
   })
 
-  if (tail) {
-    // Anchor to historical tail — even if its hash is empty
-    state = await tx.auditChainState.create({
-      data: {
-        id: CHAIN_STATE_ID,
-        headAuditId: tail.id,
-        headHash: tail.hash ?? '',
-        nextOrdinal: 1,
-        version: 0,
-      },
-    })
-  } else {
-    // No audit rows at all — GENESIS state
-    state = await tx.auditChainState.create({
-      data: {
-        id: CHAIN_STATE_ID,
-        headAuditId: null,
-        headHash: 'GENESIS',
-        nextOrdinal: 1,
-        version: 0,
-      },
-    })
+  // S4C Repair-08 Phase 3: Bootstrap race protection.
+  // Two concurrent callers might both find AuditChainState absent and race to create it.
+  // The `id` field has a unique constraint (singleton), so the second create will throw P2002.
+  // We catch P2002 and re-read the existing state — idempotent.
+  try {
+    if (tail) {
+      state = await tx.auditChainState.create({
+        data: {
+          id: CHAIN_STATE_ID,
+          headAuditId: tail.id,
+          headHash: tail.hash ?? '',
+          nextOrdinal: 1,
+          version: 0,
+        },
+      })
+    } else {
+      state = await tx.auditChainState.create({
+        data: {
+          id: CHAIN_STATE_ID,
+          headAuditId: null,
+          headHash: 'GENESIS',
+          nextOrdinal: 1,
+          version: 0,
+        },
+      })
+    }
+  } catch (e: unknown) {
+    // P2002 = unique constraint violation — another caller won the bootstrap race.
+    // Re-read the existing state. This is safe and idempotent.
+    if (e !== null && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
+      state = await tx.auditChainState.findUnique({
+        where: { id: CHAIN_STATE_ID },
+      })
+      if (!state) {
+        // Should not happen — P2002 means it exists. Defensive fallback.
+        throw new Error('AuditChainState bootstrap race: P2002 but state not found on re-read')
+      }
+    } else {
+      throw e
+    }
   }
 
   return {
     headAuditId: state.headAuditId,
     headHash: state.headHash,
     nextOrdinal: state.nextOrdinal,
+    version: state.version,
   }
 }
 
 // ----------------------------------------------------------------------------
-// Canonical append primitive
+// Canonical append primitive — CAS (compare-and-swap) concurrency-safe
 // ----------------------------------------------------------------------------
 
+const MAX_APPEND_RETRIES = 5
+
 /**
- * S4C Repair-07: The ONE canonical audit append primitive.
- *
- * Both audit() and auditWithTx() delegate to this. It:
- *   1. Reads the current chain head from AuditChainState (singleton)
- *   2. Creates a new AuditLog entry with explicit prevAuditId + prevHash + chainOrdinal
- *   3. Advances the chain head to the new entry
- *   All within the SAME transaction — no race conditions.
- *
- * The hash (version 2) includes prevAuditId + chainOrdinal to bind the entry
- * to its exact chain position, preventing any ambiguity.
+ * S4C Repair-08: Internal error for CAS retry signaling.
+ * When thrown inside a Prisma transaction, it aborts the transaction.
+ * The caller (withTransaction or auditWithTx caller) catches it and retries
+ * the entire transaction.
  */
-async function appendAudit(
+class AuditConcurrencyError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'AuditConcurrencyError'
+  }
+}
+
+/**
+ * S4C Repair-08: CAS-safe audit append — the transaction-interior operation.
+ *
+ * This function runs INSIDE a Prisma transaction. It:
+ *   1. Reads AuditChainState (head + version for CAS)
+ *   2. Creates AuditLog entry pointing to current head
+ *   3. CAS update: updateMany WHERE id='GLOBAL' AND version=observed
+ *   4. If count=1 → success, return
+ *   5. If count=0 → throw AuditConcurrencyError → transaction aborts → caller retries
+ *
+ * The CAS uses updateMany (not update) because updateMany supports composite
+ * WHERE clauses (id + version). This is the portable, DB-independent approach:
+ *   - SQLite: updateMany with WHERE version=X is atomic within BEGIN IMMEDIATE
+ *   - PostgreSQL: updateMany with WHERE version=X is atomic even under
+ *     READ COMMITTED because the UPDATE acquires a row lock
+ *
+ * If the CAS fails, the AuditLog row created in step 2 is also rolled back
+ * because it's in the same transaction. No dangling rows.
+ */
+async function appendAuditInTx(
   tx: Prisma.TransactionClient,
   action: string,
-  metadata: Record<string, unknown> = {},
-  actorId?: string,
-  actorRole: string = 'SYSTEM',
+  metadata: Record<string, unknown>,
+  actorId: string | undefined,
+  actorRole: string,
 ): Promise<void> {
+  // Step 1: Read current chain state (head + version for CAS)
   const state = await ensureChainState(tx)
 
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
   const createdAt = new Date()
   const metadataStr = JSON.stringify(metadata)
   const ordinal = state.nextOrdinal
+  const observedVersion = state.version
 
-  // Compute hash version 2 (explicit-chain)
+  // Step 2: Compute hash v2 (includes prevAuditId + chainOrdinal)
   const hash = computeHashV2(
     state.headHash,
     state.headAuditId,
@@ -163,7 +208,7 @@ async function appendAudit(
     createdAt,
   )
 
-  // Create the audit entry with explicit predecessor linkage
+  // Step 3: Create the audit entry (will roll back if CAS fails)
   await tx.auditLog.create({
     data: {
       id,
@@ -180,16 +225,32 @@ async function appendAudit(
     },
   })
 
-  // Advance the chain head to this new entry
-  await tx.auditChainState.update({
-    where: { id: CHAIN_STATE_ID },
+  // Step 4: CAS update — only advances head if version hasn't changed
+  // WHERE id = 'GLOBAL' AND version = observedVersion
+  // If another writer already advanced the head, version won't match,
+  // updateMany returns count=0, and this transaction will abort.
+  const casResult = await tx.auditChainState.updateMany({
+    where: {
+      id: CHAIN_STATE_ID,
+      version: observedVersion,
+    },
     data: {
       headAuditId: id,
       headHash: hash,
-      nextOrdinal: { increment: 1 },
-      version: { increment: 1 },
+      nextOrdinal: ordinal + 1n,
+      version: observedVersion + 1,
     },
   })
+
+  if (casResult.count !== 1) {
+    // CAS failed — concurrent writer won. Throw to abort this transaction.
+    // The caller's retry loop will re-enter with a fresh transaction.
+    throw new AuditConcurrencyError(
+      `CAS failed: version ${observedVersion} was already advanced by a concurrent writer`,
+    )
+  }
+
+  // CAS succeeded — head transition is ours. Transaction will commit.
 }
 
 // ----------------------------------------------------------------------------
@@ -197,8 +258,9 @@ async function appendAudit(
 // ----------------------------------------------------------------------------
 
 /**
- * Non-transactional audit write. Delegates to appendAudit inside a transaction.
- * Use this when the audit write is NOT part of a larger business transaction.
+ * Non-transactional audit write with CAS retry.
+ * Each retry runs in a fresh withTransaction. If CAS fails (concurrent writer
+ * won the head), the transaction aborts and we retry after backoff.
  */
 export async function audit(
   action: string,
@@ -206,15 +268,37 @@ export async function audit(
   actorId?: string,
   actorRole: string = 'SYSTEM',
 ): Promise<void> {
-  await withTransaction(async (tx) => {
-    await appendAudit(tx, action, metadata, actorId, actorRole)
-  })
+  for (let attempt = 1; attempt <= MAX_APPEND_RETRIES; attempt++) {
+    try {
+      await withTransaction(async (tx) => {
+        await appendAuditInTx(tx, action, metadata, actorId, actorRole)
+      })
+      return // Success
+    } catch (error) {
+      if (error instanceof AuditConcurrencyError && attempt < MAX_APPEND_RETRIES) {
+        const backoff = 10 * Math.pow(2, attempt - 1)
+        await new Promise((resolve) => setTimeout(resolve, backoff))
+        continue
+      }
+      throw error
+    }
+  }
+  throw new Error(`Audit append failed after ${MAX_APPEND_RETRIES} retries (concurrency contention)`)
 }
 
 /**
- * Transaction-aware audit write. Use this when the audit write IS part of a
- * larger business transaction (pass the tx client). The caller's transaction
- * will include the audit append + head advancement atomically.
+ * Transaction-aware audit write with CAS.
+ * Called inside an EXISTING withTransaction. If the CAS fails, throws
+ * AuditConcurrencyError. The CALLER's withTransaction should handle this:
+ *
+ * The social routes that call auditWithTx are already wrapped in
+ * withTransaction which retries on conflicts. AuditConcurrencyError will
+ * cause the withTransaction to abort and retry the ENTIRE business
+ * transaction (including the audit append). This is correct — the business
+ * mutation + audit append are atomic.
+ *
+ * For callers that don't use withTransaction (rare), they should catch
+ * AuditConcurrencyError and retry their transaction.
  */
 export async function auditWithTx(
   tx: Prisma.TransactionClient,
@@ -223,7 +307,7 @@ export async function auditWithTx(
   actorId?: string,
   actorRole: string = 'SYSTEM',
 ): Promise<void> {
-  await appendAudit(tx, action, metadata, actorId, actorRole)
+  await appendAuditInTx(tx, action, metadata, actorId, actorRole)
 }
 
 // ----------------------------------------------------------------------------
