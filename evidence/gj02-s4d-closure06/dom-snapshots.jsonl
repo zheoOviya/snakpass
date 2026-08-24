@@ -1,0 +1,11 @@
+{"label":"A-initial","refs":60,"timestamp":"2026-08-24T18:28:58.723Z"}
+{"label":"A-reload","refs":60,"timestamp":"2026-08-24T18:29:11.012Z"}
+{"label":"B-before","refs":60,"timestamp":"2026-08-24T18:29:22.945Z"}
+{"label":"B-after","refs":70,"timestamp":"2026-08-24T18:29:28.115Z"}
+{"label":"B-reload","refs":60,"timestamp":"2026-08-24T18:29:40.298Z"}
+{"label":"C-page1","refs":12,"timestamp":"2026-08-24T18:29:52.754Z"}
+{"label":"C-page2","refs":12,"timestamp":"2026-08-24T18:29:57.920Z"}
+{"label":"C-reload","refs":12,"timestamp":"2026-08-24T18:30:15.155Z"}
+{"label":"D-before","refs":12,"timestamp":"2026-08-24T18:30:29.172Z"}
+{"label":"D-after","refs":12,"timestamp":"2026-08-24T18:30:34.428Z"}
+{"label":"D-reload","refs":12,"timestamp":"2026-08-24T18:30:51.920Z"}
