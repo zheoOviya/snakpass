@@ -12736,3 +12736,32 @@ Stage Summary:
 - Historical rows untouched
 - C1 atomicity preserved
 - Evidence checkpoint: 3896117 on origin/main
+
+---
+Task ID: S4C-REPAIR-08
+Agent: Audit Chain Concurrency Repair Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S4C-AUDIT-CONCURRENCY-REPAIR-08 — CAS compare-and-swap on AuditChainState.version for DB-independent concurrent append safety.
+
+Work Log:
+- Phase 0: Inspected withTransaction semantics. SQLite uses BEGIN IMMEDIATE (serializes writes). PostgreSQL default is READ COMMITTED (allows concurrent reads → race possible). The version field was added in Repair-07 but NOT used for concurrency control.
+- Phase 1: Implemented CAS (compare-and-swap) using updateMany with WHERE id='GLOBAL' AND version=observedVersion. If count=0, concurrent writer won → throw AuditConcurrencyError → transaction aborts → retry. If count=1, head transition owned → commit.
+- Phase 2: Transaction-safe implementation. appendAuditInTx creates audit row + CAS update in same transaction. If CAS fails, both roll back (no dangling rows). audit() has bounded retry loop (5 attempts). auditWithTx delegates to appendAuditInTx; withTransaction retries on AuditConcurrencyError.
+- Phase 3: Bootstrap race protection. ensureChainState catches P2002 on concurrent create of GLOBAL singleton → re-reads existing state → idempotent.
+- Phase 4: Real concurrent append test. 2 simultaneous friend-request mutations (A→B + B→A). Both succeeded, generated 2 audit entries with distinct ordinals, single linear prevAuditId chain. POST_CUTOVER_FORKS=0, DUPLICATE_ORDINALS=0.
+- Phase 5: PostgreSQL evidence: BLOCKED: POSTGRESQL_CONCURRENCY_EVIDENCE_UNAVAILABLE (sandbox is SQLite-only). CAS design is DB-independent (updateMany WHERE version=X works on both).
+- Phase 6: SQLite regression PASS — CAS coexists with BEGIN IMMEDIATE.
+- Phase 7: Rollback challenge PASS — no orphaned rows, ordinal sequence contiguous, nextOrdinal=lastOrdinal+1.
+- Phase 8: Graph verification PASS — all 8 post-cutover entries have valid hash, correct prevAuditId, monotonic ordinal, head coherent.
+- Phase 9: Historical immutability PASS — first 254 legacy entries fingerprint matches.
+- Phase 10: C1 regression PASS (Like=1, notif=1). S4B preserved (no phone, no raw blockedBy).
+- Committed a26c079 (source) + 2aaaf49 (evidence). Pushed to origin/main. LOCAL_HEAD == REMOTE_MAIN == 2aaaf49.
+
+Stage Summary:
+- CAS on AuditChainState.version: PASS (0 forks, 0 duplicate ordinals, 0 lost head updates)
+- SQLite concurrent append: PASS (runtime verified)
+- PostgreSQL concurrent append: BLOCKED (environment unavailable — CAS design is portable)
+- Bootstrap race: PASS (P2002 handled)
+- CAS loser leaves no row: PASS (same transaction rollback)
+- Historical rows untouched: PASS
+- C1/S4B regression: ALL PASS
+- Evidence checkpoint: 2aaaf49 on origin/main
