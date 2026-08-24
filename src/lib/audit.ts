@@ -91,46 +91,42 @@ async function ensureChainState(tx: Prisma.TransactionClient | typeof db): Promi
     select: { id: true, hash: true },
   })
 
-  // S4C Repair-08 Phase 3: Bootstrap race protection.
-  // Two concurrent callers might both find AuditChainState absent and race to create it.
-  // The `id` field has a unique constraint (singleton), so the second create will throw P2002.
-  // We catch P2002 and re-read the existing state — idempotent.
-  try {
-    if (tail) {
-      state = await tx.auditChainState.create({
-        data: {
-          id: CHAIN_STATE_ID,
-          headAuditId: tail.id,
-          headHash: tail.hash ?? '',
-          nextOrdinal: 1,
-          version: 0,
-        },
-      })
-    } else {
-      state = await tx.auditChainState.create({
-        data: {
-          id: CHAIN_STATE_ID,
-          headAuditId: null,
-          headHash: 'GENESIS',
-          nextOrdinal: 1,
-          version: 0,
-        },
-      })
-    }
-  } catch (e: unknown) {
-    // P2002 = unique constraint violation — another caller won the bootstrap race.
-    // Re-read the existing state. This is safe and idempotent.
-    if (e !== null && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
-      state = await tx.auditChainState.findUnique({
-        where: { id: CHAIN_STATE_ID },
-      })
-      if (!state) {
-        // Should not happen — P2002 means it exists. Defensive fallback.
-        throw new Error('AuditChainState bootstrap race: P2002 but state not found on re-read')
-      }
-    } else {
-      throw e
-    }
+  // S4C Repair-09: PostgreSQL-safe bootstrap.
+  //
+  // On PostgreSQL, a unique constraint violation (P2002) ABORTS the entire
+  // transaction — subsequent statements fail. The previous "catch P2002 and
+  // re-read" pattern is NOT portable to PostgreSQL.
+  //
+  // Fix: Use upsert with `createIfNotExists` semantics. Prisma's upsert is
+  // atomic and does NOT abort the transaction on conflict — it either creates
+  // the row or returns the existing one. This is portable across SQLite and
+  // PostgreSQL.
+  //
+  // After upsert, we always re-read to get the current state (whether we won
+  // the race or lost it). The re-read is in the same transaction, which is
+  // safe because upsert did NOT abort it.
+  const headAuditId = tail?.id ?? null
+  const headHash = tail?.hash ?? 'GENESIS'
+
+  await tx.auditChainState.upsert({
+    where: { id: CHAIN_STATE_ID },
+    create: {
+      id: CHAIN_STATE_ID,
+      headAuditId,
+      headHash,
+      nextOrdinal: 1,
+      version: 0,
+    },
+    update: {}, // No-op if already exists — we just need the row to exist
+  })
+
+  // Re-read to get the current state (whether we created it or another writer did)
+  state = await tx.auditChainState.findUnique({
+    where: { id: CHAIN_STATE_ID },
+  })
+
+  if (!state) {
+    throw new Error('AuditChainState bootstrap failed: upsert did not create or find the row')
   }
 
   return {
