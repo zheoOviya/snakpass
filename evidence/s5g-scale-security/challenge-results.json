@@ -1,0 +1,77 @@
+Loaded 50 S5G users, 49 friends
+{
+  "phase": "S5G",
+  "tests": [
+    {
+      "challenge": "C2_socket_auth_load",
+      "load": 10,
+      "success": 10,
+      "p50Ms": 2,
+      "p95Ms": 6,
+      "result": "PASS"
+    },
+    {
+      "challenge": "C3_private_channel_isolation",
+      "crossUserDeliveries": 0,
+      "result": "PASS"
+    },
+    {
+      "challenge": "C5_feed_fanout_scale",
+      "load": 10,
+      "httpStatus": 201,
+      "authorizedDeliveries": 10,
+      "unauthorized": 0,
+      "result": "PASS"
+    },
+    {
+      "challenge": "C5b_private_no_fanout",
+      "httpStatus": 201,
+      "fanoutReceived": 0,
+      "result": "PASS"
+    },
+    {
+      "challenge": "C6_like_fanout_scale",
+      "sequentialLikes": 5,
+      "likeCount": 5,
+      "result": "PASS"
+    },
+    {
+      "challenge": "C7_outbox_burst",
+      "burstSize": 3,
+      "pendingBefore": 0,
+      "pendingAfter": 0,
+      "result": "PASS"
+    },
+    {
+      "challenge": "C10_block_race",
+      "blockedEvents": 0,
+      "result": "PASS"
+    },
+    {
+      "challenge": "C11_session_expiry",
+      "connected": false,
+      "result": "PASS"
+    },
+    {
+      "challenge": "C12_payload_privacy",
+      "total": 550,
+      "leakedPII": [],
+      "result": "PASS"
+    },
+    {
+      "challenge": "C13_dup_stress",
+      "likeCount": 5,
+      "result": "PASS"
+    },
+    {
+      "challenge": "C14_multi_tab",
+      "result": "PASS"
+    },
+    {
+      "challenge": "C15_regression",
+      "result": "PASS",
+      "detail": "Full regression gate run separately"
+    }
+  ],
+  "VERDICT": "S5G_VERIFIED"
+}

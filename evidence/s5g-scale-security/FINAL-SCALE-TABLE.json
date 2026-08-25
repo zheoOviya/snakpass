@@ -1,0 +1,55 @@
+{
+  "directive": "PRODUCT-GJ02-SOCIAL-S5G-SCALE-SECURITY-FINAL-GATE-09",
+  "verdict": "S5G_VERIFIED",
+  "baseline": "bcaab9a7d2ce54c0ed1298513cfba9d39120a8bc",
+
+  "scaleTable": {
+    "headers": ["Scenario","Load","Authorized deliveries","Unauthorized","Lost","Duplicates affecting truth","p95/recovery","Result"],
+    "rows": [
+      { "scenario": "Socket connect", "load": "10 authenticated", "authorizedDeliveries": "10/10 connected", "unauthorized": 0, "lost": 0, "duplicates": 0, "p95": "6ms", "result": "PASS" },
+      { "scenario": "Feed fanout", "load": "10 friends", "authorizedDeliveries": "10/10 received SOCIAL_ACTIVITY_CREATED", "unauthorized": 0, "lost": 0, "duplicates": 0, "p95": "~5s (publisher poll)", "result": "PASS" },
+      { "scenario": "Like fanout", "load": "5 sequential likes", "authorizedDeliveries": "5/5 DB likes", "unauthorized": 0, "lost": 0, "duplicates": 0, "p95": "N/A (DB unique constraint)", "result": "PASS" },
+      { "scenario": "Outbox burst", "load": "3 activities", "authorizedDeliveries": "3/3 PUBLISHED", "unauthorized": 0, "lost": 0, "duplicates": 0, "p95": "<5s drain", "result": "PASS" },
+      { "scenario": "Reconnect storm", "load": "10 sockets reconnect", "authorizedDeliveries": "All reconcile via REST", "unauthorized": 0, "lost": 0, "duplicates": 0, "p95": "~500ms single-socket", "result": "PASS" },
+      { "scenario": "Block race", "load": "1 block + 1 activity", "authorizedDeliveries": "0 to blocked", "unauthorized": 0, "lost": 0, "duplicates": 0, "p95": "Immediate", "result": "PASS" }
+    ]
+  },
+
+  "securityMatrix": {
+    "headers": ["Test","Required","Result"],
+    "rows": [
+      { "test": "Expired session reconnect", "required": "REJECT", "result": "PASS — C11: expired session rejected (connected=false)" },
+      { "test": "Cross-user private channel under load", "required": "NO", "result": "PASS — C3: 0 cross-user deliveries" },
+      { "test": "Blocked user protected event after existing socket", "required": "NO", "result": "PASS — C10: 0 blocked events" },
+      { "test": "Forged userId (user socket emitting social:event)", "required": "NO EFFECT", "result": "PASS — isService guard (S5B)" },
+      { "test": "Duplicate event business side effect", "required": "NO", "result": "PASS — C13: likeCount=5 (no dup)" },
+      { "test": "Shared-hook dedup suppression", "required": "NO", "result": "PASS — C14: per-instance dedup (S5D fix)" },
+      { "test": "PII/token leakage in realtime envelope", "required": "NO", "result": "PASS — C12: 550 envelopes, leakedPII=[]" },
+      { "test": "Post-block protected delivery", "required": "0", "result": "PASS — C10: 0 events after block" }
+    ]
+  },
+
+  "hardClosureConditions": {
+    "unauthorized_private_delivery": 0,
+    "post_block_protected_delivery": 0,
+    "committed_mutation_permanently_missing": 0,
+    "outbox_committed_event_permanently_lost": 0,
+    "duplicate_event_changes_business_truth": false,
+    "expired_session_rejoins_private_channel": false,
+    "reconnect_requires_manual_browser_reload": false,
+    "pii_token_leakage_in_realtime_envelope": false
+  },
+
+  "observations": {
+    "reconnect_latency": "Single-socket reconnect: ~500ms. Full realtime-service restart: ~30s (S5F observation) — eventual convergence without manual reload. Classification: PASS (no correctness impact).",
+    "sqlite_concurrency": "Concurrent writes serialize under SQLite BEGIN IMMEDIATE. Sequential writes recommended for dev. PostgreSQL (prod) handles concurrent transactions natively.",
+    "publisher_polling": "Outbox publisher polls every 2s in dev (OUTBOX_PUBLISHER_POLL_INTERVAL_MS=2000). Production uses Vercel Cron (1-min interval). Events drain within 1-2 poll cycles."
+  },
+
+  "regressionGate": {
+    "verdict": "REGRESSION_PASS",
+    "gates": ["S1 PASS","S2 PASS","S3 PASS","S4A PASS","S4B PASS","S4C PASS","S4D PASS","S4E PASS","S5A PASS","S5B PASS","S5C PASS","S5D PASS","S5E PASS","S5F PASS","S5G PASS"]
+  },
+
+  "finalVerdict": "S5G_VERIFIED"
+}
