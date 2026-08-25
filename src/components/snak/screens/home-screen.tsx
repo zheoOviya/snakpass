@@ -62,6 +62,7 @@ import {
 } from '@/components/snak/skeleton-loader'
 import { SocialFeedCard } from '@/components/snak/social-feed-card'
 import { CampusBadge } from '@/components/snak/bits'
+import { FriendRankedSection } from '@/components/snak/friend-ranked-section'
 import { SendGiftFlow } from '@/components/snak/screens/send-gift-flow'
 import { CreateGroupOrderFlow } from '@/components/snak/screens/create-group-order-flow'
 
@@ -463,6 +464,14 @@ export function HomeScreen({ onRefresh }: HomeScreenProps) {
             </HorizontalScroll>
           )}
         </section>
+
+        {/* ────────────────────────────────────────────────────────────────────
+            S5H2: Popular among friends — friend-ranked discovery (additive)
+            ──────────────────────────────────────────────────────────────────── */}
+        <FriendRankedSection
+          campusId={user?.campusId}
+          onOpenRestaurant={handleRestaurantTap}
+        />
 
         {/* ────────────────────────────────────────────────────────────────────
             5. Popular Near You — grid of RestaurantCardV2

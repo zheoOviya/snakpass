@@ -13481,3 +13481,36 @@ Stage Summary:
 - API privacy: friendCount + friendCountBucket only, no friend identities
 - Analytics privacy: rankPosition + friendCountBucket, no friend IDs
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H2-IMPL-08
+Agent: S5H2 Friend-Ranked Discovery Implementation Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H2-FRIEND-RANKED-DISCOVERY-IMPLEMENTATION-08 — Implement friend-ranked restaurant discovery + runtime evidence.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == 4092823, S5H2 contract checkpoint ancestor = YES.
+- Phase 1-4 (API): Created GET /api/restaurants/friend-ranked. Query: SocialActivity with sourceOrderId + INNER JOIN Order (qualifying status) + visibility FRIENDS/PUBLIC + actorId IN accepted friends. GROUP BY restaurantId, COUNT(DISTINCT actorId), MAX(sourceOrder.createdAt). Sort: uniqueFriendCount DESC → mostRecentShareAt DESC → restaurantId ASC. LIMIT 5.
+- Phase 5-9 (tests): Runtime test suite — 11/11 PASS:
+  Z (3 friends, newer) ranks 1st ✅
+  Y (3 friends, older) ranks 2nd ✅
+  X (2 friends, 10 orders) ranks 3rd ✅ (B's 8 repeated orders count as 1 friend)
+  PRIVATE excluded ✅
+  Blocked excluded ✅
+  Result cap (3 <= 5) ✅
+  API PII audit (0 leaks) ✅
+  Analytics (IMPRESSION + RESTAURANT_OPEN) ✅
+  Analytics PII (0 leaks) ✅
+- Phase 10 (UI): Created FriendRankedSection component. Added to home screen between "Quick Reorder" and "Popular Near You". Shows "Popular among friends" (2+) or "Ordered by a friend" (1). Friend count badge on each card.
+- Phase 13-14 (measurement): FRIEND_RANKED_IMPRESSION + FRIEND_RANKED_RESTAURANT_OPEN events. Safe dimensions: experimentId, variant, restaurantId, rankPosition, friendCountBucket. Deduped by restaurantId per session.
+- Phase 16 (realtime): DEFERRED. Page-load fetch.
+- Phase 17 (failure): Section hidden on API failure, existing discovery remains usable.
+- Lint: 0 errors.
+
+Key fix during implementation: Changed recency from SocialActivity.createdAt (share time) to sourceOrder.createdAt (actual order time). This ensures ranking reflects when the order was placed, not when the share was created. Without this fix, Y (shared later but ordered earlier) would incorrectly rank above Z (shared first but ordered more recently).
+
+Stage Summary:
+- S5H2_VERIFIED
+- 3 new files: friend-ranked/route.ts, friend-ranked-section.tsx, s5h2-test.mjs
+- 2 modified files: home-screen.tsx (FriendRankedSection), analytics/track/route.ts (new events + rankPosition field)
+- Ranking formula verified: uniqueFriendCount DESC → sourceOrder.createdAt DESC → restaurantId ASC
+- Evidence checkpoint: pending commit + push

@@ -21,6 +21,8 @@ const ALLOWED_EVENTS = new Set([
   'SOCIAL_PROOF_IMPRESSION',
   'SOCIAL_PROOF_RESTAURANT_ENGAGEMENT',
   'SOCIAL_PROOF_ORDER_START',
+  'FRIEND_RANKED_IMPRESSION',
+  'FRIEND_RANKED_RESTAURANT_OPEN',
 ])
 
 const ALLOWED_FIELDS = new Set([
@@ -29,6 +31,7 @@ const ALLOWED_FIELDS = new Set([
   'variant',
   'restaurantId',
   'friendCountBucket',
+  'rankPosition',
   'timestamp',
 ])
 

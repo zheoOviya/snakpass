@@ -19,6 +19,8 @@
 //   SOCIAL_PROOF_ORDER_START — fires when user starts checkout after proof impression
 
 export type AnalyticsEvent =
+  | 'FRIEND_RANKED_IMPRESSION'
+  | 'FRIEND_RANKED_RESTAURANT_OPEN'
   | 'SOCIAL_PROOF_IMPRESSION'
   | 'SOCIAL_PROOF_RESTAURANT_ENGAGEMENT'
   | 'SOCIAL_PROOF_ORDER_START'

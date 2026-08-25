@@ -1,0 +1,71 @@
+{
+  "results": [
+    {
+      "contract": "Z ranks 1st (3 friends, newer)",
+      "expected": "Z at rank 1",
+      "actual": "Restaurant Z at rank 1",
+      "result": "PASS"
+    },
+    {
+      "contract": "Y ranks 2nd (3 friends, older)",
+      "expected": "Y at rank 2",
+      "actual": "Restaurant Y at rank 2",
+      "result": "PASS"
+    },
+    {
+      "contract": "X ranks 3rd (2 friends, 10 orders)",
+      "expected": "X at rank 3",
+      "actual": "Restaurant X at rank 3",
+      "result": "PASS"
+    },
+    {
+      "contract": "B repeated orders count once",
+      "expected": "X friendCount=2 (B+C)",
+      "actual": "X friendCount=2",
+      "result": "PASS"
+    },
+    {
+      "contract": "PRIVATE excluded",
+      "expected": "no Private restaurant",
+      "actual": "hasPrivate=false",
+      "result": "PASS"
+    },
+    {
+      "contract": "Blocked excluded",
+      "expected": "no Blocked restaurant",
+      "actual": "hasBlocked=false",
+      "result": "PASS"
+    },
+    {
+      "contract": "Result cap",
+      "expected": "<=5",
+      "actual": "length=3",
+      "result": "PASS"
+    },
+    {
+      "contract": "API PII audit",
+      "expected": "0 leaks",
+      "actual": "leaked=",
+      "result": "PASS"
+    },
+    {
+      "contract": "Analytics impression",
+      "expected": "200",
+      "actual": "status=200",
+      "result": "PASS"
+    },
+    {
+      "contract": "Analytics restaurant open",
+      "expected": "200",
+      "actual": "status=200",
+      "result": "PASS"
+    },
+    {
+      "contract": "Analytics PII",
+      "expected": "0 leaks",
+      "actual": "leaked=",
+      "result": "PASS"
+    }
+  ],
+  "VERDICT": "S5H2_VERIFIED"
+}
