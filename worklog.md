@@ -13544,3 +13544,26 @@ Stage Summary:
 - Privacy: no friend identities in DOM or analytics
 - Analytics CSRF note: POST returns 403 (minor plumbing — non-blocking)
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H2-ANALYTICS-CSRF-REPAIR-10
+Agent: S5H2 Analytics CSRF Repair Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H2-ANALYTICS-CSRF-REPAIR-CLOSURE-10 — Repair analytics 403 CSRF failure. Use canonical csrfFetch helper.
+
+Work Log:
+- Phase 1 (trace CSRF): Found canonical csrfFetch in src/lib/csrf-client.ts. It reads snakzap_csrf cookie and injects X-CSRF-Token header for POST requests. The existing analytics.ts used raw fetch() without CSRF — middleware rejected POST with 403.
+- Phase 2 (repair): Changed analytics.ts trackEvent() from raw fetch() to csrfFetch(). Added idempotencyKey: null (analytics doesn't need idempotency keys — dedup is client-side). Import csrfFetch from './csrf-client'.
+- Phase 3 (browser causality): Browser opened with friend-ranked section visible. POST /api/analytics/track → 200 (was 403). FRIEND_RANKED_IMPRESSION event successfully accepted. Screenshot: 03-analytics-fixed.png.
+- Phase 4 (payload privacy): Analytics payload contains only {event, experimentId, variant, restaurantId, friendCountBucket, rankPosition, timestamp}. No friend IDs, names, phone, email, orderId, sourceOrderId, blockedBy. PASS.
+- Phase 5 (impression dedup): impressionFired ref prevents duplicate from React rerenders. Reload creates new impression (acceptable). PASS.
+- Phase 6 (S5H1 regression): SOCIAL_PROOF_IMPRESSION POST → 200. Existing S5H1 analytics events work with csrfFetch. PASS.
+- Phase 7 (product regression): Z>Y>X ranking unchanged. friendCounts 3/3/2. PRIVATE/blocked/no-share excluded. Fallback intact. PASS.
+- Lint: 0 errors.
+
+Stage Summary:
+- S5H2_VERIFIED
+- Repair: 1 file changed (src/lib/analytics.ts — raw fetch → csrfFetch)
+- Analytics: FRIEND_RANKED_IMPRESSION → 200, FRIEND_RANKED_RESTAURANT_OPEN → 200
+- S5H1 regression: SOCIAL_PROOF_IMPRESSION → 200
+- Product regression: ranking formula, privacy, exclusions all unchanged
+- Evidence checkpoint: pending commit + push

@@ -1,15 +1,17 @@
 'use client'
 
+import { csrfFetch } from './csrf-client'
+
 // src/lib/analytics.ts
 //
-// S5H1: Minimal privacy-safe analytics event tracking.
+// S5H1/S5H2: Minimal privacy-safe analytics event tracking.
 //
 // This is NOT a full analytics platform — it's a lightweight client-side
 // event logger that sends structured events to a server endpoint for
 // collection. No third-party SDKs (no gtag, mixpanel, amplitude).
 //
 // PRIVACY CONTRACT:
-//   - Only safe dimensions are logged (experimentId, variant, restaurantId, friendCountBucket)
+//   - Only safe dimensions are logged (experimentId, variant, restaurantId, friendCountBucket, rankPosition)
 //   - NO friend userId, name, phone, email, orderId, sourceOrderId, blockedBy, session/token
 //   - Events are deduplicated on the client side to prevent React rerender spam
 //
@@ -17,6 +19,11 @@
 //   SOCIAL_PROOF_IMPRESSION — fires when social proof badge renders with >0 friends
 //   SOCIAL_PROOF_RESTAURANT_ENGAGEMENT — fires when user interacts with menu after proof impression
 //   SOCIAL_PROOF_ORDER_START — fires when user starts checkout after proof impression
+//   FRIEND_RANKED_IMPRESSION — fires when friend-ranked section renders with >0 restaurants
+//   FRIEND_RANKED_RESTAURANT_OPEN — fires when user clicks a friend-ranked restaurant card
+//
+// CSRF: Uses csrfFetch (canonical CSRF helper) to include X-CSRF-Token header
+// required by middleware for POST requests.
 
 export type AnalyticsEvent =
   | 'FRIEND_RANKED_IMPRESSION'
@@ -60,8 +67,9 @@ export function trackEvent(
   if (shouldDedup(dedupKey)) return
 
   // Fire-and-forget — analytics should never block UI
+  // Use csrfFetch to include X-CSRF-Token header (required by middleware for POST)
   try {
-    void fetch('/api/analytics/track', {
+    void csrfFetch('/api/analytics/track', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -70,6 +78,9 @@ export function trackEvent(
         timestamp: Date.now(),
       }),
       keepalive: true, // allow event to fire even if page unloads
+      // Analytics doesn't need idempotency keys — dedup is client-side.
+      // Pass null to skip auto-generated Idempotency-Key header.
+      idempotencyKey: null,
     }).catch(() => {
       // swallow — analytics failure must not affect UX
     })
