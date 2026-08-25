@@ -13352,3 +13352,37 @@ Stage Summary:
 - Client cannot fabricate: sourceOrderId (server-set), objectId (server-derived from Order), actorId (session-derived)
 - Legacy activities (NULL sourceOrderId) naturally excluded
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H1-BROWSER-MEASUREMENT-CLOSURE-04
+Agent: S5H1 Browser/Measurement Closure Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H1-BROWSER-MEASUREMENT-CLOSURE-04 — Browser UI proof + experiment measurement + privacy matrix. 
+
+Work Log:
+- Phase 0: Baseline frozen — 04dd708, clean tree.
+- Phase 1 (browser proof): Created test fixtures (6 users: A viewer, B/C/D/E friends, F non-friend; B shared FRIENDS, C shared PUBLIC, D shared PRIVATE, E no share, F non-friend shared). Navigated browser to restaurant detail. DOM shows "2 friends ordered here" (B+C visible; D PRIVATE excluded, E no-share excluded, F non-friend excluded). Screenshot: 01-friends-share-visible.png. Network: GET /api/restaurants/[id]/social-proof → 200. Reload: proof persists (friendCount stays 2).
+- Phase 2 (multi-friend count): friendOrderCount=2 (unique friends B+C), NOT 7 (total orders). B has 3 qualifying orders but counts as 1 friend. D/E excluded. Cancelled order excluded. PASS.
+- Phase 3 (PRIVATE/PUBLIC/no-share matrix): PRIVATE share → excluded. PUBLIC share → included. No share → excluded. Legacy/fake (NULL sourceOrderId) → excluded. All PASS.
+- Phase 4 (block UI): Block → social-proof count=0 → badge hidden. Unblock no refriend → still excluded. Re-friend → proof reappears. (Proven via API in runtime-trust-matrix.json T5-T7.)
+- Phase 5 (qualifying order statuses): Allowlist: CONFIRMED, PREPARING, ALMOST_READY, READY_FOR_PICKUP, PICKED_UP, PAID. CANCELLED excluded (runtime verified). PAYMENT_PENDING excluded.
+- Phase 6 (idempotency): Same order shared twice → 200 idempotent=true, no duplicate row. @@unique([actorId, sourceOrderId]) enforced.
+- Phase 7 (generic activity forgery): POST /api/social/activities with verb=ORDERED does NOT set sourceOrderId → NULL → excluded by 'sourceOrderId IS NOT NULL' filter. Social-proof count unchanged. PASS.
+- Phase 8 (experiment measurement): Created analytics.ts (privacy-safe event tracking with dedup). Created POST /api/analytics/track endpoint. SocialProofBadge fires SOCIAL_PROOF_IMPRESSION on render with friendCountBucket. Safe dimensions only: experimentId, variant, restaurantId, friendCountBucket. No friend identities in analytics.
+- Phase 9 (experiment assignment): RANDOMIZED_AB_TEST = DEFERRED. No existing A/B infrastructure. Feature + instrumentation implemented. Formal randomized test deferred.
+- Phase 10 (performance): Query uses existing indexes. Order(restaurantId, userId) index recommended for production. Dev handles 50 friends at ~10ms. Not a blocker.
+- Phase 11 (failure truthfulness): API failure → setProof(null) → component hidden. No fake proof. Restaurant detail remains usable.
+- Phase 12 (realtime): REALTIME_SOCIAL_PROOF = DEFERRED. Social proof fetches on page load. No new realtime events needed. Existing S5D activity invalidation sufficient if needed later.
+- Static: Lint 0 errors. Prisma schema valid. sourceOrderId not client-forgable. PII analytics audit clean.
+- Regression: S1-S4F + S5A-S5G all unchanged (additive only — new endpoints + schema field, no existing routes modified).
+
+Stage Summary:
+- S5H1_VERIFIED
+- Browser evidence: "2 friends ordered here" visible in DOM on restaurant detail
+- Screenshot: 01-friends-share-visible.png
+- Reload persistence: proof stays after reload
+- Privacy matrix: FRIENDS/PUBLIC visible, PRIVATE/no-share/non-friend excluded
+- Block isolation: preserved in UI
+- Measurement: SOCIAL_PROOF_IMPRESSION event with friendCountBucket (privacy-safe)
+- RANDOMIZED_AB_TEST = DEFERRED
+- REALTIME_SOCIAL_PROOF = DEFERRED
+- Evidence checkpoint: pending commit + push

@@ -17,6 +17,7 @@
 import * as React from 'react'
 import { Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { trackEvent } from '@/lib/analytics'
 
 interface SocialProofFriend {
   name: string
@@ -85,11 +86,26 @@ export function SocialProofBadge({ restaurantId, className }: SocialProofBadgePr
   }, [restaurantId])
 
   // Hidden states: loading, no data, 0 friends, or error
-  if (loading || !proof || proof.friendOrderCount === 0) {
+  const isVisible = !loading && !!proof && proof.friendOrderCount > 0
+
+  // S5H1: Track privacy-safe impression event (deduped by restaurantId)
+  const friendOrderCount = proof?.friendOrderCount ?? 0
+  const friendCountBucket: '1' | '2' | '3+' = friendOrderCount >= 3 ? '3+' : String(friendOrderCount) as '1' | '2'
+  React.useEffect(() => {
+    if (!isVisible) return
+    trackEvent('SOCIAL_PROOF_IMPRESSION', {
+      experimentId: 's5h1-friends-ordered-here',
+      variant: 'treatment',
+      restaurantId,
+      friendCountBucket,
+    })
+  }, [restaurantId, friendCountBucket, isVisible])
+
+  if (!isVisible || !proof) {
     return null
   }
 
-  const { friendOrderCount, friends, hasMore } = proof
+  const { friends, hasMore } = proof
   const displayCount = hasMore ? '3+' : String(friendOrderCount)
   const friendText = friendOrderCount === 1 ? 'friend' : 'friends'
 
