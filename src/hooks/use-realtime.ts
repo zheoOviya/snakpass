@@ -20,6 +20,9 @@ function getSocket(): Socket {
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 1000,
+    // S5A: Send cookies with the handshake so the realtime service can
+    // authenticate the session and resolve the userId.
+    withCredentials: true,
   })
   return socket
 }

@@ -89,6 +89,21 @@ const EVENT_TYPE_TO_SOCKET: Record<string, string> = {
   KILL_SWITCH_TOGGLED: 'killswitch:toggled',
 }
 
+// S5A: Social event types use a single 'social:event' socket event.
+// The payload contains { targetUserId, envelope } — the realtime service
+// routes to the user's private channel.
+const SOCIAL_EVENT_TYPES: Set<string> = new Set([
+  'SOCIAL_FRIEND_REQUEST',
+  'SOCIAL_FRIEND_ACCEPTED',
+  'SOCIAL_FRIEND_REMOVED',
+  'SOCIAL_USER_BLOCKED',
+  'SOCIAL_USER_UNBLOCKED',
+  'SOCIAL_ACTIVITY_CREATED',
+  'SOCIAL_ACTIVITY_LIKED',
+  'SOCIAL_ACTIVITY_UNLIKED',
+  'SOCIAL_NOTIFICATION_CREATED',
+])
+
 // Wave-4 4c Phase 2 — command event types that are NOT transport handoffs.
 // These events trigger a business operation (e.g., capture, refund) rather
 // than a realtime fanout. They are dispatched to dedicated handlers and never
@@ -845,7 +860,9 @@ async function publishPendingEvents(): Promise<{
       }
 
       const socketEventName = EVENT_TYPE_TO_SOCKET[event.eventType]
-      if (!socketEventName) {
+      // S5A: Social events use a different routing path
+      const isSocialEvent = SOCIAL_EVENT_TYPES.has(event.eventType)
+      if (!socketEventName && !isSocialEvent) {
         throw new Error(`Unknown event type: ${event.eventType}`)
       }
 
@@ -883,8 +900,15 @@ async function publishPendingEvents(): Promise<{
         if (!sock || !sock.connected) {
           throw new Error('Realtime service not connected — transport failed')
         }
-        sock.emit(socketEventName, payload)
-        await log({ level: 'info', message: 'event-published-via-socketio', eventId: event.eventId, eventType: event.eventType, workerId })
+
+        // S5A: Social events use 'social:event' with { targetUserId, envelope }
+        if (isSocialEvent) {
+          sock.emit('social:event', payload)
+          await log({ level: 'info', message: 'social-event-published-via-socketio', eventId: event.eventId, eventType: event.eventType, workerId, targetUserId: payload?.targetUserId?.substring(0, 12) })
+        } else {
+          sock.emit(socketEventName, payload)
+          await log({ level: 'info', message: 'event-published-via-socketio', eventId: event.eventId, eventType: event.eventType, workerId })
+        }
       }
 
       // Mark as PUBLISHED ONLY after successful transport
