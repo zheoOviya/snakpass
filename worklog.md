@@ -13320,3 +13320,35 @@ Stage Summary:
 - Trust chain: REAL ORDER (sourceOrderId FK) + AUTHORIZED SHARE (visibility) + CURRENT FRIEND/BLOCK = FRIENDS ORDERED HERE
 - All three facts server-authoritative — client cannot fabricate economic truth, share consent, or viewer authorization
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H1-IMPL
+Agent: S5H1 Implementation Agent (IDE)
+Task: S5H1 Friends Ordered Here — implementation + runtime evidence
+
+Work Log:
+- Schema migration: Added SocialActivity.sourceOrderId (nullable FK to Order) + Order.socialActivities back-relation + @@unique([actorId, sourceOrderId]) for idempotency.
+- POST /api/social/share-order: Server-authoritative endpoint. Validates order ownership (403), status (qualifying allowlist), derives restaurantId from Order (not client), sets sourceOrderId (server-only). Idempotent via @@unique.
+- GET /api/restaurants/[id]/social-proof: Queries SocialActivity with sourceOrderId IS NOT NULL + INNER JOIN Order (qualifying status) + visibility FRIENDS/PUBLIC + actorId IN accepted friends. Max 3 profiles (name + avatarColor only). No PII.
+- SocialProofBadge component: Fetches social-proof endpoint, renders avatar stack + "X friends ordered here". Hidden on loading/0 friends/error (no fake proof).
+- Restaurant detail screen: SocialProofBadge inserted above "Popular picks" carousel.
+- Runtime trust matrix (9 tests, all PASS):
+  T1: B shares order FRIENDS → A sees social proof (count=1) ✅
+  T2: Idempotent share (same order → 200, idempotent=true) ✅
+  T3: A tries to share B's order → 403 (not owner) ✅
+  T4: B shares non-existent order → 404 ✅
+  T5: A blocks B → proof disappears (count=0) ✅
+  T6: Unblock (no refriend) → still excluded (count=0) ✅
+  T7: Re-friend → proof reappears (count=1) ✅
+  T8: Fake activity (no sourceOrderId) → excluded (count stays 1) ✅
+  T9: PII audit — no userId/phone/email/orderId in response ✅
+- Lint: 0 errors.
+
+Stage Summary:
+- S5H1_VERIFIED
+- 4 files created: share-order/route.ts, social-proof/route.ts, social-proof-badge.tsx, s5h1-test.mjs
+- 2 files modified: prisma/schema.prisma (sourceOrderId + relation + unique), restaurant-detail-screen.tsx (SocialProofBadge import + render)
+- Trust chain: REAL ORDER (sourceOrderId FK) + AUTHORIZED SHARE (visibility) + CURRENT FRIEND/BLOCK = FRIENDS ORDERED HERE
+- Client cannot fabricate: sourceOrderId (server-set), objectId (server-derived from Order), actorId (session-derived)
+- Legacy activities (NULL sourceOrderId) naturally excluded
+- Evidence checkpoint: pending commit + push

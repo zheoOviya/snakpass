@@ -1,0 +1,107 @@
+prisma:query DELETE FROM `main`.`User` WHERE `main`.`User`.`phone` IN (?,?)
+prisma:query SELECT `main`.`Campus`.`id` FROM `main`.`Campus` WHERE 1=1 LIMIT ? OFFSET ?
+prisma:query INSERT INTO `main`.`User` (`id`, `phone`, `name`, `role`, `spiceTolerance`, `walletBalance`, `createdAt`, `campusId`) VALUES (?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `phone` AS `phone`, `email` AS `email`, `passwordHash` AS `passwordHash`, `name` AS `name`, `role` AS `role`, `spiceTolerance` AS `spiceTolerance`, `walletBalance` AS `walletBalance`, `createdAt` AS `createdAt`, `campusId` AS `campusId`
+prisma:query INSERT INTO `main`.`User` (`id`, `phone`, `name`, `role`, `spiceTolerance`, `walletBalance`, `createdAt`, `campusId`) VALUES (?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `phone` AS `phone`, `email` AS `email`, `passwordHash` AS `passwordHash`, `name` AS `name`, `role` AS `role`, `spiceTolerance` AS `spiceTolerance`, `walletBalance` AS `walletBalance`, `createdAt` AS `createdAt`, `campusId` AS `campusId`
+prisma:query INSERT INTO `main`.`Session` (`token`, `userId`, `role`, `expiresAt`, `createdAt`, `lastActivityAt`) VALUES (?,?,?,?,?,?) RETURNING `token` AS `token`, `userId` AS `userId`, `role` AS `role`, `expiresAt` AS `expiresAt`, `createdAt` AS `createdAt`, `lastIp` AS `lastIp`, `lastActivityAt` AS `lastActivityAt`
+prisma:query INSERT INTO `main`.`Session` (`token`, `userId`, `role`, `expiresAt`, `createdAt`, `lastActivityAt`) VALUES (?,?,?,?,?,?) RETURNING `token` AS `token`, `userId` AS `userId`, `role` AS `role`, `expiresAt` AS `expiresAt`, `createdAt` AS `createdAt`, `lastIp` AS `lastIp`, `lastActivityAt` AS `lastActivityAt`
+prisma:query INSERT INTO `main`.`Restaurant` (`id`, `name`, `cuisine`, `description`, `image`, `rating`, `prepTimeMins`, `priceForTwo`, `commissionRate`, `isActive`, `isSuspended`, `gstNumber`, `address`, `createdAt`, `campusId`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `name` AS `name`, `cuisine` AS `cuisine`, `description` AS `description`, `image` AS `image`, `rating` AS `rating`, `prepTimeMins` AS `prepTimeMins`, `priceForTwo` AS `priceForTwo`, `commissionRate` AS `commissionRate`, `isActive` AS `isActive`, `isSuspended` AS `isSuspended`, `gstNumber` AS `gstNumber`, `address` AS `address`, `createdAt` AS `createdAt`, `campusId` AS `campusId`, `ownerUserId` AS `ownerUserId`
+prisma:query INSERT INTO `main`.`Order` (`id`, `userId`, `restaurantId`, `status`, `totalAmount`, `pickupOtp`, `isCatering`, `itemsCount`, `createdAt`, `updatedAt`, `statusHistory`, `version`) VALUES (?,?,?,?,?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `userId` AS `userId`, `restaurantId` AS `restaurantId`, `status` AS `status`, `totalAmount` AS `totalAmount`, `pickupOtp` AS `pickupOtp`, `isCatering` AS `isCatering`, `headcount` AS `headcount`, `itemsCount` AS `itemsCount`, `note` AS `note`, `createdAt` AS `createdAt`, `updatedAt` AS `updatedAt`, `statusHistory` AS `statusHistory`, `version` AS `version`
+prisma:query INSERT INTO `main`.`SocialConnection` (`id`, `followerId`, `followeeId`, `status`, `requestedAt`, `acceptedAt`, `createdAt`, `updatedAt`) VALUES (?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `followerId` AS `followerId`, `followeeId` AS `followeeId`, `status` AS `status`, `requestedAt` AS `requestedAt`, `acceptedAt` AS `acceptedAt`, `message` AS `message`, `blockedBy` AS `blockedBy`, `createdAt` AS `createdAt`, `updatedAt` AS `updatedAt`
+prisma:query INSERT INTO `main`.`SocialConnection` (`id`, `followerId`, `followeeId`, `status`, `requestedAt`, `acceptedAt`, `createdAt`, `updatedAt`) VALUES (?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `followerId` AS `followerId`, `followeeId` AS `followeeId`, `status` AS `status`, `requestedAt` AS `requestedAt`, `acceptedAt` AS `acceptedAt`, `message` AS `message`, `blockedBy` AS `blockedBy`, `createdAt` AS `createdAt`, `updatedAt` AS `updatedAt`
+Setup: A=cmt8sd9z, B=cmt8sd9z, Rest=cmt8sd9z, Order=cmt8sd9z
+
+=== TEST 1: B shares order (FRIENDS) ===
+Share: 201 {"activity":{"id":"cmt8sdam40001mbcfr35bwtkd","verb":"ORDERED","objectType":"Restaurant","objectId":"cmt8sd9zj0005mbjm3snjs7y7","visibility":"FRIENDS","sourceOrderId":"cmt8sd9zk0007mbjmuse1tuo0","createdAt":"2026-08-25T14:54:36.796Z"},"idempotent":false}
+Proof (A sees): 200 {"friendOrderCount":1,"friends":[{"name":"S5H1 B","avatarColor":"rose"}],"hasMore":false}
+
+=== TEST 2: B shares same order again (idempotent) ===
+Share2: 200 {"activity":{"id":"cmt8sdam40001mbcfr35bwtkd","verb":"ORDERED","objectType":"Restaurant","objectId":"cmt8sd9zj0005mbjm3snjs7y7","visibility":"FRIENDS","sourceOrderId":"cmt8sd9zk0007mbjmuse1tuo0","createdAt":"2026-08-25T14:54:36.796Z"},"idempotent":true}
+
+=== TEST 3: A tries to share B order (403) ===
+Share3: 403 {"error":{"code":"AUTHORIZATION_DENIED","message":"You can only share your own orders","traceId":"8dc7d642-816a-4372-9c58-dd6956c66c5b"}}
+
+=== TEST 4: B shares non-existent order (404) ===
+Share4: 404 {"error":{"code":"NOT_FOUND","message":"Order not found","traceId":"1e6b4e80-e9f3-4921-b9fd-226745f95344","details":{"orderId":"nonexistent-order"}}}
+
+=== TEST 5: A blocks B → proof disappears ===
+prisma:query SELECT `main`.`SocialConnection`.`id`, `main`.`SocialConnection`.`followerId`, `main`.`SocialConnection`.`followeeId`, `main`.`SocialConnection`.`status`, `main`.`SocialConnection`.`requestedAt`, `main`.`SocialConnection`.`acceptedAt`, `main`.`SocialConnection`.`message`, `main`.`SocialConnection`.`blockedBy`, `main`.`SocialConnection`.`createdAt`, `main`.`SocialConnection`.`updatedAt` FROM `main`.`SocialConnection` WHERE (`main`.`SocialConnection`.`followerId` = ? AND `main`.`SocialConnection`.`followeeId` = ?) LIMIT ? OFFSET ?
+Proof after block: 200 {"friendOrderCount":0,"friends":[],"hasMore":false}
+
+=== TEST 6: Unblock (no refriend) → still excluded ===
+Proof after unblock: 200 {"friendOrderCount":0,"friends":[],"hasMore":false}
+
+=== TEST 7: Re-friend → proof reappears ===
+prisma:query INSERT INTO `main`.`SocialConnection` (`id`, `followerId`, `followeeId`, `status`, `requestedAt`, `acceptedAt`, `createdAt`, `updatedAt`) VALUES (?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `followerId` AS `followerId`, `followeeId` AS `followeeId`, `status` AS `status`, `requestedAt` AS `requestedAt`, `acceptedAt` AS `acceptedAt`, `message` AS `message`, `blockedBy` AS `blockedBy`, `createdAt` AS `createdAt`, `updatedAt` AS `updatedAt`
+prisma:query INSERT INTO `main`.`SocialConnection` (`id`, `followerId`, `followeeId`, `status`, `requestedAt`, `acceptedAt`, `createdAt`, `updatedAt`) VALUES (?,?,?,?,?,?,?,?) RETURNING `id` AS `id`, `followerId` AS `followerId`, `followeeId` AS `followeeId`, `status` AS `status`, `requestedAt` AS `requestedAt`, `acceptedAt` AS `acceptedAt`, `message` AS `message`, `blockedBy` AS `blockedBy`, `createdAt` AS `createdAt`, `updatedAt` AS `updatedAt`
+Proof after refriend: 200 {"friendOrderCount":1,"friends":[{"name":"S5H1 B","avatarColor":"rose"}],"hasMore":false}
+
+=== TEST 8: Fake activity (no sourceOrderId) → excluded ===
+Fake activity: 201 {"activity":{"id":"cmt8sddhd0004mbcfkarq9f0i","actorId":"cmt8sd9ze0003mbjm4rtmfdy6","verb":"ORDERED","objectType":"Restaurant","objectId":"cmt8sd9zj0005mbjm3snjs7y7","metadata":{"restaurantName":"Fake"},"visibility":"FRIENDS","createdAt":"2026-08-25T14:54:40.513Z"}}
+Proof (fake excluded): 200 {"friendOrderCount":1,"friends":[{"name":"S5H1 B","avatarColor":"rose"}],"hasMore":false}
+
+=== TEST 9: PII audit ===
+Leaked PII: []
+prisma:query DELETE FROM `main`.`SocialActivity` WHERE `main`.`SocialActivity`.`actorId` IN (?,?)
+prisma:query DELETE FROM `main`.`Like` WHERE `main`.`Like`.`userId` IN (?,?)
+prisma:query DELETE FROM `main`.`SocialConnection` WHERE (`main`.`SocialConnection`.`followerId` = ? OR `main`.`SocialConnection`.`followeeId` = ? OR `main`.`SocialConnection`.`followerId` = ? OR `main`.`SocialConnection`.`followeeId` = ?)
+prisma:query DELETE FROM `main`.`Notification` WHERE `main`.`Notification`.`userId` IN (?,?)
+prisma:query DELETE FROM `main`.`Order` WHERE `main`.`Order`.`id` = ?
+prisma:query DELETE FROM `main`.`Restaurant` WHERE `main`.`Restaurant`.`id` = ?
+prisma:query DELETE FROM `main`.`Session` WHERE `main`.`Session`.`userId` IN (?,?)
+prisma:query DELETE FROM `main`.`User` WHERE `main`.`User`.`id` IN (?,?)
+
+=== RESULTS ===
+{
+  "results": [
+    {
+      "test": "T1_share_FRIENDS_A_sees",
+      "shareStatus": 201,
+      "proofStatus": 200,
+      "friendCount": 1,
+      "hasB": true,
+      "result": "PASS"
+    },
+    {
+      "test": "T2_idempotent_share",
+      "status": 200,
+      "idempotent": true,
+      "result": "PASS"
+    },
+    {
+      "test": "T3_not_owner_403",
+      "status": 403,
+      "result": "PASS"
+    },
+    {
+      "test": "T4_not_found_404",
+      "status": 404,
+      "result": "PASS"
+    },
+    {
+      "test": "T5_block_excludes",
+      "friendCount": 0,
+      "result": "PASS"
+    },
+    {
+      "test": "T6_unblock_no_refriend_excluded",
+      "friendCount": 0,
+      "result": "PASS"
+    },
+    {
+      "test": "T7_refriend_proof_reappears",
+      "friendCount": 1,
+      "result": "PASS"
+    },
+    {
+      "test": "T8_fake_activity_excluded",
+      "friendCount": 1,
+      "result": "PASS"
+    },
+    {
+      "test": "T9_pii_audit",
+      "leakedPII": [],
+      "result": "PASS"
+    }
+  ],
+  "VERDICT": "S5H1_VERIFIED"
+}

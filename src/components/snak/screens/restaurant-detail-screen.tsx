@@ -50,6 +50,7 @@ import {
 import { MenuItemCardV2 } from '../menu-item-card-v2'
 import { MenuItemSkeleton } from '../skeleton-loader'
 import { EmptyState } from '../empty-state'
+import { SocialProofBadge } from '../social-proof-badge'
 import { SendGiftFlow } from './send-gift-flow'
 import { CreateGroupOrderFlow } from './create-group-order-flow'
 
@@ -767,6 +768,11 @@ export function RestaurantDetailScreen({
           </div>
         </section>
       )}
+
+      {/* ══════════════════════════════════════════════════════════════════════
+          S5H1: FRIENDS ORDERED HERE (social proof — above popular items)
+         ══════════════════════════════════════════════════════════════════════ */}
+      <SocialProofBadge restaurantId={restaurant.id} />
 
       {/* ══════════════════════════════════════════════════════════════════════
           POPULAR ITEMS CAROUSEL (above the categories bar for visibility)

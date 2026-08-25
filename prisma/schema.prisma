@@ -257,6 +257,8 @@ model Order {
   // NEXT_FULFILMENT_STATUS machine (PREPARING → ALMOST_READY → READY_FOR_PICKUP → PICKED_UP).
   // Lazy-created on first access via GET/PATCH /api/orders/[id]/fulfilment.
   fulfilment     Fulfilment?
+  // S5H1: Back-relation for SocialActivity.sourceOrderId (social proof).
+  socialActivities SocialActivity[]
 }
 
 model OrderItem {
@@ -1175,9 +1177,22 @@ model SocialActivity {
   visibility    String   @default("FRIENDS")
   createdAt     DateTime @default(now())
 
+  // S5H1: Authoritative link to the Order that triggered this activity.
+  // NULL for activities not tied to a specific order (e.g., FRIEND_ADDED,
+  // legacy client-created ORDERED activities).
+  // Server-set ONLY via POST /api/social/share-order — client cannot set this.
+  // Used by GET /api/restaurants/[id]/social-proof to verify economic truth
+  // (real Order with qualifying status) + explicit share consent (visibility).
+  sourceOrderId String?
+  sourceOrder   Order?   @relation(fields: [sourceOrderId], references: [id], onDelete: SetNull)
+
   @@index([actorId, createdAt])
   @@index([createdAt])
   @@index([verb, createdAt])
+  // S5H1: Idempotency — one ORDERED share per (actorId, sourceOrderId).
+  // Prevents duplicate social-proof amplification from repeated share calls.
+  // Only applies when sourceOrderId IS NOT NULL (legacy rows have NULL → excluded).
+  @@unique([actorId, sourceOrderId])
 }
 
 // ---------------------------------------------------------------------------
