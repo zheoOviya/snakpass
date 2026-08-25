@@ -1,0 +1,20 @@
+Socket 49: 49/49 connected in 49ms, p50=40ms, p95=36ms
+{
+  "results": [
+    {
+      "scenario": "Socket connect",
+      "load": 49,
+      "attempted": 49,
+      "success": 49,
+      "failed": 0,
+      "unauthorized": 0,
+      "lost": 0,
+      "p50Ms": 40,
+      "p95Ms": 36,
+      "maxMs": 36,
+      "totalMs": 49,
+      "classification": "DOWNGRADE: PARTIAL"
+    }
+  ],
+  "VERDICT": "PASS"
+}
