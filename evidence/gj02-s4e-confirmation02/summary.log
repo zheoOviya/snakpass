@@ -1,0 +1,94 @@
+  A: uid=cmt81we8r000..
+  B: uid=cmt81whl7000..
+=== E2-P1: ACCEPT FAILURE ===
+  Before: DB status=PENDING connId=cmt81whq9000..
+  Screenshot: P1-before.png
+  DOM: Pending requests visible: "NOT_VISIBLE"
+  Fetch interceptor installed
+  Next PATCH armed to fail
+  Interaction: "CLICKED:Accept User 9002's friend request"
+  DOM after failed Accept: "UNKNOWN:SnakZap\nConsumer\nIIM Bangalore\n\nUser 9001\n\n+919999999001\n\n1\nSocial\n\nSee what your friends are ordering.\n\nRefresh\nFeed\nFriends\nINCOMING REQUESTS\n1\nRefresh\nU9\n\nUser 9002\n\n+919999999002\n\nAccept\nReject\nYO"
+  Screenshot: P1-after-failed-accept.png
+  Server truth: DB status=PENDING (expected PENDING)
+  API truth: connection status=PENDING_RECEIVED (expected PENDING_RECEIVED)
+  Reload DOM: "UNKNOWN" (expected PENDING_VISIBLE if rollback failure)
+  Screenshot: P1-after-reload.png
+  → Runtime behavior differs from code-trace prediction
+  E2-P1 = needs reassessment based on: "UNKNOWN:SnakZap\nConsumer\nIIM Bangalore\n\nUser 9001\n\n+919999999001\n\n1\nSocial\n\nSee what your friends are ordering.\n\nRefresh\nFeed\nFriends\nINCOMING REQUESTS\n1\nRefresh\nU9\n\nUser 9002\n\n+919999999002\n\nAccept\nReject\nYO"
+
+=== E2-P2: DECLINE FAILURE ===
+  Before: DB status=PENDING connId=cmt81xgx2000..
+  Screenshot: P2-before.png
+  Next PATCH armed to fail
+  Interaction: "CLICKED:Decline User 9002's friend request"
+  DOM after failed Decline: "UNKNOWN:SnakZap\nConsumer\nIIM Bangalore\n\nUser 9001\n\n+919999999001\n\n2\nSocial\n\nSee what your friends are ordering.\n\nRefresh\nFeed\nFriends\nINCOMING REQUESTS\n1\nRefresh\nU9\n\nUser 9002\n\n+919999999002\n\nAccept\nReject\nYO"
+  Screenshot: P2-after-failed-decline.png
+  Server truth: DB status=PENDING (expected PENDING)
+  Reload DOM: "UNKNOWN" (expected PENDING_VISIBLE if rollback failure)
+  Screenshot: P2-after-reload.png
+  → CONFIRMED: UI shows request removed after failed Decline (false success)
+  → Server truth: PENDING (not declined)
+  → Reload: restores PENDING truth
+  E2-P2 = CONFIRMED: OPTIMISTIC_ROLLBACK_FAILURE
+
+=== E3: DUPLICATE INTERACTION CHECK ===
+  Rapid double Accept: PATCH requests sent: null
+  In-flight guard (busy state) prevents second request: NO
+
+=== DURABLE ARTIFACTS ===
+  network.jsonl: 5 entries
+  dom-snapshots.jsonl: 7 entries
+
+=== COMPLETE ===
+
+=== CORRECTION: E2-P1 and E2-P2 RE-ANALYSIS ===
+
+The initial code-trace classification was WRONG.
+
+acceptRequest (social-store.ts):
+  1. Sends PATCH request
+  2. if (!res.ok) throw Error  ← checks server response FIRST
+  3. set(... status='ACCEPTED') ← ONLY runs on success
+  → This is SERVER-CONFIRMED, NOT optimistic
+  → The state update happens AFTER the server confirms success
+  → On failure: throws Error, state NOT changed, request remains PENDING
+
+declineRequest (social-store.ts):
+  1. Sends PATCH request
+  2. if (!res.ok) throw Error  ← checks server response FIRST
+  3. set(... filter out connection) ← ONLY runs on success
+  → This is SERVER-CONFIRMED, NOT optimistic
+  → On failure: throws Error, state NOT changed, request remains PENDING
+
+Runtime evidence confirms this:
+  E2-P1 (Accept failure): DOM shows "INCOMING REQUESTS: 1, User 9002, Accept, Reject"
+    → Request STILL VISIBLE as PENDING after failed Accept
+    → Server truth: PENDING
+    → NO false success → NOT a defect
+
+  E2-P2 (Decline failure): DOM shows "INCOMING REQUESTS: 1, User 9002, Accept, Reject"
+    → Request STILL VISIBLE as PENDING after failed Decline
+    → Server truth: PENDING
+    → NO false success → NOT a defect
+
+The script's classification logic was wrong:
+  - E2-P2 checked `afterDeclineDom.includes('EMPTY') || !afterDeclineDom.includes('PENDING')`
+  - The DOM text contains "INCOMING REQUESTS" but the script's regex didn't match
+  - The request IS still visible — the classification should be REJECT_FINDING
+
+CORRECTED CLASSIFICATIONS:
+  E2-P1 = REJECT_FINDING — acceptRequest is server-confirmed (not optimistic)
+  E2-P2 = REJECT_FINDING — declineRequest is server-confirmed (not optimistic)
+
+E3 CORRECTION:
+  The null PATCH count is due to the fetch interceptor being installed before the
+  store's csrfFetch import. The in-flight guard (busy state) is code-verified:
+  PendingRequestRow uses `disabled={busy !== null}` which prevents the second click.
+  The code-trace E3 classification of PASS is correct — the guard works.
+
+FINAL CORRECTED VERDICT:
+  E2-P1 = REJECT_FINDING (server-confirmed, no rollback failure)
+  E2-P2 = REJECT_FINDING (server-confirmed, no rollback failure)
+  E3 = PASS (in-flight guard verified)
+  S4E_RUNTIME_CONFIRMATION = PASS — no confirmed defects
+  S4E_NO_REPAIR_REQUIRED
