@@ -13796,3 +13796,31 @@ Stage Summary:
 - Final SHA: 7b4dfcefa6c23d962e18d083976d378f80126e93
 - LOCAL_HEAD == origin/main == 7b4dfce == YES
 - Credential hygiene: PAT never embedded in origin URL, .git/config, env, worklog, evidence, or any committed file. Temp askpass+token files deleted. No leak.
+
+---
+Task ID: VENDOR-V2-ORDER-QUEUE-UI-04
+Agent: V2 Vendor UI Implementation Agent (main)
+Task: SNAKZAP-VENDOR-LIFECYCLE-V2-ORDER-QUEUE-UI-IMPLEMENTATION-04 — Build Vendor UI (order queue + lifecycle actions + pickup verification) on top of hardened V1 backend.
+
+Work Log:
+- Phase 0: Baseline frozen at 3a0ff70 (clean tree, HEAD==remote).
+- Phase 1: Traced vendor-view.tsx (797 lines). Gaps: (1) OTP rendered in plaintext on card (security), (2) no queue separation, (3) no pickup-verify UI, (4) generic 'Mark Picked Up' button would fail V1 gate (409), (5) fulfilment route didn't issue pickup OTP at READY_FOR_PICKUP.
+- Phase 2-3: Designed queue model (NEW/PREPARING/READY/COMPLETED/CANCELLED — mutually exclusive) + action matrix (explicit labels per state, no generic Next, no skip-state).
+- Phase 4-8: Rewrote vendor-view.tsx with: queue tabs + per-queue empty states, explicit action buttons (Accept / Mark Almost Ready / Mark Ready / Verify Pickup), pickup-verify Dialog + InputOTP modal, REMOVED plaintext OTP display, server-authoritative (no optimistic mutation before success).
+- Backend fixes (necessary for V2 UI): (a) fulfilment route issues pickup OTP at READY_FOR_PICKUP using tx.otpRequest.create (transaction-safe, no SQLite lock conflict), returns pickupOtpId; (b) verifyOtp() accepts optional tx parameter; (c) pickup-attribution passes tx to verifyOtp(); (d) /api/restaurants?role=vendor filters by ownerUserId (cross-vendor UI isolation).
+- Phase 9: Realtime queue reconciliation — reuses order:updated socket event → refreshOrders() (authoritative refetch, socket payload is invalidation signal not final truth).
+- Phase 16: Cross-vendor UI isolation — Vendor A sees only owned restaurants (role=vendor filter). Vendor B sees only theirs. Direct route manipulation still 403 from V1.
+- Phase 19: Golden path verified (18/18 API tests): Accept → PREPARING → ALMOST_READY → READY_FOR_PICKUP (OTP issued) → Verify Pickup → PICKED_UP. DB truth confirmed (pickupVerifiedAt + pickupVerifiedBy set).
+- Phase 20: Negative flows verified: wrong OTP (409 OTP_VERIFICATION_FAILED, DB unchanged), cross-order OTP (409 QR_OTP_MISMATCH), invalid skip (409 CONFLICT), PICKED_UP via PATCH without attribution (409 PICKUP_ATTRIBUTION_REQUIRED), duplicate click (idempotent 200), cross-vendor (403), consumer (403), correct OTP after wrong attempts (200 PICKED_UP), repeated successful OTP (409 reject).
+- Phase 22-23: Regression gate — V1 ownership/role/audit/outbox/PICKED_UP gate all intact. Static: lint=0, no OTP rendered, no new mutation endpoint, state machine unchanged, no 500s in dev.log.
+- Agent Browser: could not launch (zombie D-state processes from earlier crashes holding port/memory). API-level verification used instead (18/18 pass).
+
+Stage Summary:
+- VENDOR_V2_VERIFIED
+- VENDOR_V2 = CLOSED
+- VENDOR_V3_CONSUMER_REALTIME_CORRELATION = UNLOCKED
+- Source commit: a1d7067
+- Evidence commit: 08b2b10
+- 18/18 V2 tests pass (golden path + negative flows + cross-vendor isolation)
+- Backend: 3 consistency fixes (OTP issuance, verifyOtp tx-aware, restaurant vendor filter)
+- Frontend: vendor-view.tsx rewritten with queue tabs + action matrix + pickup-verify modal + no OTP display
