@@ -13771,3 +13771,28 @@ Stage Summary:
 - LOCAL_HEAD = c7c40b0, REMOTE_MAIN = b24ee88 (1+ commits ahead)
 - Push BLOCKED: no GitHub PAT available in this session (previous token deleted per credential hygiene). Remote reachable (HTTP 200, fetch works).
 - All P0/P1 gaps closed. State machine unchanged. No new Vendor UI.
+
+---
+Task ID: VENDOR-V1-REMOTE-CHECKPOINT-FINALIZE-03
+Agent: V1 Remote Checkpoint Closure Agent (main)
+Task: SNAKZAP-VENDOR-V1-REMOTE-CHECKPOINT-FINALIZE-03 — Push V1 source+evidence commits to origin/main. Verify LOCAL_HEAD == origin/main. Credential hygiene sweep.
+
+Work Log:
+- Step 1: Working tree CLEAN (verified before push).
+- Step 2: Local HEAD = 7b4dfce. Verified all 4 required commits present in history: c16982c (housekeeping), 314debb (source repair), c7c40b0 (evidence), 7b4dfce (worklog).
+- Step 3: Created temp token file /tmp/gh-token.zbUWQS (chmod 600, outside repo) + temp GIT_ASKPASS script /tmp/gh-askpass.BENL8v.sh (chmod 700, token path embedded NOT the token value). GITHUB_TOKEN passed only via temp file, never in env var or command line.
+- Step 5: PUSH SUCCEEDED — b24ee88..7b4dfce main -> main. Origin URL unchanged (https://github.com/zheoOviya/snakpass.git) — no PAT embedded in URL.
+- Step 6: Immediately deleted both temp files (/tmp/gh-token.zbUWQS + /tmp/gh-askpass.BENL8v.sh). Verified gone. No remnant files in /tmp.
+- Step 7: Origin URL verified clean — no PAT in remote URL or .git/config.
+- Step 8: git fetch origin succeeded.
+- Step 9: LOCAL_HEAD = 7b4dfce, origin/main = 7b4dfce. LOCAL_HEAD == origin/main == YES. Pushed commit byte-for-byte identical (no amend/rewrite).
+- Step 10: Comprehensive PAT leak check (10 surfaces): git config (global+local), remote URL, .git/config, tracked repo files, worklog+evidence, /tmp temp files, .env files, ~/.git-credentials, shell history. ALL CLEAN — no PAT leak anywhere.
+- Remote reachable: GitHub HTTP 200.
+
+Stage Summary:
+- VENDOR_V1_REMOTE_CHECKPOINT=PASS
+- VENDOR_V1=CLOSED
+- V2_VENDOR_UI=UNLOCKED
+- Final SHA: 7b4dfcefa6c23d962e18d083976d378f80126e93
+- LOCAL_HEAD == origin/main == 7b4dfce == YES
+- Credential hygiene: PAT never embedded in origin URL, .git/config, env, worklog, evidence, or any committed file. Temp askpass+token files deleted. No leak.
