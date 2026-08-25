@@ -13239,3 +13239,34 @@ Stage Summary:
 - 3 experiments selected (V2+V6, V3, V7), 4 rejected (V5, V8, V9, V10)
 - Minimum viable experiment: S5H1 "Friends Ordered Here" social proof on restaurant detail
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H1-CONTRACT-CHALLENGE-01
+Agent: S5H1 Social-Proof Contract Auditor (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H1-FRIENDS-ORDERED-HERE-CONTRACT-CHALLENGE-01 — Freeze authoritative query, privacy boundary, and experiment measurement contract. NO PRODUCT CODE CHANGES.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == dbd6f78, S5H planning checkpoint ancestor = YES.
+- Phase 1 (data model): CRITICAL FINDING — SocialActivity.objectId is client-supplied (not a FK). Order creation does NOT auto-create SocialActivity. POST /api/social/activities is client-initiated — users can create "ORDERED" activities for any restaurant without actually ordering. However, Order.restaurantId IS a proper FK to Restaurant.id, server-created, payment-gated.
+- Phase 2 (definition): Qualifying friend = current ACCEPTED SocialConnection + real Order (status != CANCELLED, note != GIFT:%) at target restaurant. Historical friendships don't qualify. Block excludes.
+- Phase 3 (API contract): GET /api/restaurants/[id]/social-proof → {friendOrderCount, friends:[{name, avatarColor}], hasMore}. Max 3 friends. NO userId, phone, email, orderId, timestamp.
+- Phase 4 (query contract): 3-query strategy — (1) accepted friends bidirectional UNION, (2) DISTINCT friends with orders at restaurant, (3) project max 3 profiles. Deterministic order: MAX(createdAt) DESC, userId ASC.
+- Phase 5 (block/privacy): Block isolation preserved — SocialConnection status=ACCEPTED excludes BLOCKED. Order table has no visibility concept (orders are social facts). Non-friend orders excluded (not in friend list).
+- Phase 6 (PII): Only name + avatarColor projected. No userId, phone, email, blockedBy, orderId, paymentId, amount, timestamp, address, campus.
+- Phase 7 (count): friendOrderCount = unique friends who qualify (NOT order count, NOT activity count, NOT like count).
+- Phase 8 (UI): Compact form "3 friends ordered here" + avatar stack. 0 friends → absent. Loading/failure → absent (no fake proof).
+- Phase 9 (placement): Above "Popular Items" carousel, below restaurant header/campus info. Supports discovery confidence, doesn't obstruct checkout.
+- Phase 10 (measurement): Primary = order-start conversion after proof impression. Secondary = impressions, friend-count distribution, menu interaction. Guardrails = block rate, unfriend rate, latency, error rate.
+- Phase 11 (analytics): SOCIAL_PROOF_IMPRESSION + SOCIAL_PROOF_ORDER_START events. friendCountBucket (0/1/2/3+) only — NO friend IDs in analytics.
+- Phase 12 (experiment design): Control (no proof) vs Treatment (proof). Eligibility: authenticated + restaurant has >=1 qualifying friend. No existing experiment infra — report as note.
+- Phase 13 (performance): 3 indexed queries, ~10ms at 50 friends. Needs Order(restaurantId,userId) index for production scale. Not a blocker for dev.
+- Phase 14 (abuse): CRITICAL — SocialActivity is client-fabricatable. S5H1 mitigates by querying Order table (server-created, payment-gated). Cannot inflate via fake activities.
+- Phase 15 (realtime): No new realtime events needed. Social proof is static during page view. Fetch on page load only.
+
+Stage Summary:
+- S5H1_IMPLEMENTATION_READY
+- Key design decision: Query Order table (authoritative) NOT SocialActivity (client-fabricatable)
+- 15/15 contract matrix entries: READY
+- No hard blockers
+- Production note: add Order(restaurantId,userId) index before prod launch
+- Evidence checkpoint: pending commit + push
