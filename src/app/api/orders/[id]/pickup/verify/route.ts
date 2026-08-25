@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db, withTransaction, TransactionConflictError } from '@/lib/db'
+import { withTransaction, TransactionConflictError } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { withErrorHandler, apiError, IdempotencyKeyReuseError } from '@/lib/errors'
 import { validateBody, pickupVerifyBodySchema } from '@/lib/validation'
 import { info as logInfo, warn as logWarn, newTraceId } from '@/lib/logger'
 import { enqueueOutboxEvent } from '@/lib/outbox'
+import { auditWithTx, audit } from '@/lib/audit'
 import {
   getIdempotencyKey,
   getCachedResponse,
@@ -207,41 +208,45 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
         // SUCCESS — write AuditLog (PICKUP_VERIFIED, 5 attribution fields) +
         // Outbox (FULFILMENT_STATUS_CHANGED with attribution payload)
         // -------------------------------------------------------------------
-        await tx.auditLog.create({
-          data: {
-            actorId: session.userId,
-            actorRole: session.role,
-            action: 'PICKUP_VERIFIED',
-            metadata: JSON.stringify({
-              // 5 attribution fields (per P0-07 §6.1 step 8):
-              orderId: attributionResult.attribution.orderId,
-              collectorIdentity: attributionResult.attribution.collectorIdentity,
-              timestamp: attributionResult.attribution.timestamp,
-              verificationMethod: attributionResult.attribution.verificationMethod,
-              verificationResult: attributionResult.attribution.verificationResult,
-              // Additional context for forensic audit (NOT part of the 5-field
-              // contract, but useful for downstream analysis):
-              collectorRole: attributionResult.attribution.collectorRole,
-              fulfilmentId: attributionResult.fulfilmentId,
-              newVersion: attributionResult.newVersion,
-            }),
+        // PHASE 5 (P1) — Canonical chained audit (NOT direct tx.auditLog.create).
+        // Actor role is ALWAYS session.role (actual verifier role). Metadata
+        // includes the 5 attribution fields + forensic context. No secrets.
+        await auditWithTx(
+          tx,
+          'PICKUP_VERIFIED',
+          {
+            // 5 attribution fields (per P0-07 §6.1 step 8):
+            orderId: attributionResult.attribution.orderId,
+            collectorIdentity: attributionResult.attribution.collectorIdentity,
+            timestamp: attributionResult.attribution.timestamp,
+            verificationMethod: attributionResult.attribution.verificationMethod,
+            verificationResult: attributionResult.attribution.verificationResult,
+            // Additional context for forensic audit (NOT part of the 5-field
+            // contract, but useful for downstream analysis):
+            collectorRole: attributionResult.attribution.collectorRole,
+            fulfilmentId: attributionResult.fulfilmentId,
+            newVersion: attributionResult.newVersion,
           },
-        })
+          session.userId,
+          session.role,
+        )
 
-        // Outbox event — reuses the existing FULFILMENT_STATUS_CHANGED event
-        // type (additive — no new event type registered in
-        // EVENT_TYPE_TO_SOCKET_EVENT). The payload now includes the attribution
-        // fields, which downstream consumers can read if needed.
+        // PHASE 6/7 (P0-2) — Transactional outbox event (durable realtime).
+        // V1: Reuse the existing ORDER_STATUS_CHANGED event type (mapped to
+        // the `order:updated` Socket.io event by the publisher). The previous
+        // FULFILMENT_STATUS_CHANGED type was NOT in the publisher's
+        // EVENT_TYPE_TO_SOCKET map — the publisher threw "Unknown event type"
+        // and events were stuck/failing. Payload is minimal: no secrets, no
+        // attribution (that lives in the audit trail). The client receives
+        // `order:updated` and refetches the authoritative order endpoint.
         await enqueueOutboxEvent(tx, {
-          eventType: 'FULFILMENT_STATUS_CHANGED',
+          eventType: 'ORDER_STATUS_CHANGED',
           aggregateType: 'Fulfilment',
           aggregateId: attributionResult.fulfilmentId,
           payload: {
             orderId: attributionResult.orderId,
             fulfilmentId: attributionResult.fulfilmentId,
-            from: 'READY_FOR_PICKUP',
-            to: 'PICKED_UP',
-            attribution: attributionResult.attribution,
+            status: 'PICKED_UP',
             version: attributionResult.newVersion,
             updatedAt: attributionResult.attribution.timestamp,
           },
@@ -303,21 +308,23 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
         // failure is recorded in the immutable audit trail (P0-22).
         if (attributionFailure) {
           try {
-            await db.auditLog.create({
-              data: {
-                actorId: session.userId,
-                actorRole: session.role,
-                action: 'PICKUP_VERIFICATION_FAILED',
-                metadata: JSON.stringify({
-                  orderId,
-                  reason: attributionFailure.reason,
-                  httpStatus: attributionFailure.httpStatus,
-                  description: attributionFailure.description,
-                  stateSnapshot: attributionFailure.stateSnapshot,
-                  timestamp: new Date().toISOString(),
-                }),
+            // PHASE 5 (P1) — Canonical chained audit (non-transactional `audit`
+            // wraps its own withTransaction + CAS retry). This runs OUTSIDE
+            // the main txn so it survives even if the main txn rolled back.
+            // Actor role is ALWAYS session.role. No secrets in metadata.
+            await audit(
+              'PICKUP_VERIFICATION_FAILED',
+              {
+                orderId,
+                reason: attributionFailure.reason,
+                httpStatus: attributionFailure.httpStatus,
+                description: attributionFailure.description,
+                stateSnapshot: attributionFailure.stateSnapshot,
+                timestamp: new Date().toISOString(),
               },
-            })
+              session.userId,
+              session.role,
+            )
           } catch (auditErr) {
             // Audit failure is non-fatal — the attribution failure has
             // already been escalated via reportAttributionFailure (above).
