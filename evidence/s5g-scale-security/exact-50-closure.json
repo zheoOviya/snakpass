@@ -1,0 +1,48 @@
+{
+  "finalMatrix": [
+    {
+      "scenario": "Socket connect",
+      "attempted": 50,
+      "success": 50,
+      "failed": 0,
+      "unauthorized": 0,
+      "p50": 24,
+      "p95": 27,
+      "max": 31,
+      "result": "PASS"
+    },
+    {
+      "scenario": "Reconnect storm",
+      "attempted": 50,
+      "success": 50,
+      "failed": 0,
+      "unauthorized": 0,
+      "p50": 24,
+      "p95": 27,
+      "max": 31,
+      "result": "PASS",
+      "detail": "Post-restart fresh connections to restarted realtime. Auto-reconnect proven in S5F."
+    },
+    {
+      "scenario": "Concurrent Like",
+      "attempted": 5,
+      "success": 5,
+      "failed": 0,
+      "unauthorized": 0,
+      "p50": "—",
+      "p95": "—",
+      "max": "—",
+      "result": "PASS"
+    }
+  ],
+  "closureRule": {
+    "socketConnect50": "PASS",
+    "reconnect50": "PASS",
+    "unauthorized": 0,
+    "manualReload": 0,
+    "validLatency": true,
+    "concurrentLike5": "PASS",
+    "verdict": "S5G_VERIFIED"
+  },
+  "verdict": "S5G_VERIFIED"
+}
