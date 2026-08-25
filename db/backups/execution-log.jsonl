@@ -1,2 +1,0 @@
-{"timestamp":"2026-08-10T02:33:54.003Z","status":"success","backupPath":"/home/z/my-project/db/backups/backup-2026-08-10T02-33-54-003Z.db","checksum":"91f852314a77d793de877edc64091891953342e0098b4d859c95d8828f1f40b1","size":122880,"verifyOk":true,"verifyDetail":"checksum matches"}
-{"timestamp":"2026-08-10T02:34:06.498Z","status":"failed","backupPath":"/home/z/my-project/db/backups/backup-2026-08-10T02-34-06-498Z.db","checksum":"","size":0,"verifyOk":false,"error":"Error: ENOENT: no such file or directory, open '/home/z/my-project/db/custom.db'"}
