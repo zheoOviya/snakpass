@@ -13270,3 +13270,29 @@ Stage Summary:
 - No hard blockers
 - Production note: add Order(restaurantId,userId) index before prod launch
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H1-SHARE-CONSENT-PRIVACY-CHALLENGE-02
+Agent: S5H1 Share-Consent Privacy Contract Auditor (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H1-SHARE-CONSENT-PRIVACY-CHALLENGE-02 — Resolve purchase-history disclosure issue. NO PRODUCT CODE CHANGES.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == 3a3ca59, S5H1 contract ancestor = YES.
+- Phase 1 (trace): CRITICAL FINDING — Order completion does NOT auto-create SocialActivity. POST /api/orders has 0 references to recordActivity. ORDERED activities are purely client-initiated via POST /api/social/activities. This means: every ORDERED activity represents an EXPLICIT share action by the user.
+- Phase 2 (share signal): Option A (Order only) REJECTED — reveals unshared purchase history. Option B (SocialActivity with visibility filter) APPROVED — respects explicit share consent. Option C (share flag on Order) REJECTED — no existing concept.
+- Phase 3 (privacy matrix): FRIENDS/PUBLIC activity → eligible. PRIVATE activity → excluded. No SocialActivity → excluded (user chose not to share). Block/unfriend → excluded (current relationship required).
+- Phase 4 (historical): No time-window retention. Share is permanent (append-only). Historical shares remain eligible indefinitely — correct social behavior.
+- Phase 5 (count): friendOrderCount = unique friends with qualifying SocialActivity (verb=ORDERED, objectType=Restaurant, objectId=restaurantId, visibility IN FRIENDS/PUBLIC). NOT order count, NOT activity count.
+- Phase 6 (trust chain): AUTHORIZED SOCIAL SHARE + CURRENT FRIEND/BLOCK CHECK = FRIENDS ORDERED HERE. SocialActivity.objectId is client-supplied (vanity risk only — user claiming they ordered, not fabricating someone else's order). Accepted for S5H1.
+- Phase 7 (schema consequence): SocialActivity has NO orderId field. No authoritative Order↔SocialActivity link. Classification: S5H1_SCHEMA_REPAIR_RECOMMENDED_FOR_FUTURE (not a blocker). Future: add SocialActivity.sourceOrderId.
+- Phase 8 (order statuses): N/A for S5H1 — queries SocialActivity, not Order. Future allowlist: CONFIRMED, PREPARING, ALMOST_READY, READY_FOR_PICKUP, PICKED_UP, PAID.
+- Phase 9 (gift semantics): LEGACY_CONVENTION. Gift activities use verb=REDEEMED (not ORDERED), so naturally excluded from "friends ordered here" query. Note field convention (GIFT:, GIFT_FROM:) irrelevant for S5H1.
+- Phase 10 (revised query): PREVIOUS (Order table) REJECTED — purchase history disclosure. REVISED (SocialActivity with visibility filter) APPROVED — explicit share consent respected.
+
+Stage Summary:
+- S5H1_IMPLEMENTATION_READY
+- Key correction: Query SocialActivity (with visibility filter) NOT Order (reveals unshared purchases)
+- Trust chain: AUTHORIZED SOCIAL SHARE + CURRENT FRIEND/BLOCK CHECK = FRIENDS ORDERED HERE
+- Privacy preserved: No purchase history disclosed without explicit share consent
+- Schema repair recommended for future (SocialActivity.sourceOrderId) but NOT a blocker for S5H1
+- Evidence checkpoint: pending commit + push
