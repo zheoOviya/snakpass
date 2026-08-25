@@ -13420,3 +13420,26 @@ Stage Summary:
 - Generic route forgery excluded (NULL sourceOrderId)
 - Idempotency enforced (1 row per actorId+sourceOrderId)
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H1-EDGE-CONTRACT-CLOSURE-06
+Agent: S5H1 Edge Contract Closure Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H1-EDGE-CONTRACT-CLOSURE-06 — Close 4-unique-friend projection + status boundary. NO PRODUCT CODE CHANGES — evidence only.
+
+Work Log:
+- TEST A (4 unique friends): Created A viewer + B/C/D/E friends. B has 3 qualifying orders (CONFIRMED, PICKED_UP, PREPARING). All 4 friends shared orders. GET social-proof → friendOrderCount=4, friends.length=3, hasMore=true. B's multiple orders count as 1 friend. Top-3 ordering: Friend E, D, C (MAX createdAt DESC). PASS.
+- TEST B (qualifying status positive): Shared bord2 (status=PICKED_UP) → 201, sourceOrderId correct. PASS.
+- TEST C (CANCELLED negative): Share CANCELLED order → 400 "does not qualify", 0 linked activities. PASS.
+- TEST D (PAYMENT_PENDING negative): Share PAYMENT_PENDING order → 400 "does not qualify", 0 linked activities. Social proof count unchanged (4). PASS.
+- TEST E (analytics sanity): All 3 events (IMPRESSION, ENGAGEMENT, ORDER_START) accepted (200). PII audit: leakedPII=[]. PASS.
+
+Stage Summary:
+- S5H1_VERIFIED
+- 4 unique friends: friendOrderCount=4, friends.length=3, hasMore=true ✅
+- Repeated B orders: count as 1 friend ✅
+- Qualifying status: CONFIRMED/PICKED_UP/PREPARING accepted ✅
+- CANCELLED: rejected (400) ✅
+- PAYMENT_PENDING: rejected (400) ✅
+- Failed shares don't inflate count ✅
+- Analytics PII: 0 leaks ✅
+- NO PRODUCT CODE CHANGES — evidence only
