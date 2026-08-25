@@ -13743,3 +13743,31 @@ Stage Summary:
 - No schema changes needed — all required fields exist
 - 5 implementation waves: V1 (security repair), V2 (vendor UI), V3 (consumer realtime), V4 (hardening), V5 (browser closure)
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: VENDOR-V1-SECURITY-INTEGRITY-REPAIR-02
+Agent: V1 Security/Integrity Repair Agent (main)
+Task: SNAKZAP-VENDOR-LIFECYCLE-V1-SECURITY-INTEGRITY-REPAIR-02 — Repair the Vendor fulfilment backend (ownership, role boundary, audit chain, durable realtime) before any new Vendor UI.
+
+Work Log:
+- Phase 0: Baseline frozen at b24ee88 (clean tree, HEAD==remote, checkpoint ancestor). Housekeeping commit a1ffb2e: untracked runtime db logs + sqlite + tool-results (were dirtying tree).
+- Phase 1: Traced canonical fulfilment route = PATCH /api/orders/[id]/fulfilment (PREPARING→ALMOST_READY→READY_FOR_PICKUP) + POST /api/orders/[id]/pickup/verify (canonical PICKED_UP). Confirmed 3 gaps: no ownership check, FULFILMENT_STATUS_CHANGED not in publisher map (throws "Unknown event type"), direct tx.auditLog.create (not auditWithTx).
+- Phase 2 (P0-1): Added Restaurant.ownerUserId === session.userId ownership check in fulfilment PATCH (before any mutation, including lazy-create). GET /fulfilment also guarded.
+- Phase 3: Role boundary — only VENDOR_OWNER can PATCH fulfilment. CONSUMER/ADMIN/SUPER_ADMIN → 403. Unauthenticated → 401. Client-supplied actorRole stripped from body schema (audit role always session.role).
+- Phase 4: State machine preserved (NEXT_FULFILMENT_STATUS unchanged). Invalid transitions → 409 with 0 mutation.
+- Phase 5 (P1): Replaced direct tx.auditLog.create with auditWithTx (CAS-safe chained append) in fulfilment PATCH (FULFILMENT_CREATED + FULFILMENT_STATUS_CHANGED) + pickup-verify (PICKUP_VERIFIED in-txn, PICKUP_VERIFICATION_FAILED out-txn via audit()).
+- Phase 6/7 (P0-2): Replaced FULFILMENT_STATUS_CHANGED outbox event with ORDER_STATUS_CHANGED (mapped to order:updated socket event). Minimal payload, no secrets. Enqueued in same txn.
+- Phase 14: PICKED_UP attribution gate enforced unconditionally on fulfilment PATCH (flag check removed). PICKED_UP requires pickupVerifiedAt (set only via pickup-verify). State machine unchanged.
+- Verification: 18/18 security matrix tests pass (cross-vendor A→A=200, A→B=403, B→B=200, B→A=403; consumer=403; admin=403; invalid transition=409; concurrent=one winner+version+1; idempotent same→same=200; PICKED_UP gate=409+redirect).
+- Outbox: 4/4 ORDER_STATUS_CHANGED (Fulfilment) events reached PUBLISHED (publisher delivered via socket.io). Earlier transport failures were due to realtime service crash (pre-existing infra), not V1 code.
+- Audit: 6/6 FULFILMENT audit entries have correct v2 hashes (stored==recomputed). 0 hash failures. Pre-existing 356 social hashFailures are from social routes (out of V1 scope, not a regression).
+- Regression: order-status/vendor-accept/pickup-verify routes all compile (403 not 500). Dev.log shows no runtime errors. Lint=0.
+- Agent Browser: could not launch (Chrome FATAL: Failed to start BrowserThread:IO — system resource exhaustion). API-level verification used instead (comprehensive, 18/18 pass).
+
+Stage Summary:
+- VENDOR_V1_VERIFIED
+- Source commit: 314debb (fulfilment route + pickup-verify route + .gitignore)
+- Evidence commit: c7c40b0 (V1-SECURITY-INTEGRITY-REPAIR-02.md)
+- LOCAL_HEAD = c7c40b0, REMOTE_MAIN = b24ee88 (1+ commits ahead)
+- Push BLOCKED: no GitHub PAT available in this session (previous token deleted per credential hygiene). Remote reachable (HTTP 200, fetch works).
+- All P0/P1 gaps closed. State machine unchanged. No new Vendor UI.
