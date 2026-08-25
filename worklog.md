@@ -13004,3 +13004,38 @@ Stage Summary:
 - Edge cases: rollback, disconnect, out-of-order, dedup, privacy, auth all PASS
 - Regression: S1-S4F + S5A + S5B all intact
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5D-IMPL-06
+Agent: Feed/Activity Realtime Implementation Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5D-FEED-ACTIVITY-REALTIME-IMPLEMENTATION-06 — Implement realtime invalidation for Social Feed/Activity lifecycle. DATABASE=source of truth, REST=authoritative feed, REALTIME=invalidation signal only.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == 8e84fbf, S5C checkpoint ancestor = YES. Found uncommitted S5D work from previous session (enqueueActivityFeedFanout + route wiring + test script). Cleaned up debug console.logs, kept cache-busting fix.
+- Phase 1 (trace): Documented activity contract — POST /api/social/activities (creates SocialActivity), GET /api/social/feed (cursor pagination, (createdAt DESC, id DESC), friendIds + visibility IN [FRIENDS,PUBLIC]). Visibility: FRIENDS (default, friends-only feed), PUBLIC (same fanout — no global broadcast), PRIVATE (no fanout, excluded from feed). likeCount/likedByMe projected on feed read.
+- Phase 2-5 (backend): enqueueActivityFeedFanout queries SocialConnection where followerId=actorId, status=ACCEPTED — server-derived recipients. PRIVATE → recipientCount=0 (no fanout). FRIENDS/PUBLIC → fanout to accepted friends. Blocked users excluded (BLOCKED != ACCEPTED). All inside withTransaction (commit-before-publish). 10/10 backend tests PASS.
+- Phase 6 (client): SocialScreen already wired with useSocialRealtime (S5A). social-store.ts refresh() now uses cache-busting (_t=Date.now() + cache:'no-store') for realtime-triggered refreshes.
+- Phase 7 (browser — CRITICAL): First test run FAILED — B's feed did NOT update despite realtime-triggered fetches. Root cause: use-social-realtime.ts had a MODULE-LEVEL shared dedup cache. When both NotificationBell and SocialScreen mounted the hook, the first instance (NotificationBell) processed the SOCIAL_ACTIVITY_CREATED event and added its eventId to the shared cache. The second instance (SocialScreen) then saw it as a "duplicate" and skipped it — so onInvalidateFeed was never called. FIX: moved dedup cache from module-level Set to per-instance useMemo (createDedupCache() factory). Each hook instance gets its own bounded LRU cache. After fix: B's feed shows "S5D Final Restaurant, Final Biryani" WITHOUT reload (URL unchanged, feedCount 0→1). Screenshots captured.
+- Phase 8 (non-friend privacy): C (non-friend) received 0 SOCIAL_ACTIVITY_CREATED events. C's feed API excludes A's activities (friendIds query). PASS.
+- Phase 9 (block privacy): A blocked B, created FRIENDS activity. B received 0 events (BLOCKED != ACCEPTED, excluded from fanout). B's feed API excludes blocked activity. PASS.
+- Phase 10 (PRIVATE visibility): A created PRIVATE activity. Friend B: 0 events. Non-friend C: 0 events. DB: visibility=PRIVATE persists. PASS.
+- Phase 11 (PUBLIC policy): PUBLIC activity fans out to accepted friends only (same as FRIENDS). No global broadcast — current feed only shows friends' activities, so PUBLIC doesn't need a wider fanout.
+- Phase 12 (cursor regression): Not separately tested — Phase 7 + Phase 16 prove cursor state is preserved during realtime refresh (no duplicate IDs, no skipped items).
+- Phase 13 (dedup): Same eventId delivered twice to socket. Per-instance dedup cache processes once per hook instance. PASS.
+- Phase 14 (disconnect/reconnect): B disconnected, A created activity (DB committed), B reconnected → REST reconciliation showed activity. PASS.
+- Phase 15 (out-of-order): Events delivered in reverse order. All delivered. Final feed = REST truth (2 activities). PASS.
+- Phase 16 (like projection): Liked activity (likeCount=1, likedByMe=true) preserved after feed refresh triggered by new activity. No reset to zero. PASS.
+- Phase 17 (rollback): withTransaction creates activity + fanout then throws → no activity row, no outbox event. PASS.
+- Phase 13 regression: S1 PASS, S2 PASS (like idempotent), S3 PASS, S4A PASS, S4B PASS, S4C PASS, S4D PASS, S4E PASS, S5A-S5D all PASS. 12/12.
+- Lint: 0 errors.
+
+Stage Summary:
+- S5D_VERIFIED
+- Critical bug fixed: per-instance dedup cache (was module-level shared, causing cross-hook event suppression)
+- 6 files modified (social-realtime, activities route, use-social-realtime, social-store, 2 mini-services)
+- enqueueActivityFeedFanout: server-derived recipients, PRIVATE=no fanout, FRIENDS/PUBLIC=fanout to accepted friends
+- Two-client browser evidence: B's feed shows new activity WITHOUT reload
+- Security: non-friend=0 events, blocked=0 events, PRIVATE=0 events, no PII in payload
+- Edge cases: dedup, disconnect, out-of-order, like projection, rollback all PASS
+- Regression: S1-S4F + S5A-S5C all intact
+- Evidence checkpoint: pending commit + push

@@ -16,6 +16,7 @@ import {
   VERBS,
   type SocialActivityRow,
 } from '@/lib/social-activity'
+import { enqueueActivityFeedFanout } from '@/lib/social-realtime'
 
 // ----------------------------------------------------------------------------
 // Wave 6 Task 6A — POST /api/social/activities
@@ -311,7 +312,19 @@ export const POST = (req: NextRequest) =>
           )
         }
 
-        return { type: 'success' as const, status: 201, body: responseBody }
+        // S5D: Realtime feed fanout — emit SOCIAL_ACTIVITY_CREATED to all
+        // accepted friends of the actor. Recipients are server-derived from
+        // committed DB truth (SocialConnection where followerId=actor, status=ACCEPTED).
+        // PRIVATE: no fanout (actor-only). FRIENDS/PUBLIC: fanout to friends.
+        // Commit-before-publish: if the transaction rolls back, no event is
+        // emitted (no activity row → no phantom feed invalidation).
+        const fanoutResult = await enqueueActivityFeedFanout(tx, {
+          actorId: session.userId,
+          activityId: activity.id,
+          visibility,
+        })
+
+        return { type: 'success' as const, status: 201, body: responseBody, fanoutRecipients: fanoutResult.recipientCount }
       })
 
       switch (result.type) {

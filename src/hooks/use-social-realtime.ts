@@ -16,26 +16,36 @@
 //   On event receipt, it calls the provided invalidation callbacks which
 //   refetch authoritative REST resources.
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, useMemo } from 'react'
 import { realtimeSocket } from './use-realtime'
 import type { SocialRealtimeEnvelope, SocialRealtimeEventType } from '@/lib/social-realtime'
 import { EVENT_INVALIDATION_MAP, SOCIAL_REALTIME_EVENT_TYPES } from '@/lib/social-realtime'
 
 // Bounded LRU cache for event dedup (at-least-once delivery)
+// S5D FIX: Each hook instance gets its OWN dedup cache. Previously the cache
+// was module-level (shared across all instances), which meant that when both
+// NotificationBell and SocialScreen mounted the hook, the first instance to
+// process an event would add its eventId to the shared cache, causing the
+// second instance to skip it as a "duplicate" — even though the second
+// instance needed a different invalidation callback (e.g., feed vs notifications).
+// This caused SOCIAL_ACTIVITY_CREATED events to be silently dropped by the
+// SocialScreen instance when NotificationBell processed them first.
 const MAX_DEDUP_CACHE = 100
-const seenEventIds = new Set<string>()
-const seenEventIdsArray: string[] = []
 
-function isDuplicate(eventId: string): boolean {
-  if (seenEventIds.has(eventId)) return true
-  seenEventIds.add(eventId)
-  seenEventIdsArray.push(eventId)
-  // Evict oldest if over capacity
-  if (seenEventIdsArray.length > MAX_DEDUP_CACHE) {
-    const oldest = seenEventIdsArray.shift()
-    if (oldest) seenEventIds.delete(oldest)
+/** Per-instance LRU dedup cache (bounded). */
+function createDedupCache() {
+  const seen = new Set<string>()
+  const ordered: string[] = []
+  return function isDuplicate(eventId: string): boolean {
+    if (seen.has(eventId)) return true
+    seen.add(eventId)
+    ordered.push(eventId)
+    if (ordered.length > MAX_DEDUP_CACHE) {
+      const oldest = ordered.shift()
+      if (oldest) seen.delete(oldest)
+    }
+    return false
   }
-  return false
 }
 
 export interface SocialRealtimeCallbacks {
@@ -58,6 +68,10 @@ export interface SocialRealtimeCallbacks {
  *
  * On reconnect, calls onReconnect (which should refresh all stores).
  *
+ * S5D FIX: Each hook instance has its own dedup cache so that multiple
+ * mounted instances (NotificationBell + SocialScreen) don't interfere
+ * with each other.
+ *
  * Usage:
  *   useSocialRealtime({
  *     onInvalidateConnections: () => refresh(),
@@ -70,11 +84,15 @@ export function useSocialRealtime(callbacks: SocialRealtimeCallbacks) {
   const callbacksRef = useRef(callbacks)
   callbacksRef.current = callbacks // eslint-disable-line react-hooks/refs
 
+  // S5D: Per-instance dedup cache (not shared across hook instances).
+  // useMemo with empty deps creates the cache once per hook instance lifetime.
+  const isDuplicate = useMemo(() => createDedupCache(), [])
+
   const handleEvent = useCallback((envelope: SocialRealtimeEnvelope) => {
     // Validate known event type
     if (!SOCIAL_REALTIME_EVENT_TYPES.includes(envelope.type)) return
 
-    // Dedup by eventId
+    // Dedup by eventId (per-instance)
     if (isDuplicate(envelope.eventId)) return
 
     // Look up which resources to invalidate
@@ -91,7 +109,7 @@ export function useSocialRealtime(callbacks: SocialRealtimeCallbacks) {
     if (invalidation.notifications && callbacksRef.current.onInvalidateNotifications) {
       callbacksRef.current.onInvalidateNotifications()
     }
-  }, [])
+  }, [isDuplicate])
 
   useEffect(() => {
     const sock = realtimeSocket()

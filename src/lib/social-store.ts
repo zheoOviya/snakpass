@@ -76,9 +76,12 @@ export const useSocial = create<SocialState>()((set, get) => ({
   refresh: async () => {
     set({ isLoading: true, error: null })
     try {
+      // S5D: Use cache-busting timestamp to prevent browser/CDN caching
+      // from returning stale feed data on realtime-triggered refreshes.
+      const cacheBuster = `_t=${Date.now()}`
       const [connRes, feedRes] = await Promise.all([
-        fetch('/api/social/connections', { headers: { 'Content-Type': 'application/json' } }),
-        fetch('/api/social/feed?limit=30', { headers: { 'Content-Type': 'application/json' } }),
+        fetch(`/api/social/connections?${cacheBuster}`, { headers: { 'Content-Type': 'application/json' }, cache: 'no-store' }),
+        fetch(`/api/social/feed?limit=30&${cacheBuster}`, { headers: { 'Content-Type': 'application/json' }, cache: 'no-store' }),
       ])
 
       const errors: string[] = []

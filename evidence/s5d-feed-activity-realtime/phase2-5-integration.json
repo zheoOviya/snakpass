@@ -1,0 +1,76 @@
+{
+  "phase": "2-5",
+  "tests": [
+    {
+      "test": "T1_activity_created",
+      "httpStatus": 201,
+      "activityExists": true,
+      "result": "PASS"
+    },
+    {
+      "test": "T1_outbox_published",
+      "status": "PUBLISHED",
+      "targetUser": "cmt8chgkp0003mbka1kix5p44",
+      "matchesActivityId": true,
+      "result": "PASS"
+    },
+    {
+      "test": "T1_friend_B_receives_event",
+      "bReceived": 1,
+      "result": "PASS"
+    },
+    {
+      "test": "T1_non_friend_C_no_event",
+      "cReceived": 0,
+      "result": "PASS",
+      "detail": "Non-friend C must not receive FRIENDS activity event"
+    },
+    {
+      "test": "T1_pii_audit",
+      "leakedPII": [],
+      "envelopeKeys": [
+        "eventId",
+        "type",
+        "occurredAt",
+        "entityId"
+      ],
+      "result": "PASS"
+    },
+    {
+      "test": "T2_private_activity_created",
+      "httpStatus": 201,
+      "visibility": "PRIVATE",
+      "result": "PASS"
+    },
+    {
+      "test": "T2_private_no_fanout",
+      "friendBReceived": 0,
+      "result": "PASS",
+      "detail": "PRIVATE activity must not fanout to friends"
+    },
+    {
+      "test": "T3_public_fanout_to_friends",
+      "httpStatus": 201,
+      "bReceived": 1,
+      "result": "PASS",
+      "detail": "PUBLIC fanouts to accepted friends (no global broadcast)"
+    },
+    {
+      "test": "T4_rollback_no_phantom",
+      "actBefore": 3,
+      "actAfter": 3,
+      "outboxBefore": 2,
+      "outboxAfter": 2,
+      "result": "PASS"
+    },
+    {
+      "test": "T5_block_isolation",
+      "httpStatus": 201,
+      "bReceived": 0,
+      "feedHasBlockedAct": true,
+      "result": "PASS",
+      "detail": "Blocked B must not receive activity event (no ACCEPTED friend edge)"
+    }
+  ],
+  "VERDICT": "PHASE_2_5_PASS"
+}

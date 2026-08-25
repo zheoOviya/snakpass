@@ -126,6 +126,59 @@ export async function enqueueSocialEvent(
 }
 
 // ----------------------------------------------------------------------------
+// S5D: Activity feed fanout — emit SOCIAL_ACTIVITY_CREATED to all accepted
+// friends of the actor. Recipients are server-derived from committed DB truth
+// (SocialConnection rows where followerId=actorId, status=ACCEPTED).
+//
+// SECURITY (S4A/S4B):
+//   - Blocked users are NOT friends (BLOCKED != ACCEPTED) → excluded from fanout.
+//   - Former friends (REMOVED/none) → excluded.
+//   - Non-friends → excluded.
+//   - The realtime event is an INVALIDATION SIGNAL only — the client refetches
+//     GET /api/social/feed which re-checks friend status + visibility. If auth
+//     changes between event emission and REST refetch, the feed correctly
+//     excludes the activity (REST is authoritative, not the event).
+//
+// VISIBILITY POLICY:
+//   - FRIENDS activity: fanout to accepted friends only (default feed audience).
+//   - PUBLIC activity: same fanout (current feed only shows friends' activities;
+//     there is no global broadcast architecture — see S5D Phase 11 trace).
+//   - PRIVATE activity: NO fanout (actor-only, excluded from feed).
+//
+// PAYLOAD: minimal envelope { eventId, type, occurredAt, entityId=activityId }.
+//   No full activity object, no metadata, no phone, no blockedBy, no user object.
+// ----------------------------------------------------------------------------
+export async function enqueueActivityFeedFanout(
+  tx: Prisma.TransactionClient,
+  params: {
+    actorId: string
+    activityId: string
+    visibility: string // 'FRIENDS' | 'PUBLIC' | 'PRIVATE'
+  },
+): Promise<{ recipientCount: number }> {
+  // PRIVATE: no fanout (actor-only, excluded from feed)
+  if (params.visibility === 'PRIVATE') {
+    return { recipientCount: 0 }
+  }
+
+  // FRIENDS + PUBLIC: fanout to accepted friends (server-derived)
+  const friends = await tx.socialConnection.findMany({
+    where: { followerId: params.actorId, status: 'ACCEPTED' },
+    select: { followeeId: true },
+  })
+
+  for (const edge of friends) {
+    await enqueueSocialEvent(tx, {
+      type: 'SOCIAL_ACTIVITY_CREATED',
+      targetUserId: edge.followeeId,
+      entityId: params.activityId,
+    })
+  }
+
+  return { recipientCount: friends.length }
+}
+
+// ----------------------------------------------------------------------------
 // Event type → client invalidation hint
 // ----------------------------------------------------------------------------
 
