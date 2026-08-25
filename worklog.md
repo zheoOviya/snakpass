@@ -13386,3 +13386,37 @@ Stage Summary:
 - RANDOMIZED_AB_TEST = DEFERRED
 - REALTIME_SOCIAL_PROOF = DEFERRED
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H1-FINAL-MEASUREMENT-UI-CLOSURE-05
+Agent: S5H1 Final Measurement + UI Closure Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H1-FINAL-MEASUREMENT-UI-CLOSURE-05 — Complete engagement/order-start measurement + negative browser truthfulness + final count/idempotency/status proof.
+
+Work Log:
+- Phase 1 (measurement completion): Added SOCIAL_PROOF_RESTAURANT_ENGAGEMENT tracking on handleAdd (add-to-cart). Added SOCIAL_PROOF_ORDER_START tracking on checkout button click. All three events now fire in the browser.
+- Phase 2 (impression dedup): trackEvent() deduplicates by (event + restaurantId) per session. One logical proof exposure → one impression. Hard reload creates new impression (acceptable).
+- Phase 3-12 (final closure test suite): 12/12 PASS:
+  P3: PRIVATE excluded (Friend D absent) ✅
+  P4: No-share excluded (Friend E absent) ✅
+  P5: Block excluded (count drops 2→1) ✅
+  P5b: Unblock no refriend excluded (count stays 1) ✅
+  P5c: Re-friend reappears (count back to 2) ✅
+  P6: PUBLIC included (Friend C present) ✅
+  P7: Unique friend count = 2 (B has 2 orders but counts as 1 friend) ✅
+  P8: CANCELLED order rejected (400 "does not qualify") ✅
+  P9: Fake generic activity excluded (count unchanged) ✅
+  P10: Idempotency (same order shared twice → 1 row, 200 idempotent=true) ✅
+  P11: Analytics PII audit (leakedPII=[]) ✅
+  P12: Experiment status (RANDOMIZED_AB_TEST = DEFERRED, instrumentation ACTIVE) ✅
+- Lint: 0 errors.
+
+Stage Summary:
+- S5H1_VERIFIED
+- Measurement: SOCIAL_PROOF_IMPRESSION (badge render) + SOCIAL_PROOF_RESTAURANT_ENGAGEMENT (add-to-cart) + SOCIAL_PROOF_ORDER_START (checkout)
+- All events use safe dimensions only (experimentId, variant, restaurantId, friendCountBucket)
+- No friend identities in analytics
+- Negative states: PRIVATE/no-share/block/unblock-no-refriend all excluded from social proof
+- Cancelled order status rejected by share endpoint
+- Generic route forgery excluded (NULL sourceOrderId)
+- Idempotency enforced (1 row per actorId+sourceOrderId)
+- Evidence checkpoint: pending commit + push

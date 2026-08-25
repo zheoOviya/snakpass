@@ -51,6 +51,7 @@ import { MenuItemCardV2 } from '../menu-item-card-v2'
 import { MenuItemSkeleton } from '../skeleton-loader'
 import { EmptyState } from '../empty-state'
 import { SocialProofBadge } from '../social-proof-badge'
+import { trackEvent } from '@/lib/analytics'
 import { SendGiftFlow } from './send-gift-flow'
 import { CreateGroupOrderFlow } from './create-group-order-flow'
 
@@ -283,6 +284,13 @@ export function RestaurantDetailScreen({
         return
       }
       cart.add(item, restaurant.id, restaurant.name)
+      // S5H1: Track restaurant engagement (add-to-cart) after social proof exposure
+      trackEvent('SOCIAL_PROOF_RESTAURANT_ENGAGEMENT', {
+        experimentId: 's5h1-friends-ordered-here',
+        variant: 'treatment',
+        restaurantId: restaurant.id,
+        friendCountBucket: '0', // bucket unknown at this layer; analytics deduped by restaurant
+      })
       toast({
         title: 'Added to cart',
         description: `${item.name} · ${inr(item.price)}`,
@@ -994,7 +1002,18 @@ export function RestaurantDetailScreen({
                   </p>
                 </div>
               </div>
-              <Button onClick={onCheckout} className="gap-1.5">
+              <Button onClick={() => {
+                // S5H1: Track order-start (checkout) after social proof exposure
+                if (restaurant) {
+                  trackEvent('SOCIAL_PROOF_ORDER_START', {
+                    experimentId: 's5h1-friends-ordered-here',
+                    variant: 'treatment',
+                    restaurantId: restaurant.id,
+                    friendCountBucket: '0',
+                  })
+                }
+                onCheckout()
+              }} className="gap-1.5">
                 <ShoppingCart className="h-4 w-4" />
                 Proceed to Checkout
               </Button>
