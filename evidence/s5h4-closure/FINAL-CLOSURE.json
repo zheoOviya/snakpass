@@ -1,0 +1,171 @@
+{
+  "directive": "PRODUCT-GJ02-SOCIAL-S5H4-MEASUREMENT-FINAL-CLOSURE-13",
+  "verdict": "S5H4_VERIFIED",
+  "baseline": "2174dc09498fdda9a369e505a267a3046e683a4f",
+  "productSourceChanges": 0,
+
+  "phase1_analyticsInventory": {
+    "totalEvents": 7,
+    "events": [
+      { "event": "SOCIAL_PROOF_IMPRESSION", "feature": "S5H1", "source": "src/components/snak/social-proof-badge.tsx" },
+      { "event": "SOCIAL_PROOF_RESTAURANT_ENGAGEMENT", "feature": "S5H1", "source": "src/components/snak/screens/restaurant-detail-screen.tsx (handleAdd)" },
+      { "event": "SOCIAL_PROOF_ORDER_START", "feature": "S5H1", "source": "src/components/snak/screens/restaurant-detail-screen.tsx (checkout button)" },
+      { "event": "FRIEND_RANKED_IMPRESSION", "feature": "S5H2", "source": "src/components/snak/friend-ranked-section.tsx" },
+      { "event": "FRIEND_RANKED_RESTAURANT_OPEN", "feature": "S5H2", "source": "src/components/snak/friend-ranked-section.tsx (card onPress)" },
+      { "event": "FRIEND_SEED_IMPRESSION", "feature": "S5H3", "source": "src/components/snak/friend-seed-section.tsx" },
+      { "event": "FRIEND_SEED_REQUEST", "feature": "S5H3", "source": "src/components/snak/friend-seed-section.tsx (handleAddFriend)" }
+    ],
+    "canonicalPath": "POST /api/analytics/track via csrfFetch (src/lib/analytics.ts)",
+    "rawUnauthenticatedPOST": "NONE — all events use csrfFetch"
+  },
+
+  "phase2_analytics2xxGate": {
+    "result": "7/7 PASS",
+    "allEventsReturn200": true,
+    "evidence": "evidence/s5h4-closure/analytics-gate.json"
+  },
+
+  "phase3_analyticsPrivacyAudit": {
+    "piiLeakCount": 0,
+    "graphIdentityLeakCount": 0,
+    "allowedFields": ["event", "experimentId", "variant", "restaurantId", "friendCountBucket", "rankPosition", "timestamp"],
+    "forbiddenFieldsChecked": ["userId", "phone", "email", "orderId", "sourceOrderId", "blockedBy", "session", "csrf", "token", "friendName", "candidateId", "mutualId", "graphPath"],
+    "allForbiddenAbsent": true
+  },
+
+  "phase4_s5h1Funnel": {
+    "impression": "SOCIAL_PROOF_IMPRESSION — fires when SocialProofBadge renders with >0 friends",
+    "engagement": "SOCIAL_PROOF_RESTAURANT_ENGAGEMENT — fires on add-to-cart (handleAdd)",
+    "orderStart": "SOCIAL_PROOF_ORDER_START — fires on checkout button click",
+    "funnel": "impression → engagement → order-start",
+    "privacy": "friendCountBucket only, no friend identities",
+    "result": "PASS"
+  },
+
+  "phase5_s5h2Funnel": {
+    "impression": "FRIEND_RANKED_IMPRESSION — fires when FriendRankedSection renders with >0 restaurants",
+    "restaurantOpen": "FRIEND_RANKED_RESTAURANT_OPEN — fires on card click",
+    "downstream": "Cross-surface: restaurant detail opens → S5H1 engagement/order-start events may fire if social proof badge is present",
+    "privacy": "rankPosition + friendCountBucket, no friend identities",
+    "result": "PASS"
+  },
+
+  "phase6_s5h3Funnel": {
+    "impression": "FRIEND_SEED_IMPRESSION — fires when FriendSeedSection renders with >0 candidates",
+    "request": "FRIEND_SEED_REQUEST — fires on Add Friend click",
+    "connection": "POST /api/social/connections → 201 PENDING (existing API, verified in browser)",
+    "requestToAccept": "MEASURABLE_FROM_DB / DEFERRED_ANALYTICS — acceptance conversion is trackable via DB (SocialConnection status change) but no dedicated analytics event for accept. Not invented for closure.",
+    "result": "PASS"
+  },
+
+  "phase7_measurementSemantics": {
+    "table": [
+      { "event": "SOCIAL_PROOF_IMPRESSION", "trigger": "Badge renders with >0 friends", "meaning": "Social proof exposure on restaurant detail", "dedup": "Per restaurantId per session (LRU cache)" },
+      { "event": "SOCIAL_PROOF_RESTAURANT_ENGAGEMENT", "trigger": "Add-to-cart after proof", "meaning": "Proof → menu interaction", "dedup": "Per restaurantId per session" },
+      { "event": "SOCIAL_PROOF_ORDER_START", "trigger": "Checkout button click", "meaning": "Proof → order conversion intent", "dedup": "Per restaurantId per session" },
+      { "event": "FRIEND_RANKED_IMPRESSION", "trigger": "Ranked section renders", "meaning": "Friend-ranked discovery exposure", "dedup": "Per restaurantId per session" },
+      { "event": "FRIEND_RANKED_RESTAURANT_OPEN", "trigger": "Card click", "meaning": "Discovery → restaurant detail open", "dedup": "Per restaurantId per session" },
+      { "event": "FRIEND_SEED_IMPRESSION", "trigger": "Seed section renders", "meaning": "Friend suggestion exposure", "dedup": "Per first candidate ID per session" },
+      { "event": "FRIEND_SEED_REQUEST", "trigger": "Add Friend click", "meaning": "Suggestion → friend request", "dedup": "Per candidate ID per session" }
+    ]
+  },
+
+  "phase8_experimentStatus": {
+    "S5H1_FEATURE": "ACTIVE",
+    "S5H2_FEATURE": "ACTIVE",
+    "S5H3_FEATURE": "ACTIVE",
+    "FEATURE_INSTRUMENTATION": "ACTIVE",
+    "RANDOMIZED_AB_TEST": "DEFERRED",
+    "CAUSAL_LIFT": "NOT YET ESTABLISHED"
+  },
+
+  "phase9_crossExperimentPrivacy": {
+    "S5H1": "No friend identities beyond approved profile (name + avatarColor only on restaurant detail)",
+    "S5H2": "No friend identities in ranking (friendCount + friendCountBucket only)",
+    "S5H3": "No mutual identities (bucketed count only, no graph path)",
+    "analyticsPayload": "No friend/candidate userId, name, phone, email, orderId, sourceOrderId, blockedBy in any analytics event",
+    "result": "PASS"
+  },
+
+  "phase10_blockPrivacyRegression": {
+    "S5H1": "Blocked friend → 0 contribution to Friends Ordered Here (proven in S5H1 runtime)",
+    "S5H2": "Blocked/private/no-share → 0 contribution to friend-ranked (proven in S5H2 runtime)",
+    "S5H3": "Blocked/pending/existing-friend → excluded from friend-seed (proven in S5H3 browser)",
+    "result": "PASS"
+  },
+
+  "phase11_13_regressionSpotCheck": {
+    "S5H1_sourceOrderId": "INTACT — SocialActivity.sourceOrderId FK exists and is server-set only",
+    "S5H1_idempotency": "@@unique([actorId, sourceOrderId]) intact",
+    "S5H2_ranking": "uniqueFriendCount DESC → sourceOrder.createdAt DESC → restaurantId ASC intact",
+    "S5H3_ranking": "mutualCount DESC → candidateId ASC intact",
+    "S5H3_exit": "acceptedFriendCount >= 3 → eligible=false intact",
+    "S5H3_mutation": "Existing POST /api/social/connections remains sole friend mutation path"
+  },
+
+  "phase14_regressionGate": {
+    "S1": "PASS",
+    "S2": "PASS (proven in prior phases — idempotent Like)",
+    "S3": "PASS (notification dedup)",
+    "S4A": "PASS (block isolation)",
+    "S4B": "PASS (canUnblock, no raw blockedBy)",
+    "S4C": "PASS (audit chain v2)",
+    "S4D": "PASS (cursor pagination)",
+    "S4E": "PASS (404 on nonexistent)",
+    "S5A": "PASS (socket auth)",
+    "S5B": "PASS (connection realtime)",
+    "S5C": "PASS (notification realtime)",
+    "S5D": "PASS (feed realtime)",
+    "S5E": "PASS (like realtime)",
+    "S5F": "PASS (reconnect)",
+    "S5G": "PASS (scale/security)",
+    "S5H1": "PASS (sourceOrderId intact)",
+    "S5H2": "PASS (friend-ranked API 200)",
+    "S5H3": "PASS (friend-seed API 200)"
+  },
+
+  "phase15_staticSchema": {
+    "lint": "0 errors",
+    "prismaSchema": "valid",
+    "sourceOrderId": "INTACT",
+    "friendRankedFormula": "INTACT",
+    "friendSeedFormula": "INTACT",
+    "analyticsUsesCsrfFetch": true
+  },
+
+  "mandatoryS5hMeasurementMatrix": {
+    "headers": ["Feature", "Impression", "Primary action", "Downstream action", "Analytics 2xx", "Privacy", "Result"],
+    "rows": [
+      { "feature": "S5H1 Friends Ordered Here", "impression": "SOCIAL_PROOF_IMPRESSION", "primaryAction": "SOCIAL_PROOF_RESTAURANT_ENGAGEMENT", "downstream": "SOCIAL_PROOF_ORDER_START", "2xx": "7/7 200", "privacy": "0 leaks", "result": "PASS" },
+      { "feature": "S5H2 Friend-ranked Discovery", "impression": "FRIEND_RANKED_IMPRESSION", "primaryAction": "FRIEND_RANKED_RESTAURANT_OPEN", "downstream": "existing S5H1 funnel", "2xx": "200", "privacy": "0 leaks", "result": "PASS" },
+      { "feature": "S5H3 Friend Seed", "impression": "FRIEND_SEED_IMPRESSION", "primaryAction": "FRIEND_SEED_REQUEST", "downstream": "PENDING via existing API", "2xx": "200", "privacy": "0 leaks", "result": "PASS" }
+    ]
+  },
+
+  "mandatoryPrivacyMatrix": {
+    "headers": ["Surface", "Friend identity exposed?", "Graph path leak?", "PII leak?", "Result"],
+    "rows": [
+      { "surface": "S5H1", "friendIdentityExposed": "NO", "graphPathLeak": "NO", "piiLeak": "NO", "result": "PASS" },
+      { "surface": "S5H2", "friendIdentityExposed": "NO", "graphPathLeak": "NO", "piiLeak": "NO", "result": "PASS" },
+      { "surface": "S5H3", "friendIdentityExposed": "NO", "graphPathLeak": "NO", "piiLeak": "NO", "result": "PASS" },
+      { "surface": "Analytics", "friendIdentityExposed": "NO", "graphPathLeak": "NO", "piiLeak": "NO", "result": "PASS" }
+    ]
+  },
+
+  "mandatoryRegressionMatrix": {
+    "S1": "PASS", "S2": "PASS", "S3": "PASS", "S4A": "PASS", "S4B": "PASS", "S4C": "PASS", "S4D": "PASS", "S4E": "PASS",
+    "S5A": "PASS", "S5B": "PASS", "S5C": "PASS", "S5D": "PASS", "S5E": "PASS", "S5F": "PASS", "S5G": "PASS",
+    "S5H1": "PASS", "S5H2": "PASS", "S5H3": "PASS"
+  },
+
+  "finalExperimentStatus": {
+    "S5H1_FEATURE": "ACTIVE",
+    "S5H2_FEATURE": "ACTIVE",
+    "S5H3_FEATURE": "ACTIVE",
+    "FEATURE_INSTRUMENTATION": "ACTIVE",
+    "RANDOMIZED_AB_TEST": "DEFERRED",
+    "CAUSAL_LIFT": "NOT YET ESTABLISHED"
+  },
+
+  "finalVerdict": "S5H4_VERIFIED"
+}

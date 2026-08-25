@@ -1,0 +1,81 @@
+{
+  "results": [
+    {
+      "gate": "S1",
+      "result": "FAIL"
+    },
+    {
+      "gate": "S2",
+      "result": "FAIL"
+    },
+    {
+      "gate": "S3",
+      "count": 0,
+      "result": "FAIL"
+    },
+    {
+      "gate": "S4A",
+      "result": "FAIL"
+    },
+    {
+      "gate": "S4B",
+      "result": "FAIL"
+    },
+    {
+      "gate": "S4C",
+      "result": "PASS"
+    },
+    {
+      "gate": "S4D",
+      "result": "FAIL"
+    },
+    {
+      "gate": "S4E",
+      "result": "FAIL"
+    },
+    {
+      "gate": "S5A",
+      "result": "PASS"
+    },
+    {
+      "gate": "S5B",
+      "result": "PASS"
+    },
+    {
+      "gate": "S5C",
+      "result": "PASS"
+    },
+    {
+      "gate": "S5D",
+      "result": "PASS"
+    },
+    {
+      "gate": "S5E",
+      "result": "PASS"
+    },
+    {
+      "gate": "S5F",
+      "result": "PASS"
+    },
+    {
+      "gate": "S5G",
+      "result": "PASS"
+    },
+    {
+      "gate": "S5H1",
+      "hasSourceOrderId": false,
+      "result": "FAIL"
+    },
+    {
+      "gate": "S5H2",
+      "status": 401,
+      "result": "FAIL"
+    },
+    {
+      "gate": "S5H3",
+      "status": 401,
+      "result": "FAIL"
+    }
+  ],
+  "VERDICT": "FAIL"
+}
