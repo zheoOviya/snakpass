@@ -63,6 +63,15 @@ interface SocialRealtimeEvent {
   entityId?: string
 }
 
+// S5B: Outbox payload shape = { targetUserId, envelope }. The publisher emits
+// this shape via 'social:event'. (S5A originally used `event` as the field name
+// in the handler, but the outbox/enqueueSocialEvent canonical type uses
+// `envelope` — the field-name mismatch caused events to be silently dropped.)
+interface SocialOutboxPayload {
+  targetUserId: string
+  envelope: SocialRealtimeEvent
+}
+
 // S5A: Social event types (for publisher routing)
 const SOCIAL_EVENT_TYPES = new Set([
   'SOCIAL_FRIEND_REQUEST',
@@ -89,10 +98,40 @@ const io = new Server(httpServer, {
   pingInterval: 25000,
 })
 
-// --- S5A: Authentication middleware ---
-// Socket.io handshake includes cookies. We read the snakzap_session cookie
-// and validate it against the Session table.
+// --- S5A: Authentication middleware (S5B: + service-token bypass) ---
+// Two authentication paths:
+//
+//   1. SERVICE connection (outbox-publisher, internal services):
+//      handshake.auth.serviceToken === process.env.REALTIME_SERVICE_TOKEN
+//      → admitted as a "service" identity (no user channel, can emit 'social:event'
+//        to route events to user channels, cannot subscribe to user channels)
+//
+//   2. USER connection (browser clients):
+//      snakzap_session cookie validated against Session table
+//      → admitted as a user, auto-joins user:{userId} private channel
+//
+// S5B Phase 1 runtime precheck discovered that S5A's middleware rejected the
+// publisher (a service with no session cookie), so social events could never
+// be delivered. The service-token path closes this gap without weakening user
+// auth: a random/unknown serviceToken is rejected exactly like an unknown
+// session.
+const SERVICE_TOKEN = process.env.REALTIME_SERVICE_TOKEN || ''
+
 io.use((socket, next) => {
+  // S5B: Service-token bypass for internal services (publisher).
+  // The token is a shared secret provisioned via env. An empty token on the
+  // server disables the service path entirely (fail-closed).
+  const auth = (socket.handshake.auth || {}) as { serviceToken?: unknown }
+  if (typeof auth.serviceToken === 'string' && SERVICE_TOKEN.length > 0 && auth.serviceToken === SERVICE_TOKEN) {
+    socket.data.isService = true
+    socket.data.userId = null
+    socket.data.role = 'service'
+    // Services do NOT join any user channel — they emit 'social:event' with
+    // an explicit targetUserId, and the handler routes to that user's channel.
+    return next()
+  }
+
+  // User auth: session cookie
   const cookieHeader = socket.handshake.headers.cookie || ''
   const cookies = Object.fromEntries(
     cookieHeader.split(';').map(c => {
@@ -107,6 +146,7 @@ io.use((socket, next) => {
   // Store authenticated identity on socket
   socket.data.userId = session.userId
   socket.data.role = session.role
+  socket.data.isService = false
   // S5A: Auto-join user's private channel
   socket.join(`user:${session.userId}`)
   next()
@@ -163,11 +203,17 @@ io.on('connection', (socket) => {
   })
 
   // --- S5A: Social event handler (from outbox publisher) ---
-  // Publisher emits 'social:event' with { targetUserId, event: SocialRealtimeEvent }
-  socket.on('social:event', (data: { targetUserId: string; event: SocialRealtimeEvent }) => {
-    if (!data?.targetUserId || !data?.event?.eventId) return
-    // Emit to the target user's private channel only
-    io.to(`user:${data.targetUserId}`).emit('social:event', data.event)
+  // S5B: ONLY service connections (publisher) may emit 'social:event'.
+  // A regular user socket MUST NOT be able to forge social events to other
+  // users — that would let any authenticated user push arbitrary invalidation
+  // signals to any other user. The publisher authenticates via service token.
+  // S5B fix: field name is `envelope` (matching enqueueSocialEvent's outbox
+  // payload type), NOT `event`. The envelope is emitted to the client as-is.
+  socket.on('social:event', (data: SocialOutboxPayload) => {
+    if (!socket.data.isService) return // silently reject — non-service cannot forge
+    if (!data?.targetUserId || !data?.envelope?.eventId) return
+    // Emit the envelope to the target user's private channel only
+    io.to(`user:${data.targetUserId}`).emit('social:event', data.envelope)
   })
 
   socket.on('disconnect', () => {

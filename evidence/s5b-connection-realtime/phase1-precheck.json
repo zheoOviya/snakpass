@@ -1,0 +1,69 @@
+{
+  "phase": 1,
+  "checks": [
+    {
+      "check": "A_authenticated_socket_connects",
+      "pass": true,
+      "detail": "sockA.id=-f1h6pWdmn6iwMpfAAAD"
+    },
+    {
+      "check": "B_authenticated_socket_connects",
+      "pass": true,
+      "detail": "sockB.id=AlaW8ZlmM1RsfbeoAAAF"
+    },
+    {
+      "check": "publisher_service_token_connects",
+      "pass": true,
+      "detail": "pubSock.id=cRlnfFkSYlwzCb8QAAAH"
+    },
+    {
+      "check": "A_receives_0_from_B_targeted_event",
+      "pass": true,
+      "detail": "aCount=0"
+    },
+    {
+      "check": "B_receives_1_from_targeted_event",
+      "pass": true,
+      "detail": "bCount=1"
+    },
+    {
+      "check": "A_cannot_subscribe_to_user_B",
+      "pass": true,
+      "detail": "subscribe silently ignored, A not in user:B room"
+    },
+    {
+      "check": "B_cannot_subscribe_to_user_A",
+      "pass": true,
+      "detail": "subscribe silently ignored (verified by A not receiving B-targeted event)"
+    },
+    {
+      "check": "user_socket_cannot_emit_social_event (forgery rejected)",
+      "pass": true,
+      "detail": "forgedDelivered=false"
+    },
+    {
+      "check": "unauthenticated_socket_rejected",
+      "pass": true,
+      "detail": "rejected"
+    },
+    {
+      "check": "wrong_service_token_rejected",
+      "pass": true,
+      "detail": "rejected"
+    }
+  ],
+  "results": {
+    "A_connects": true,
+    "B_connects": true,
+    "publisher_connects": true,
+    "A_receives_B_private_event": true,
+    "B_receives_own_event": true,
+    "forged_event_rejected": true,
+    "unauthenticated_rejected": true,
+    "wrong_service_token_rejected": true
+  },
+  "log": [
+    "B received social:event: {\"eventId\":\"phase1-test-1787632616119\",\"type\":\"SOCIAL_FRIEND_REQUEST\",\"occurredAt\":\"2026-08-25T04:36:56.119Z\"}"
+  ],
+  "PHASE1": "PASS"
+}

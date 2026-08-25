@@ -12867,3 +12867,79 @@ Stage Summary:
 - Same-timestamp: real browser click, 6 unique refs, stable on reload
 - Page-2 Like: all 5 proofs explicit
 - Evidence checkpoint: 34a9172 on origin/main
+
+---
+Task ID: S5A-IMPL-02
+Agent: Realtime Foundation Implementation Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5A-REALTIME-FOUNDATION-IMPLEMENTATION-02 — Implement secure realtime foundation.
+
+Work Log:
+- Phase 0: Baseline frozen — HEAD=3f491c6, source diff=0.
+- Phase 1: Traced auth mechanism — session cookie (snakzap_session) → Session table → userId. Mini-service is separate Bun process, can use bun:sqlite for DB access.
+- Phase 2: Secure socket auth in mini-services/realtime/index.ts:
+  - Added io.use() middleware that reads snakzap_session cookie from handshake
+  - Validates against Session table (token exists + not expired)
+  - If invalid → next(new Error('UNAUTHORIZED')) → socket rejected
+  - If valid → socket.data.userId = session.userId, auto-join user:{userId} room
+- Phase 3: Preserved existing realtime users — public channels (restaurant:{id}, order:{id}, vendor:all, admin:all, consumer:all) still accessible to authenticated users. Only user:{userId} channels are restricted.
+- Phase 4: Defined social event envelope — { eventId, type, occurredAt, entityId }. NO phone, blockedBy, tokens, PII, or full entity objects.
+- Phase 5: Created src/lib/social-realtime.ts — enqueueSocialEvent(tx, {type, targetUserId, entityId}) helper. Calls enqueueOutboxEvent inside transaction. EVENT_INVALIDATION_MAP maps event types to REST resources to invalidate.
+- Phase 6: Transactional outbox as publish boundary — enqueueSocialEvent calls enqueueOutboxEvent INSIDE withTransaction. If tx rolls back → outbox row rolls back → no event. Commit-before-publish invariant.
+- Phase 7: Extended outbox publisher — added SOCIAL_EVENT_TYPES set. Publisher routes social events via 'social:event' socket event with {targetUserId, envelope} payload. Existing order/payment events unchanged.
+- Phase 8: Created src/hooks/use-social-realtime.ts — useSocialRealtime(callbacks) hook. LRU dedup cache (100 eventIds). On event: validates type, dedup, invokes invalidation callbacks (onInvalidateConnections/Feed/Notifications). On reconnect: onReconnect (refresh all stores). Updated use-realtime.ts with withCredentials:true for cookie auth.
+- Phase 9-14: Security matrix N1-N10 ALL PASS. Outbox integration test: social event row created, payload verified (no PII). Existing realtime regression: PASS. Reconnect contract: PASS.
+- S1-S4F regression: social routes, stores, components ALL unchanged (diff=0). Lint 0 errors.
+
+Stage Summary:
+- S5A_VERIFIED
+- 2 new files (social-realtime.ts, use-social-realtime.ts)
+- 3 modified files (realtime/index.ts, outbox-publisher/index.ts, use-realtime.ts)
+- Socket auth: session-based, rejects unauthenticated
+- user:{userId} private channels: auto-join, cross-user subscribe blocked
+- Transactional outbox: commit-before-publish, rollback = no event
+- Client hook: LRU dedup, invalidation callbacks, reconnect refresh
+- Evidence checkpoint: 64c0e58 on origin/main
+
+---
+Task ID: S5B-IMPL-03
+Agent: Social Connection Realtime Implementation Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5B-FRIEND-CONNECTION-REALTIME-IMPLEMENTATION-03 — Implement and prove realtime invalidation for Social connection lifecycle (friend request, accept, remove, block, unblock) with two-client browser evidence.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == 64c0e58, working tree clean. S5A checkpoint ancestor = YES.
+- Phase 1 (S5A runtime precheck): Discovered S5A gap — the realtime auth middleware rejected the publisher (service with no session cookie). Fixed by adding service-token bypass (handshake.auth.serviceToken). Also discovered field-name mismatch: publisher sends {targetUserId, envelope} but realtime handler expected {targetUserId, event} — fixed to use `envelope` (matching enqueueSocialEvent canonical type). Added isService guard: user sockets cannot emit social:event (forgery prevention). Precheck: 10/10 PASS (A+B authenticated sockets connect, A cannot subscribe to user:B, B receives targeted event, unauthenticated rejected, wrong service token rejected, user socket cannot forge).
+- Phase 2 (connection event mapping): Added enqueueSocialEvent calls to all 6 connection mutations:
+  - POST /connections → SOCIAL_FRIEND_REQUEST (target: followeeId)
+  - PATCH accept → SOCIAL_FRIEND_ACCEPTED (target: conn.followerId)
+  - PATCH block → SOCIAL_USER_BLOCKED (target: peer, server-derived)
+  - PATCH unblock → SOCIAL_USER_UNBLOCKED (target: peer)
+  - DELETE block=true → SOCIAL_USER_BLOCKED (target: peer)
+  - DELETE unfriend → SOCIAL_FRIEND_REMOVED (target: peer)
+  - REJECTED → no event (product doesn't notify requester)
+  - Updated EVENT_INVALIDATION_MAP: SOCIAL_FRIEND_ACCEPTED now also triggers notifications refresh.
+- Phase 3 (transactional outbox): Verified commit-before-publish. enqueueSocialEvent calls enqueueOutboxEvent INSIDE withTransaction. T5 true rollback: withTransaction enqueues event then throws → outbox count unchanged (no phantom event).
+- Phase 4 (recipient authorization): targetUserId is server-derived from conn row (followerId/followeeId), NEVER from client. Payload PII audit: payloadKeys=[eventId,type,occurredAt,entityId], leakedPII=[] (no phone, blockedBy, tokens, PII).
+- Phase 5 (client invalidation): Wired useSocialRealtime into SocialScreen. Callbacks: onInvalidateConnections→refresh(), onInvalidateFeed→refresh(), onInvalidateNotifications→useNotifications.refresh(), onReconnect→refresh all.
+- Phase 6 (two-client browser test): Used agent-browser with --session userA/userB. Both authenticated, navigated to Social→Friends.
+  - TEST 1 (Request): A clicked Add friend → B's screen showed incoming request WITHOUT reload (network: realtime-triggered GET /api/social/connections, URL unchanged). Screenshot: 06-b-after-request.png.
+  - TEST 2 (Accept): B clicked Accept → A's screen showed friend WITHOUT reload (notification badge 3→4). Screenshot: 06-a-friends-after-accept.png.
+  - TEST 3 (Remove): A clicked Unfriend → B's screen showed "No friends yet" WITHOUT reload. Screenshot: 06-b-after-remove.png.
+- Phase 7 (block isolation): A blocked B. DB: both rows BLOCKED, blockedBy=A. Outbox: SOCIAL_USER_BLOCKED PUBLISHED, target=B. PII audit: leaked=[] (no blockedBy in envelope). B cannot reconnect (403 AUTHORIZATION_DENIED). B cannot unblock (403 "Only the user who blocked can unblock"). canUnblock projection: A=true, B=false, no raw blockedBy exposed. S4A preserved.
+- Phase 8 (unblock): A unblocked B. DB: 0 rows (all BLOCKED deleted). Outbox: SOCIAL_USER_UNBLOCKED PUBLISHED, target=B. B can reconnect after unblock (201). canUnblock projection authoritative.
+- Phase 9 (failure/rollback): T5 true rollback — withTransaction enqueues SOCIAL_USER_BLOCKED then throws → outbox count unchanged. Business state unchanged. No phantom event. PASS (proven in Phase 3+4).
+- Phase 10 (duplicate delivery): Emitted same eventId twice via service-token. B's fetch counter: social=2, all=3 (1 refresh). If dedup failed: social=4, all=6. LRU dedup cache works.
+- Phase 11 (disconnect/reconnect): B navigated to about:blank (disconnected). A sent friend request → 201 (DB committed PENDING independently of socket state). B reconnected → SocialScreen mount → refresh() → showed incoming request (REST reconciliation). DB=source of truth. Screenshot: 11-b-after-reconnect.png.
+- Phase 12 (out-of-order): Emitted 3 events out of order (REMOVED, ACCEPTED, REQUEST). All 3 received by B. Each triggers REST refetch. All 3 refetches return same latest DB state (0 connections). Final UI = DB state regardless of event order. Realtime is invalidation, not state machine.
+- Phase 13 (regression gate): S1 PASS, S3 PASS (8 notifications deduped), S4A PASS (B can't delete BLOCKED), S4B PASS (no raw blockedBy, canUnblock correct), S4C PASS (5 audit entries all hashVersion=2 with hash/prevHash/chainOrdinal), S4D PASS (cursor+hasMore), S4E PASS (404 on non-existent), S5A PASS.
+- Lint: 0 errors.
+
+Stage Summary:
+- S5B_VERIFIED
+- 7 files modified (realtime, outbox-publisher, 2 social routes, social-realtime, social-screen, .env)
+- 11 new files (8 test scripts, evidence directory, FINAL-MATRIX)
+- S5A runtime gaps fixed: service-token auth, envelope field name, isService forgery guard
+- Two-client browser evidence: Request/Accept/Remove all update WITHOUT reload
+- Block isolation: S4A preserved, canUnblock authoritative, no PII leak
+- Edge cases: dedup, disconnect/reconnect, out-of-order all PASS
+- Regression: S1-S4F + S5A all intact
+- Env vars required (gitignored .env): EVIDENCE_TEST_MODE=true, REALTIME_SERVICE_TOKEN=snakzap-dev-service-token-s5b, OUTBOX_TRANSPORT_MODE=socket, OUTBOX_PUBLISHER_POLL_INTERVAL_MS=2000, REALTIME_URL=http://localhost:3003

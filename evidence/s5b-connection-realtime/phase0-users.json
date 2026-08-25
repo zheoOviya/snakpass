@@ -1,0 +1,19 @@
+prisma:query SELECT `main`.`User`.`id` FROM `main`.`User` WHERE `main`.`User`.`phone` IN (?,?) LIMIT ? OFFSET ?
+prisma:query INSERT INTO `main`.`User` (`id`, `phone`, `name`, `role`, `spiceTolerance`, `walletBalance`, `createdAt`) VALUES (?,?,?,?,?,?,?) RETURNING `id` AS `id`, `phone` AS `phone`, `email` AS `email`, `passwordHash` AS `passwordHash`, `name` AS `name`, `role` AS `role`, `spiceTolerance` AS `spiceTolerance`, `walletBalance` AS `walletBalance`, `createdAt` AS `createdAt`, `campusId` AS `campusId`
+prisma:query INSERT INTO `main`.`User` (`id`, `phone`, `name`, `role`, `spiceTolerance`, `walletBalance`, `createdAt`) VALUES (?,?,?,?,?,?,?) RETURNING `id` AS `id`, `phone` AS `phone`, `email` AS `email`, `passwordHash` AS `passwordHash`, `name` AS `name`, `role` AS `role`, `spiceTolerance` AS `spiceTolerance`, `walletBalance` AS `walletBalance`, `createdAt` AS `createdAt`, `campusId` AS `campusId`
+prisma:query INSERT INTO `main`.`Session` (`token`, `userId`, `role`, `expiresAt`, `createdAt`, `lastActivityAt`) VALUES (?,?,?,?,?,?) RETURNING `token` AS `token`, `userId` AS `userId`, `role` AS `role`, `expiresAt` AS `expiresAt`, `createdAt` AS `createdAt`, `lastIp` AS `lastIp`, `lastActivityAt` AS `lastActivityAt`
+prisma:query INSERT INTO `main`.`Session` (`token`, `userId`, `role`, `expiresAt`, `createdAt`, `lastActivityAt`) VALUES (?,?,?,?,?,?) RETURNING `token` AS `token`, `userId` AS `userId`, `role` AS `role`, `expiresAt` AS `expiresAt`, `createdAt` AS `createdAt`, `lastIp` AS `lastIp`, `lastActivityAt` AS `lastActivityAt`
+{
+  "userA": {
+    "id": "cmt869z0c0000mbp5anxn5bpf",
+    "name": "S5B User A",
+    "phone": "+15550001A5B",
+    "sessionToken": "e0a2ba5b2955092267e2d908aca3989294cde80244095a5d2f88a35f6119c375"
+  },
+  "userB": {
+    "id": "cmt869z0e0001mbp534g2ca2j",
+    "name": "S5B User B",
+    "phone": "+15550002A5B",
+    "sessionToken": "1ed7c025a237d739225894682166bfb9753250a093a84ca353fda33c2eebbe7d"
+  }
+}

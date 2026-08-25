@@ -5,6 +5,7 @@ import { withErrorHandler, apiError } from '@/lib/errors'
 import { newTraceId, info as logInfo } from '@/lib/logger'
 import { avatarColorForUserId } from '@/lib/social-activity'
 import { auditWithTx } from '@/lib/audit'
+import { enqueueSocialEvent } from '@/lib/social-realtime'
 
 // ----------------------------------------------------------------------------
 // Wave 6 Task 6A — /api/social/connections
@@ -352,6 +353,18 @@ export const POST = (req: NextRequest) =>
           followeeId,
           message,
         }, session.userId, session.role)
+
+        // S5B: Enqueue realtime invalidation event for the recipient (followee).
+        // targetUserId comes from the validated followee row (server truth),
+        // NEVER from the client. Payload envelope = { eventId, type, occurredAt,
+        // entityId } — no phone, blockedBy, tokens, or PII.
+        // Commit-before-publish: if the transaction rolls back, this event
+        // is NOT enqueued (no phantom invalidation).
+        await enqueueSocialEvent(tx, {
+          type: 'SOCIAL_FRIEND_REQUEST',
+          targetUserId: followeeId,
+          entityId: connection.id,
+        })
 
         return {
           type: 'success' as const,

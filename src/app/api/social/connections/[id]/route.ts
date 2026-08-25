@@ -4,6 +4,7 @@ import { getSessionUser } from '@/lib/session'
 import { withErrorHandler, apiError } from '@/lib/errors'
 import { newTraceId, info as logInfo } from '@/lib/logger'
 import { auditWithTx } from '@/lib/audit'
+import { enqueueSocialEvent } from '@/lib/social-realtime'
 
 // ----------------------------------------------------------------------------
 // Wave 6 Task 6A — /api/social/connections/[id]
@@ -273,6 +274,19 @@ export const PATCH = (
             followeeId: conn.followeeId,
           }, session.userId, session.role)
 
+          // S5B: Notify the blocked peer via realtime invalidation.
+          // targetUserId is server-derived from the connection row (the party
+          // that is NOT session.userId). The envelope contains NO blockedBy
+          // — the peer learns only that they should refresh connections.
+          // S4B canUnblock projection remains authoritative on REST refetch.
+          const blockedPeerId =
+            conn.followerId === session.userId ? conn.followeeId : conn.followerId
+          await enqueueSocialEvent(tx, {
+            type: 'SOCIAL_USER_BLOCKED',
+            targetUserId: blockedPeerId,
+            entityId: connectionId,
+          })
+
           return {
             type: 'success' as const,
             status: 200,
@@ -335,6 +349,17 @@ export const PATCH = (
             followerId: conn.followerId,
             followeeId: conn.followeeId,
           }, session.userId, session.role)
+
+          // S5B: Notify the formerly blocked peer so they can reconcile.
+          // After unblock, the peer's REST refetch will show no BLOCKED row
+          // (canUnblock=false, no row at all). No stale BLOCKED UI.
+          const unblockedPeerId =
+            conn.followerId === session.userId ? conn.followeeId : conn.followerId
+          await enqueueSocialEvent(tx, {
+            type: 'SOCIAL_USER_UNBLOCKED',
+            targetUserId: unblockedPeerId,
+            entityId: connectionId,
+          })
 
           return {
             type: 'success' as const,
@@ -414,6 +439,17 @@ export const PATCH = (
           followeeId: conn.followeeId,
           acceptedAt: now.toISOString(),
         }, session.userId, session.role)
+
+        // S5B: Notify the original requester (follower) via realtime invalidation.
+        // targetUserId = conn.followerId (server-derived from the connection row).
+        // The ACCEPTED event triggers connections + feed + notifications refresh
+        // on the client (see EVENT_INVALIDATION_MAP). No separate
+        // SOCIAL_NOTIFICATION_CREATED event is needed.
+        await enqueueSocialEvent(tx, {
+          type: 'SOCIAL_FRIEND_ACCEPTED',
+          targetUserId: conn.followerId,
+          entityId: connectionId,
+        })
 
         return {
           type: 'success' as const,
@@ -586,6 +622,17 @@ export const DELETE = (
             followeeId: conn.followeeId,
           }, session.userId, session.role)
 
+          // S5B: Notify the blocked peer via realtime invalidation.
+          // targetUserId is server-derived (the party that is NOT session.userId).
+          // Envelope contains NO blockedBy — peer only knows to refresh connections.
+          const deleteBlockedPeerId =
+            conn.followerId === session.userId ? conn.followeeId : conn.followerId
+          await enqueueSocialEvent(tx, {
+            type: 'SOCIAL_USER_BLOCKED',
+            targetUserId: deleteBlockedPeerId,
+            entityId: connectionId,
+          })
+
           return {
             type: 'success' as const,
             status: 200,
@@ -614,6 +661,17 @@ export const DELETE = (
           followerId: conn.followerId,
           followeeId: conn.followeeId,
         }, session.userId, session.role)
+
+        // S5B: Notify the peer (the other party) via realtime invalidation.
+        // targetUserId is server-derived. The peer's REST refetch will no longer
+        // show the friendship. Envelope is minimal — no business state in payload.
+        const removedPeerId =
+          conn.followerId === session.userId ? conn.followeeId : conn.followerId
+        await enqueueSocialEvent(tx, {
+          type: 'SOCIAL_FRIEND_REMOVED',
+          targetUserId: removedPeerId,
+          entityId: connectionId,
+        })
 
         return {
           type: 'success' as const,

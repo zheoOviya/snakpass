@@ -134,7 +134,11 @@ export const EVENT_INVALIDATION_MAP: Record<SocialRealtimeEventType, {
   notifications?: boolean
 }> = {
   SOCIAL_FRIEND_REQUEST:     { connections: true, notifications: true },
-  SOCIAL_FRIEND_ACCEPTED:     { connections: true, feed: true },
+  // S5B: ACCEPTED also refreshes notifications — the accept flow creates a
+  // FRIEND_REQUEST_ACCEPTED notification for the original requester. Rather
+  // than emitting a separate SOCIAL_NOTIFICATION_CREATED event, the ACCEPTED
+  // event itself signals notification invalidation.
+  SOCIAL_FRIEND_ACCEPTED:     { connections: true, feed: true, notifications: true },
   SOCIAL_FRIEND_REMOVED:      { connections: true, feed: true },
   SOCIAL_USER_BLOCKED:        { connections: true, feed: true },
   SOCIAL_USER_UNBLOCKED:      { connections: true },

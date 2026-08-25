@@ -59,11 +59,16 @@ if (!existsSync(LOG_DIR)) {
 }
 
 // Socket.io connection to realtime service
+// S5B: The publisher authenticates as a SERVICE (not a user) via a shared
+// service token. The realtime middleware checks this token and admits the
+// connection as a service identity (no user channel join, but allowed to
+// emit 'social:event' for fanout to user channels).
 let realtimeSocket: Socket | null = null
 
 function getRealtimeSocket(): Socket | null {
   if (realtimeSocket) return realtimeSocket
   try {
+    const serviceToken = process.env.REALTIME_SERVICE_TOKEN || ''
     const sock = ioClient(REALTIME_URL, {
       path: '/',
       transports: ['websocket'],
@@ -71,6 +76,7 @@ function getRealtimeSocket(): Socket | null {
       reconnectionAttempts: 3,
       reconnectionDelay: 500,
       timeout: 2000,
+      auth: { serviceToken },
     })
     sock.on('connect_error', () => {
       // swallow — realtime is best-effort
@@ -1019,6 +1025,22 @@ if (process.env.OUTBOX_PUBLISHER_AUTO_RUN !== 'false') {
   }).catch(async (error) => {
     await log({ level: 'error', message: 'publisher-cycle-error', error: (error as Error).message })
   })
+}
+
+// S5B: Optional polling interval for local dev / realtime tests.
+// When OUTBOX_PUBLISHER_POLL_INTERVAL_MS is set (e.g., 2000), the publisher
+// re-runs publishPendingEvents on that interval. This is needed for realtime
+// two-client browser tests where events must be delivered within seconds.
+// In production (Vercel Cron), this is unset and the publisher relies on
+// cron invocation (1-minute interval).
+const POLL_INTERVAL_MS = parseInt(process.env.OUTBOX_PUBLISHER_POLL_INTERVAL_MS || '0', 10)
+if (POLL_INTERVAL_MS > 0) {
+  setInterval(() => {
+    publishPendingEvents().catch(async (error) => {
+      await log({ level: 'error', message: 'publisher-poll-cycle-error', error: (error as Error).message })
+    })
+  }, POLL_INTERVAL_MS)
+  console.log(`Outbox publisher polling every ${POLL_INTERVAL_MS}ms`)
 }
 
 console.log(`Outbox publisher running on port ${PORT}`)

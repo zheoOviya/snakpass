@@ -39,6 +39,8 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useToast } from '@/hooks/use-toast'
 import { useSocial } from '@/lib/social-store'
+import { useNotifications } from '@/lib/notification-store'
+import { useSocialRealtime } from '@/hooks/use-social-realtime'
 import { useUI } from '@/lib/ui-store'
 import { SocialFeedCard } from '@/components/snak/social-feed-card'
 import { EmptyState } from '@/components/snak/empty-state'
@@ -107,6 +109,35 @@ export function SocialScreen({ initialSubTab = 'feed', className }: SocialScreen
       /* best-effort — store surfaces its own error string */
     })
   }, [refresh])
+
+  // S5B: Wire realtime invalidation. When a social event arrives (friend
+  // request, accept, remove, block, unblock), the appropriate REST resource
+  // is refetched. The realtime event is an INVALIDATION SIGNAL ONLY — it
+  // does NOT carry business state. The REST response is authoritative.
+  //
+  // - onInvalidateConnections / onInvalidateFeed → useSocial.refresh()
+  //     (refresh() fetches both connections and feed in parallel — calling it
+  //     for both callbacks is correct; the second call overwrites with the
+  //     same data, and dedup at the network layer coalesces rapid bursts)
+  // - onInvalidateNotifications → useNotifications.refresh()
+  // - onReconnect → refresh ALL stores (REST reconciles any missed events
+  //     during the disconnected window — realtime is at-least-once, not exactly-once)
+  const refreshNotifications = useNotifications((s) => s.refresh)
+  useSocialRealtime({
+    onInvalidateConnections: () => {
+      void refresh()
+    },
+    onInvalidateFeed: () => {
+      void refresh()
+    },
+    onInvalidateNotifications: () => {
+      void refreshNotifications()
+    },
+    onReconnect: () => {
+      void refresh()
+      void refreshNotifications()
+    },
+  })
 
   const friendCount = React.useMemo(
     () => connections.filter((c) => c.status === 'ACCEPTED').length,

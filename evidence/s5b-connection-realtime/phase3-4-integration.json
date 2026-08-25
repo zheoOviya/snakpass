@@ -1,0 +1,153 @@
+{
+  "phase": "3+4",
+  "tests": [
+    {
+      "test": "T1_friend_request_http",
+      "mutation": "POST /connections",
+      "httpStatus": 201,
+      "result": "PASS",
+      "detail": {
+        "connection": {
+          "id": "cmt86hji2000embi85s2meuo7",
+          "userId": "cmt869z0e0001mbp534g2ca2j",
+          "name": "S5B User B",
+          "phone": "+15550002A5B",
+          "avatarColor": "teal",
+          "status": "PENDING_SENT",
+          "message": null,
+          "createdAt": "2026-08-25T04:42:03.386Z"
+        }
+      }
+    },
+    {
+      "test": "T1_outbox_row",
+      "outbox": {
+        "eventType": "SOCIAL_FRIEND_REQUEST",
+        "status": "PUBLISHED",
+        "publishedAt": "2026-08-25T04:42:07.018Z"
+      },
+      "result": "PASS"
+    },
+    {
+      "test": "T1_recipient_socket (B)",
+      "bReceived": 1,
+      "result": "PASS",
+      "detail": [
+        {
+          "eventId": "647029ef-047a-4fd1-9537-d2e4d1264296",
+          "type": "SOCIAL_FRIEND_REQUEST",
+          "occurredAt": "2026-08-25T04:42:03.390Z",
+          "entityId": "cmt86hji2000embi85s2meuo7"
+        }
+      ]
+    },
+    {
+      "test": "T1_sender_not_notified (A)",
+      "aReceived": 0,
+      "result": "PASS"
+    },
+    {
+      "test": "T1_payload_pii_audit",
+      "payloadKeys": [
+        "eventId",
+        "type",
+        "occurredAt",
+        "entityId"
+      ],
+      "leakedPII": [],
+      "result": "PASS"
+    },
+    {
+      "test": "T1_target_authorization",
+      "outboxTarget": "cmt869z0e0001mbp534g2ca2j",
+      "expected": "cmt869z0e0001mbp534g2ca2j",
+      "envelopeType": "SOCIAL_FRIEND_REQUEST",
+      "result": "PASS"
+    },
+    {
+      "test": "T2_accept_http",
+      "httpStatus": 200,
+      "result": "PASS",
+      "detail": {
+        "connectionId": "cmt86hji2000embi85s2meuo7",
+        "status": "ACCEPTED",
+        "acceptedAt": "2026-08-25T04:42:08.277Z"
+      }
+    },
+    {
+      "test": "T2_accept_outbox",
+      "outbox": {
+        "status": "PUBLISHED",
+        "target": "cmt869z0c0000mbp5anxn5bpf"
+      },
+      "result": "PASS"
+    },
+    {
+      "test": "T2_accept_recipient_socket (A)",
+      "aReceived": 1,
+      "result": "PASS",
+      "detail": [
+        {
+          "eventId": "423e3167-f9e0-4480-ba77-885e3b61fb40",
+          "type": "SOCIAL_FRIEND_ACCEPTED",
+          "occurredAt": "2026-08-25T04:42:08.285Z",
+          "entityId": "cmt86hji2000embi85s2meuo7"
+        }
+      ]
+    },
+    {
+      "test": "T2_accept_B_not_targeted",
+      "bReceived": 0,
+      "result": "PASS"
+    },
+    {
+      "test": "T3_remove_http",
+      "httpStatus": 200,
+      "result": "PASS",
+      "detail": {
+        "connectionId": "cmt86hji2000embi85s2meuo7",
+        "action": "unfriended",
+        "removedBy": "cmt869z0c0000mbp5anxn5bpf"
+      }
+    },
+    {
+      "test": "T3_remove_outbox",
+      "outbox": {
+        "status": "PUBLISHED",
+        "target": "cmt869z0e0001mbp534g2ca2j"
+      },
+      "result": "PASS"
+    },
+    {
+      "test": "T3_remove_recipient_socket (B)",
+      "bReceived": 1,
+      "result": "PASS",
+      "detail": [
+        {
+          "eventId": "5c3aba24-ed8b-4556-971a-ba7214061f90",
+          "type": "SOCIAL_FRIEND_REMOVED",
+          "occurredAt": "2026-08-25T04:42:09.996Z",
+          "entityId": "cmt86hji2000embi85s2meuo7"
+        }
+      ]
+    },
+    {
+      "test": "T4_validation_failure_no_event",
+      "httpStatus": 404,
+      "outboxBefore": 1,
+      "outboxAfter": 1,
+      "result": "PASS"
+    },
+    {
+      "test": "T5_true_rollback_no_phantom",
+      "outboxBefore": 0,
+      "outboxAfter": 0,
+      "result": "PASS",
+      "detail": "commit-before-publish: tx abort → no outbox row"
+    }
+  ],
+  "dbTruth": {
+    "connections": []
+  },
+  "VERDICT": "PHASE_3_4_PASS"
+}
