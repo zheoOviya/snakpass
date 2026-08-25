@@ -36,6 +36,11 @@ export const SOCIAL_REALTIME_EVENT_TYPES = [
   'SOCIAL_ACTIVITY_LIKED',
   'SOCIAL_ACTIVITY_UNLIKED',
   'SOCIAL_NOTIFICATION_CREATED',
+  // S5C: notification read-state invalidation for cross-tab consistency.
+  // When user marks a notification read in one tab, other tabs refresh their
+  // authoritative unread count from REST. The event carries no read-state —
+  // the client refetches GET /api/notifications.
+  'SOCIAL_NOTIFICATION_READ',
 ] as const
 
 export type SocialRealtimeEventType = (typeof SOCIAL_REALTIME_EVENT_TYPES)[number]
@@ -146,4 +151,6 @@ export const EVENT_INVALIDATION_MAP: Record<SocialRealtimeEventType, {
   SOCIAL_ACTIVITY_LIKED:       { feed: true, notifications: true },
   SOCIAL_ACTIVITY_UNLIKED:     { feed: true },
   SOCIAL_NOTIFICATION_CREATED: { notifications: true },
+  // S5C: read-state change → refresh notifications (authoritative unread count).
+  SOCIAL_NOTIFICATION_READ:    { notifications: true },
 }

@@ -12965,3 +12965,42 @@ Stage Summary:
 - Temp credentials purged (3 files deleted, no token in config/repo)
 - S5B = CLOSED
 - S5C = UNLOCKED (next: Notification Realtime)
+
+---
+Task ID: S5C-IMPL-05
+Agent: Notification Realtime Implementation Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5C-NOTIFICATION-REALTIME-IMPLEMENTATION-05 — Implement realtime invalidation for Social Notifications. DATABASE=source of truth, REST=authoritative, REALTIME=invalidation signal only.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == 55bd9d0, clean tree, S5B checkpoint ancestor = YES.
+- Phase 1 (trace): Documented notification contract — GET /api/notifications (list+unreadCount), PATCH /api/notifications/[id] (mark-one), POST /api/notifications/mark-all-read. Notification model: type, userId, readAt, dedupKey, data, @@unique([userId, dedupKey]). Producers: friend request (POST /connections → FRIEND_REQUEST_RECEIVED for followee), accept (PATCH accept → FRIEND_REQUEST_ACCEPTED for follower), like (POST /like → SOCIAL_ACTIVITY_LIKED for actor). Client: notification-store (Zustand), NotificationBell (read-only toggle), NotificationList (mark-one/mark-all buttons).
+- Phase 2-3 (producer integration): Added SOCIAL_NOTIFICATION_CREATED events to all 3 producers. Captured notificationId from tx.notification.create (select:{id:true}), enqueued event with entityId=notifId. P2002 on dedupKey → notifId stays null → no event (dedup at source). All events inside withTransaction (commit-before-publish).
+- Phase 3+4 (backend integration): 11/11 PASS — all 3 producers emit correct event, target server-derived, PII-clean envelope [eventId,type,occurredAt,entityId], dedup at source, rollback no-phantom.
+- Phase 5 (friend request notif browser): A clicked Add friend → B bell badge 0→1 WITHOUT reload (URL unchanged). Network: realtime-triggered GET /api/notifications. Dropdown: 'New friend request, S5B User A wants to be your friend'. Screenshots captured.
+- Phase 6 (friend accepted notif browser): B accepted → A bell badge 0→1 WITHOUT reload. Dropdown: 'Friend request accepted! 🎉, S5B User B accepted your friend request!'.
+- Phase 7 (like notif browser): B liked A's activity → A bell badge 1→2 WITHOUT reload. Dropdown: 'Someone liked your activity'. Duplicate Like: status 200 (idempotent), likeCount=1, badge stayed 2 (no duplicate notification).
+- Phase 8 (cross-tab mark-one): DISCOVERED gap — mark-one/mark-all routes did NOT emit realtime events. Added SOCIAL_NOTIFICATION_READ event type + invalidation map entry. Wrapped PATCH /notifications/[id] in withTransaction + enqueueSocialEvent(SOCIAL_NOTIFICATION_READ, target=session.userId, entityId=notifId). A tab1 marked one → A2 tab2 badge 1→0 WITHOUT reload (cross-tab same-user).
+- Phase 9 (cross-tab mark-all): Wrapped POST /notifications/mark-all-read in withTransaction + enqueueSocialEvent(SOCIAL_NOTIFICATION_READ, target=session.userId, entityId='mark-all'). Only emitted if markedRead>0. A tab1 mark-all → A2 tab2 badge 2→0 WITHOUT reload (badge element removed).
+- Phase 10 (bell-open zero-mutation): Injected fetch counter. Bell open/close triggered ZERO PATCH, ZERO POST. Badge stayed 2, DB unread stayed 2. S3 contract preserved.
+- Phase 11 (rollback): withTransaction enqueues SOCIAL_NOTIFICATION_CREATED then throws → outbox count unchanged. No phantom event.
+- Phase 12 (disconnect/reconnect): B disconnected, A's friend request committed to DB (PENDING notif). B reconnected → REST reconciliation showed notification. DB=source of truth.
+- Phase 13 (out-of-order + dedup): 4 events (3 unique + 1 duplicate eventId) delivered to socket. Client LRU dedup processes 3 unique. Final DB truth = 1 notification. Ordering irrelevant.
+- Phase 14 (privacy): envelope=[eventId,type,occurredAt,entityId]. leakedPII=[] (no phone, blockedBy, token, session, title, body, data, cookie, csrf, otp).
+- Phase 15 (authorization): A received 0 B-targeted events (cross-user isolation). User socket cannot emit social:event (isService guard blocks forgery).
+- Phase 13 regression: S1 PASS, S3 PASS (1 deduped notif), S4A PASS (block isolation), S4B PASS (canUnblock, no raw blockedBy), S4C PASS (audit v2), S4D PASS (cursor), S4E PASS (404), S5A PASS, S5B PASS, S5C PASS.
+- Lint: 0 errors.
+
+Stage Summary:
+- S5C_VERIFIED
+- 9 files modified (2 social routes, like route, 2 notification routes, social-realtime, app-shell, realtime service, outbox-publisher)
+- New event type: SOCIAL_NOTIFICATION_READ (cross-tab read-state invalidation)
+- All 3 notification producers emit SOCIAL_NOTIFICATION_CREATED (entityId=notifId)
+- Mark-one + mark-all emit SOCIAL_NOTIFICATION_READ (cross-tab, same userId target)
+- NotificationBell wired with useSocialRealtime
+- Bell-open zero-mutation preserved (S3 contract)
+- Dedup at source: P2002 → no row → no event
+- Two-client browser evidence: all 6 mandatory matrix rows PASS
+- Security matrix: 8/8 PASS
+- Edge cases: rollback, disconnect, out-of-order, dedup, privacy, auth all PASS
+- Regression: S1-S4F + S5A + S5B all intact
+- Evidence checkpoint: pending commit + push

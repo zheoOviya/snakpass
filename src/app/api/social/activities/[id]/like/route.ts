@@ -3,6 +3,7 @@ import { db, withTransaction, TransactionConflictError } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { withErrorHandler, apiError } from '@/lib/errors'
 import { newTraceId, info as logInfo } from '@/lib/logger'
+import { enqueueSocialEvent } from '@/lib/social-realtime'
 
 // ----------------------------------------------------------------------------
 // GJ-02 S2: Persistent Likes — POST/DELETE /api/social/activities/[id]/like
@@ -104,10 +105,11 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
         // liking their own activity. This is an intentional product decision,
         // not an atomicity gap — the Like commits without a notification by
         // design.
+        let likeNotifId: string | null = null
         if (activity.actorId !== session.userId) {
           const dedupKey = `SOCIAL_ACTIVITY_LIKED:${activityId}:${session.userId}`
           try {
-            await tx.notification.create({
+            const notif = await tx.notification.create({
               data: {
                 userId: activity.actorId,
                 type: 'SOCIAL_ACTIVITY_LIKED',
@@ -116,7 +118,9 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
                 data: JSON.stringify({ activityId, likerId: session.userId }),
                 dedupKey,
               },
+              select: { id: true },
             })
+            likeNotifId = notif.id
           } catch (e: unknown) {
             // P2002 = notification already exists from a previous like cycle.
             // This is idempotent — the Like still commits. NOT an atomicity gap.
@@ -126,6 +130,18 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
               throw e // Non-P2002 → transaction rolls back (Like also rolled back)
             }
           }
+        }
+
+        // S5C: Dedicated notification realtime event for the activity owner
+        // (actor). Only enqueued when a NEW notification row was created
+        // (likeNotifId !== null). On duplicate Like (idempotent), no new row
+        // → no event → no duplicate bell increment. entityId = notificationId.
+        if (likeNotifId) {
+          await enqueueSocialEvent(tx, {
+            type: 'SOCIAL_NOTIFICATION_CREATED',
+            targetUserId: activity.actorId,
+            entityId: likeNotifId,
+          })
         }
 
         return { isNewLike: true }

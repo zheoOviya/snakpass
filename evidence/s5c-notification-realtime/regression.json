@@ -1,0 +1,46 @@
+{
+  "regression": [
+    {
+      "gate": "S1",
+      "result": "PASS"
+    },
+    {
+      "gate": "S3_dedup",
+      "count": 1,
+      "result": "PASS"
+    },
+    {
+      "gate": "S4A_block",
+      "result": "PASS"
+    },
+    {
+      "gate": "S4B_canUnblock",
+      "result": "PASS"
+    },
+    {
+      "gate": "S4C_audit_v2",
+      "result": "PASS"
+    },
+    {
+      "gate": "S4D_cursor",
+      "result": "PASS"
+    },
+    {
+      "gate": "S4E_failure",
+      "result": "PASS"
+    },
+    {
+      "gate": "S5A_socket_auth",
+      "result": "PASS"
+    },
+    {
+      "gate": "S5B_connection_rt",
+      "result": "PASS"
+    },
+    {
+      "gate": "S5C_notif_rt",
+      "result": "PASS"
+    }
+  ],
+  "VERDICT": "REGRESSION_PASS"
+}

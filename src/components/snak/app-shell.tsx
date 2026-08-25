@@ -12,6 +12,7 @@ import { useUI } from '@/lib/ui-store'
 import { useSocial } from '@/lib/social-store'
 import { csrfFetch } from '@/lib/csrf-client'
 import { useNotifications } from '@/lib/notification-store'
+import { useSocialRealtime } from '@/hooks/use-social-realtime'
 import { CampusSelector } from '@/components/snak/campus-selector'
 import { BottomNav } from '@/components/snak/bottom-nav'
 import type { Campus } from '@/lib/types'
@@ -253,11 +254,28 @@ function CampusChip({ onSwitched }: { onSwitched?: () => void }) {
 
 // GJ-02 S3: NotificationBell — bell icon with unread badge
 // Repair-C: Bell open is a READ-ONLY toggle. It must NOT mutate server state.
+// S5C: Wired to useSocialRealtime — refreshes GET /api/notifications on
+// SOCIAL_NOTIFICATION_CREATED events (invalidation signal, NOT state mutation).
+// The bell badge + list always reflect authoritative REST/DB truth.
 function NotificationBell() {
   const { unreadCount, refresh } = useNotifications()
   const [open, setOpen] = React.useState(false)
 
   React.useEffect(() => { refresh() }, [refresh])
+
+  // S5C: Realtime invalidation for the notification bell.
+  // On SOCIAL_NOTIFICATION_CREATED → refresh() refetches authoritative unread count + list.
+  // On reconnect → refresh() reconciles any events missed during disconnect.
+  // The realtime event is an INVALIDATION SIGNAL ONLY — it does NOT carry
+  // unread count or notification body. REST is authoritative.
+  useSocialRealtime({
+    onInvalidateNotifications: () => {
+      void refresh()
+    },
+    onReconnect: () => {
+      void refresh()
+    },
+  })
 
   return (
     <div className="relative">

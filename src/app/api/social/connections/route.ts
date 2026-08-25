@@ -322,8 +322,9 @@ export const POST = (req: NextRequest) =>
         // S3: deterministic dedupKey + UPPERCASE type + P2002 idempotent
         const followerName = session.name ?? session.phone
         const dedupKey = `FRIEND_REQUEST_RECEIVED:${connection.id}`
+        let notifId: string | null = null
         try {
-          await tx.notification.create({
+          const notif = await tx.notification.create({
             data: {
               userId: followeeId,
               type: 'FRIEND_REQUEST_RECEIVED',
@@ -337,10 +338,13 @@ export const POST = (req: NextRequest) =>
               }),
               dedupKey,
             },
+            select: { id: true },
           })
+          notifId = notif.id
         } catch (e: unknown) {
           if (e !== null && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
-            // idempotent — notification already exists
+            // idempotent — notification already exists (replay of same friend request tx).
+            // No new notification row → no SOCIAL_NOTIFICATION_CREATED event.
           } else {
             throw e
           }
@@ -365,6 +369,19 @@ export const POST = (req: NextRequest) =>
           targetUserId: followeeId,
           entityId: connection.id,
         })
+
+        // S5C: Dedicated notification realtime event. Only enqueued when a NEW
+        // notification row was actually created (notifId !== null). On P2002
+        // replay, no notification row was created → no event (dedup at source).
+        // entityId = notificationId (minimal, no PII). Client bell refreshes
+        // GET /api/notifications on receipt.
+        if (notifId) {
+          await enqueueSocialEvent(tx, {
+            type: 'SOCIAL_NOTIFICATION_CREATED',
+            targetUserId: followeeId,
+            entityId: notifId,
+          })
+        }
 
         return {
           type: 'success' as const,

@@ -409,8 +409,9 @@ export const PATCH = (
         // S3: deterministic dedupKey + UPPERCASE type + P2002 idempotent
         const followeeName = session.name ?? session.phone
         const dedupKey = `FRIEND_REQUEST_ACCEPTED:${connectionId}`
+        let acceptNotifId: string | null = null
         try {
-          await tx.notification.create({
+          const notif = await tx.notification.create({
             data: {
               userId: conn.followerId,
               type: 'FRIEND_REQUEST_ACCEPTED',
@@ -424,10 +425,13 @@ export const PATCH = (
               }),
               dedupKey,
             },
+            select: { id: true },
           })
+          acceptNotifId = notif.id
         } catch (e: unknown) {
           if (e !== null && typeof e === 'object' && 'code' in e && (e as { code: string }).code === 'P2002') {
-            // idempotent — notification already exists
+            // idempotent — notification already exists (replay of same accept tx).
+            // No new notification row → no SOCIAL_NOTIFICATION_CREATED event.
           } else {
             throw e
           }
@@ -443,13 +447,23 @@ export const PATCH = (
         // S5B: Notify the original requester (follower) via realtime invalidation.
         // targetUserId = conn.followerId (server-derived from the connection row).
         // The ACCEPTED event triggers connections + feed + notifications refresh
-        // on the client (see EVENT_INVALIDATION_MAP). No separate
-        // SOCIAL_NOTIFICATION_CREATED event is needed.
+        // on the client (see EVENT_INVALIDATION_MAP).
         await enqueueSocialEvent(tx, {
           type: 'SOCIAL_FRIEND_ACCEPTED',
           targetUserId: conn.followerId,
           entityId: connectionId,
         })
+
+        // S5C: Dedicated notification realtime event. Only enqueued when a NEW
+        // notification row was created (acceptNotifId !== null). On P2002 replay
+        // (idempotent accept), no new row → no event. entityId = notificationId.
+        if (acceptNotifId) {
+          await enqueueSocialEvent(tx, {
+            type: 'SOCIAL_NOTIFICATION_CREATED',
+            targetUserId: conn.followerId,
+            entityId: acceptNotifId,
+          })
+        }
 
         return {
           type: 'success' as const,

@@ -83,6 +83,7 @@ const SOCIAL_EVENT_TYPES = new Set([
   'SOCIAL_ACTIVITY_LIKED',
   'SOCIAL_ACTIVITY_UNLIKED',
   'SOCIAL_NOTIFICATION_CREATED',
+  'SOCIAL_NOTIFICATION_READ',
 ])
 
 // --- HTTP server (health check + socket.io) ---

@@ -108,6 +108,7 @@ const SOCIAL_EVENT_TYPES: Set<string> = new Set([
   'SOCIAL_ACTIVITY_LIKED',
   'SOCIAL_ACTIVITY_UNLIKED',
   'SOCIAL_NOTIFICATION_CREATED',
+  'SOCIAL_NOTIFICATION_READ',
 ])
 
 // Wave-4 4c Phase 2 — command event types that are NOT transport handoffs.
