@@ -13567,3 +13567,46 @@ Stage Summary:
 - S5H1 regression: SOCIAL_PROOF_IMPRESSION → 200
 - Product regression: ranking formula, privacy, exclusions all unchanged
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H3-CONTRACT-CHALLENGE-11
+Agent: S5H3 New-User Friend Seed Contract Auditor (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H3-NEW-USER-FRIEND-SEED-CONTRACT-CHALLENGE-11 — Freeze eligibility, candidate graph, privacy, abuse, ranking. NO PRODUCT CODE CHANGES.
+
+Work Log:
+- Phase 0: Baseline frozen — e606c49, S5H2 ancestor = YES.
+- Phase 1 (new-user definition): acceptedFriendCount <= 2 (social cold-start, not account age). 61/62 dev users eligible. Exit: acceptedFriendCount >= 3.
+- Phase 2 (exit): >=3 friends → section disappears automatically.
+- Phase 3 (candidate sources): Friends-of-friends (primary) + same-campus (fallback). Rejected: contacts, random, directory.
+- Phase 4 (fof contract): Traverse A→B→C where B is accepted friend. Exclude self, existing connections (all statuses), blocked relationships.
+- Phase 5 (blocked-chain): Only traverse through ACCEPTED non-blocked edges. A blocks B → B's graph not traversed. A blocks C → C excluded. C blocks A → C excluded.
+- Phase 6 (mutual context): Bucketed count "1"/"2"/"3+" — no mutual identities, no exact count beyond 3, no graph path.
+- Phase 7 (projection): {id, name, avatarColor, reason, mutualCountBucket}. No phone, email, blockedBy, mutual IDs, graph path, order IDs.
+- Phase 8 (ranking): mutualCount DESC → candidate.createdAt DESC → candidateId ASC. No Like/activity/request count.
+- Phase 9 (campus fallback): Same-campus + >=1 accepted connection. Campus is public, not sensitive. Fills remaining slots when <3 mutual candidates.
+- Phase 10 (cap): 3 candidates max.
+- Phase 11 (threshold): >=1 mutual friend for MUTUAL candidates. >=1 accepted connection for CAMPUS fallback.
+- Phase 12 (abuse): Existing rate limiting (S4B) + OTP login + campus binding. Minimum trust: candidate must have >=1 accepted connection. Decline cooldown deferred (schema change needed).
+- Phase 13 (decline): REJECTED candidates reappear (no cooldown). Classification: DEFERRED_PRODUCT_POLICY. Not a blocker.
+- Phase 14 (fake accounts): >=1 connection threshold naturally excludes isolated accounts. Campus fallback requires same threshold.
+- Phase 15 (zero friends): 0 friends → 0 fof candidates → campus fallback if safe candidates exist.
+- Phase 16 (zero candidates): Section absent. Existing search remains usable.
+- Phase 17 (API): GET /api/social/friend-seed → {eligible, candidates:[{id, name, avatarColor, reason, mutualCountBucket}]}. Max 3.
+- Phase 18 (query): 7-step strategy — eligibility check, accepted friends, exclusion set, fof traversal, mutual count, campus fallback, profile fetch.
+- Phase 19 (mutual count): DISTINCT connectorId. A-B, B-C, A-D, D-C → C mutualCount=2 (not 4 from reciprocal rows).
+- Phase 20 (fixtures): R1-R6 verified conceptually. Ranking matrix: C(3)>D(2)>E(1), F(blocked)excluded, G(pending)excluded, H(friend)excluded.
+- Phase 21 (UI): "People you may know" section on Friends screen above search. Cards show avatar+name+mutual bucket+Add Friend.
+- Phase 22 (add friend): Uses existing POST /api/social/connections. No new mutation path.
+- Phase 23 (realtime): DEFERRED. Page-load fetch. Existing S5B connection invalidation sufficient.
+- Phase 24 (measurement): Primary = friend-seed→request conversion. Guardrails = block/decline/spam rates.
+- Phase 25 (analytics privacy): FRIEND_SEED_IMPRESSION + FRIEND_SEED_REQUEST_SENT. Safe: experimentId, variant, rankPosition, candidateReason, mutualCountBucket. No candidateId.
+- Phase 26 (experiment): Instrumentation ACTIVE, RANDOMIZED_AB_TEST = DEFERRED.
+- Phase 27 (performance): 4 indexed queries, ~10ms at 50 fof. Needs User(campusId) index for prod.
+- Phase 28 (security matrix): Cross-campus leakage, blocked, pending, existing friend, self, inactive — all excluded.
+
+Stage Summary:
+- S5H3_IMPLEMENTATION_READY
+- 15/15 contract matrix entries READY
+- No hard blockers
+- Production note: add User(campusId) index for campus fallback performance
+- Evidence checkpoint: pending commit + push
