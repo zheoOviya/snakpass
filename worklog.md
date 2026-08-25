@@ -13296,3 +13296,27 @@ Stage Summary:
 - Privacy preserved: No purchase history disclosed without explicit share consent
 - Schema repair recommended for future (SocialActivity.sourceOrderId) but NOT a blocker for S5H1
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H1-ORDER-SHARE-LINK-CONTRACT-03
+Agent: S5H1 Order-Share Link Contract Auditor (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H1-ORDER-SHARE-LINK-CONTRACT-03 — Resolve authoritative Order↔SocialActivity linkage. NO PRODUCT CODE CHANGES — schema design only.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == 2ca346a, S5H1-02 ancestor = YES.
+- Phase 1 (schema trace): Found existing pattern — server-side activities (REDEEMED, EARNED_REWARD, JOINED_GROUP) use objectId = authoritative entity ID (gift.id, orderId, groupOrder.id). Client-initiated ORDERED activities use objectId = restaurantId (client-supplied, not authoritative). SocialActivity has NO orderId or sourceOrderId field.
+- Phase 2 (option evaluation): Option A (SocialActivity.sourceOrderId FK to Order) PREFERRED. Option B (generic sourceType/sourceId) REJECTED — no existing pattern. Option C (dedicated SocialOrderShare table) REJECTED — over-engineered.
+- Phase 3 (qualifying statuses): Explicit allowlist = CONFIRMED, PREPARING, ALMOST_READY, READY_FOR_PICKUP, PICKED_UP, PAID. Excluded: CANCELLED, PAYMENT_PENDING. Negative condition (status != CANCELLED) replaced with positive allowlist.
+- Phase 4 (server-controlled creation): New endpoint POST /api/social/share-order. Server validates: order belongs to user, status qualifies, restaurantId derived from Order (not client), actorId from session. Client CANNOT set sourceOrderId, objectId, or actorId.
+- Phase 5 (revised query): INNER JOIN SocialActivity.sourceOrderId → Order.id. Filters: sourceOrderId IS NOT NULL, Order.status IN allowlist, visibility IN FRIENDS/PUBLIC, actorId IN accepted friends. Legacy activities (NULL sourceOrderId) naturally excluded.
+- Phase 6 (trust matrix): All 9 fixtures verified — fake activity excluded (NULL sourceOrderId), another user's order excluded (ownership check), restaurant mismatch excluded (server-derived objectId), cancelled order excluded (status allowlist), blocked/unfriended excluded (no ACCEPTED edge).
+- Phase 7 (legacy data): 29 existing ORDERED activities have NULL sourceOrderId → excluded from social-proof query. No migration needed — filter naturally excludes them.
+- Phase 8 (gift semantics): N/A — gift activities use verb=REDEEMED, not ORDERED. No note filter needed.
+
+Stage Summary:
+- S5H1_IMPLEMENTATION_READY
+- Schema repair: SocialActivity.sourceOrderId String? + @relation to Order (additive, nullable)
+- New endpoint: POST /api/social/share-order (server-validated, client cannot fabricate)
+- Trust chain: REAL ORDER (sourceOrderId FK) + AUTHORIZED SHARE (visibility) + CURRENT FRIEND/BLOCK = FRIENDS ORDERED HERE
+- All three facts server-authoritative — client cannot fabricate economic truth, share consent, or viewer authorization
+- Evidence checkpoint: pending commit + push
