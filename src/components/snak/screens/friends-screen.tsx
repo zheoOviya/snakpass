@@ -49,6 +49,7 @@ import { useToast } from '@/hooks/use-toast'
 import { useSocial } from '@/lib/social-store'
 import { EmptyState } from '@/components/snak/empty-state'
 import { SocialFeedSkeleton } from '@/components/snak/skeleton-loader'
+import { FriendSeedSection } from '@/components/snak/friend-seed-section'
 import type { SocialConnection } from '@/lib/types'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -364,6 +365,9 @@ export function FriendsScreen({ className }: FriendsScreenProps) {
 
   return (
     <div className={cn('space-y-5', className)}>
+      {/* ── S5H3: People you may know (friend seed) ─────────────────────────── */}
+      <FriendSeedSection />
+
       {/* ── Search bar ─────────────────────────────────────────────────────── */}
       <div className="relative">
         <Search

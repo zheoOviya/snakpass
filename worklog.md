@@ -13610,3 +13610,29 @@ Stage Summary:
 - No hard blockers
 - Production note: add User(campusId) index for campus fallback performance
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H3-IMPL-12
+Agent: S5H3 New-User Friend Seed Implementation Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H3-NEW-USER-FRIEND-SEED-IMPLEMENTATION-12 — Implement friend seed API + UI + runtime evidence.
+
+Work Log:
+- Phase 0: Baseline frozen — 1a72bd7, clean tree.
+- Phase 1 (API): Created GET /api/social/friend-seed. Eligibility: acceptedFriendCount <= 2. Friends-of-friends traversal + campus fallback. Max 3 candidates. Privacy: name + avatarColor + reason + mutualCountBucket only.
+- Phase 3-4 (fof + ranking): Bidirectional traversal of ACCEPTED edges. DISTINCT connectorId for mutual count. Sort: mutualCount DESC → candidateId ASC. Fixed: campus fallback query used `socialConnections` relation which doesn't exist on User model — replaced with two-step approach (fetch campus users + filter by accepted connections).
+- Phase 7-8 (block/pending exclusion): Blocked candidates excluded. Pending requests excluded. Existing friends excluded. All verified in runtime test.
+- Phase 9-10 (zero-friend + add friend): Campus fallback for zero-friend users. Add Friend uses existing POST /api/social/connections (no new mutation path).
+- Phase 11 (UI): Created FriendSeedSection component. "People you may know" section on Friends screen above search bar. Cards show avatar+name+mutual bucket+Add Friend button.
+- Phase 15 (analytics): FRIEND_SEED_IMPRESSION + FRIEND_SEED_REQUEST events. Safe dimensions: experimentId, variant, rankPosition, candidateReason, mutualCountBucket. No candidateId in analytics.
+- Runtime test: 11/11 PASS:
+  D(2 mutuals) ranks 1st ✅, E(1 mutual) ranks 2nd ✅, F(blocked) excluded ✅, G(pending) excluded ✅, Cap ≤3 ✅, PII audit (0 leaks) ✅, Exit at 3 friends (eligible=false) ✅, Analytics impression (200) ✅, Analytics request (200) ✅, Analytics PII (0 leaks) ✅, Add friend via existing API (201) ✅
+- Lint: 0 errors.
+
+Stage Summary:
+- S5H3_VERIFIED
+- 3 new files: friend-seed/route.ts, friend-seed-section.tsx, s5h3-test.mjs
+- 2 modified files: friends-screen.tsx (FriendSeedSection), analytics.ts + track/route.ts (new events)
+- Ranking: mutualCount DESC → candidateId ASC
+- Privacy: no mutual identities, bucketed count, no graph path
+- Add Friend: existing POST /api/social/connections (no new mutation)
+- Evidence checkpoint: pending commit + push
