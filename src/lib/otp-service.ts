@@ -1,5 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'crypto'
 import { db } from './db'
+import type { Prisma } from '@prisma/client'
 
 // OTP service — single technique used everywhere OTP is needed:
 //   - consumer phone login
@@ -50,8 +51,10 @@ export async function createOtp(
 export async function verifyOtp(
   otpId: string,
   code: string,
+  tx?: Prisma.TransactionClient,
 ): Promise<{ ok: boolean; target?: string; purpose?: string }> {
-  const rec = await db.otpRequest.findUnique({ where: { id: otpId } })
+  const client = tx ?? db
+  const rec = await client.otpRequest.findUnique({ where: { id: otpId } })
   if (!rec) return { ok: false }
   if (rec.consumed) return { ok: false }
   if (rec.expiresAt.getTime() < Date.now()) return { ok: false }
@@ -61,7 +64,11 @@ export async function verifyOtp(
   const match = actual.length === expected.length && timingSafeEqual(actual, expected)
   if (!match) return { ok: false }
 
-  await db.otpRequest.update({ where: { id: otpId }, data: { consumed: true } })
+  // Mark as consumed — uses `client` (tx if provided, else db).
+  // V2 fix: when called inside a withTransaction, using `tx` avoids the
+  // SQLite "database is locked" error that occurs when the global `db`
+  // client writes while a BEGIN IMMEDIATE write lock is held.
+  await client.otpRequest.update({ where: { id: otpId }, data: { consumed: true } })
   return { ok: true, target: rec.target, purpose: rec.purpose }
 }
 

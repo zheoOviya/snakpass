@@ -3,17 +3,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { motion, useReducedMotion } from 'framer-motion'
-
-// Lazy-load the Vendor Analytics Widget (Task 4C) + Vendor Menu Manager (Task 4B).
-// Dynamic imports keep vendor-view.tsx resilient if either component is mid-refactor.
-const VendorAnalyticsWidget = dynamic(
-  () => import('./vendor-analytics-widget').then((m) => m.VendorAnalyticsWidget),
-  { ssr: false, loading: () => <Skeleton className="h-40 w-full rounded-xl" /> },
-)
-const VendorMenuManager = dynamic(
-  () => import('./vendor-menu-manager').then((m) => m.VendorMenuManager),
-  { ssr: false, loading: () => <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-lg" />)}</div> },
-)
 import {
   Store,
   Clock,
@@ -26,6 +15,9 @@ import {
   Check,
   Timer,
   AlarmClockCheck,
+  ShieldCheck,
+  Inbox,
+  PackageCheck,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -34,6 +26,20 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Switch } from '@/components/ui/switch'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog'
+import {
+  InputOTP,
+  InputOTPGroup,
+  InputOTPSlot,
+  InputOTPSeparator,
+} from '@/components/ui/input-otp'
 import { useToast } from '@/hooks/use-toast'
 import { useRealtime, realtimeSocket } from '@/hooks/use-realtime'
 import { csrfFetch } from '@/lib/csrf-client'
@@ -45,23 +51,65 @@ import {
 import type { MenuItem, Order, Restaurant } from '@/lib/types'
 import { VegBadge, SpiceDots } from './bits'
 
+// Lazy-load the Vendor Analytics Widget (Task 4C) + Vendor Menu Manager (Task 4B).
+const VendorAnalyticsWidget = dynamic(
+  () => import('./vendor-analytics-widget').then((m) => m.VendorAnalyticsWidget),
+  { ssr: false, loading: () => <Skeleton className="h-40 w-full rounded-xl" /> },
+)
+const VendorMenuManager = dynamic(
+  () => import('./vendor-menu-manager').then((m) => m.VendorMenuManager),
+  { ssr: false, loading: () => <div className="space-y-2">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-16 w-full rounded-lg" />)}</div> },
+)
+
 // Vendor-facing order shape: the base Order from /api/orders plus cached
 // P0-06 fulfilment state (status + pickupOtp) fetched via GET /fulfilment AND
 // the additive `acceptedAt` timestamp (Task 3C) fetched via
 // GET /api/orders/[id]/accepted.
-//   - `fulfilmentStatus` is undefined while the fulfilment fetch is in flight
-//     or if it failed; the card treats undefined as PREPARING (the lazy-create
-//     baseline).
-//   - `acceptedAt` is undefined while the accepted fetch is in flight, or null
-//     once the fetch resolves + the order has NOT been accepted yet. The card
-//     shows the Accept button only when `acceptedAt === null` (i.e. the fetch
-//     resolved + acceptedAt is null).
-//   - `prepTimeMins` is a client-side override (Task 4A MVP — no API yet).
+//
+// V2 additions:
+//   - `pickupOtpId`: the OtpRequest record ID returned by the fulfilment PATCH
+//     when transitioning to READY_FOR_PICKUP. The vendor UI stores this + uses
+//     it to call POST /api/orders/[id]/pickup/verify. The OTP CODE itself is
+//     NEVER shown to the vendor (only the customer receives it).
+//   - `pickupOtpId` is undefined while no OTP has been issued or if the
+//     fulfilment fetch hasn't landed yet.
 type VendorOrder = Order & {
   fulfilmentStatus?: string
   fulfilmentOtp?: string
   acceptedAt?: string | null
   prepTimeMins?: number
+  pickupOtpId?: string
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// V2 — Queue model (Phase 2)
+// Maps canonical statuses into mutually exclusive Vendor queues.
+// An order appears in EXACTLY ONE queue (no double-counting).
+//
+//   NEW       → acceptedAt === null (order awaiting vendor acceptance)
+//   PREPARING → acceptedAt set + fulfilmentStatus in {PREPARING, ALMOST_READY}
+//   READY     → fulfilmentStatus === READY_FOR_PICKUP
+//   COMPLETED → fulfilmentStatus === PICKED_UP (or order.status === PICKED_UP)
+//   CANCELLED → order.status === CANCELLED (read-only history)
+//
+// Invariant: one order must not appear in two incompatible active queues.
+// ─────────────────────────────────────────────────────────────────────────────
+type QueueKey = 'new' | 'preparing' | 'ready' | 'completed' | 'cancelled'
+
+function queueForOrder(o: VendorOrder): QueueKey {
+  if (o.status === 'CANCELLED') return 'cancelled'
+  if (o.status === 'PICKED_UP' || o.fulfilmentStatus === 'PICKED_UP') return 'completed'
+  if (o.fulfilmentStatus === 'READY_FOR_PICKUP') return 'ready'
+  if (o.acceptedAt === null || o.acceptedAt === undefined) return 'new'
+  return 'preparing'
+}
+
+const QUEUE_META: Record<QueueKey, { label: string; icon: typeof Inbox; empty: string }> = {
+  new: { label: 'New', icon: Inbox, empty: 'No new orders awaiting acceptance' },
+  preparing: { label: 'Preparing', icon: ChefHat, empty: 'Nothing currently preparing' },
+  ready: { label: 'Ready', icon: Bell, empty: 'No orders ready for pickup' },
+  completed: { label: 'Completed', icon: CheckCircle2, empty: 'No completed orders yet' },
+  cancelled: { label: 'Cancelled', icon: X, empty: 'No cancelled orders' },
 }
 
 export function VendorView() {
@@ -71,17 +119,23 @@ export function VendorView() {
   const [menu, setMenu] = useState<MenuItem[]>([])
   const [loading, setLoading] = useState(true)
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null)
-  // Per-order prep-time input (Task 4A MVP — client-only). Keyed by orderId;
-  // value is the vendor-entered minutes (or undefined = use restaurant default).
-  // Future: a PATCH endpoint will persist this server-side.
+  // V2: per-order prep-time input (Task 4A MVP — client-only)
   const [prepTimeDrafts, setPrepTimeDrafts] = useState<Record<string, string>>({})
   const [tab, setTab] = useState<'orders' | 'menu'>('orders')
+  // V2: active queue tab (NEW / PREPARING / READY / COMPLETED / CANCELLED)
+  const [queueTab, setQueueTab] = useState<QueueKey>('new')
+  // V2: pickup-verify modal state
+  const [verifyOrderId, setVerifyOrderId] = useState<string | null>(null)
+  const [verifyOtpCode, setVerifyOtpCode] = useState('')
+  const [verifying, setVerifying] = useState(false)
+  const [verifyError, setVerifyError] = useState<string | null>(null)
   const { connected } = useRealtime(['vendor:all'])
   const { toast } = useToast()
 
-  // load restaurants
+  // load restaurants — V2 (Phase 16): role=vendor filter ensures the vendor
+  // only sees restaurants they own (cross-vendor UI isolation).
   useEffect(() => {
-    fetch('/api/restaurants')
+    fetch('/api/restaurants?role=vendor')
       .then((r) => r.json())
       .then((d) => {
         setRestaurants(d.restaurants ?? [])
@@ -89,7 +143,7 @@ export function VendorView() {
       })
   }, [])
 
-  // Fetch fulfilment status for every active order (Option A from the task spec).
+  // Fetch fulfilment status for every active order.
   // GET /api/orders/[id]/fulfilment lazy-creates a Fulfilment row at PREPARING if
   // none exists yet — so newly-confirmed orders surface with `fulfilmentStatus`
   // = 'PREPARING' after the first load.
@@ -106,13 +160,14 @@ export function VendorView() {
           return r.json()
         }),
       )
-      const fulfilmentById = new Map<string, { status: string; pickupOtp?: string }>()
+      const fulfilmentById = new Map<string, { status: string; pickupOtp?: string; pickupVerifiedAt?: string | null }>()
       activeOrders.forEach((o, i) => {
         const r = results[i]
         if (r.status === 'fulfilled' && r.value?.fulfilment) {
           fulfilmentById.set(o.id, {
             status: r.value.fulfilment.status as string,
             pickupOtp: r.value.fulfilment.pickupOtp as string | undefined,
+            pickupVerifiedAt: r.value.fulfilment.pickupVerifiedAt ?? null,
           })
         }
       })
@@ -130,9 +185,6 @@ export function VendorView() {
   )
 
   // Fetch the additive `acceptedAt` timestamp (Task 3C) for every active order.
-  // Uses the additive GET /api/orders/[id]/accepted endpoint (Task 3C owns it).
-  // Only fetches for non-terminal orders to minimize requests — acceptedAt is
-  // meaningless for PICKED_UP / CANCELLED orders (no Accept button shows then).
   const fetchAcceptedForOrders = useCallback(
     async (orderList: VendorOrder[]): Promise<VendorOrder[]> => {
       const activeOrders = orderList.filter(
@@ -184,7 +236,10 @@ export function VendorView() {
     Promise.all([refreshOrders(), refreshMenu()]).finally(() => setLoading(false))
   }, [activeId, refreshOrders, refreshMenu])
 
-  // realtime updates — refresh both orders and their fulfilment state
+  // V2 (Phase 9) — Realtime queue reconciliation.
+  // Reuse existing `order:updated` realtime invalidation. The socket payload
+  // is an invalidation SIGNAL, NOT final status truth. On event: vendor
+  // refetches authoritative order data → correct queue updates.
   useEffect(() => {
     const sock = realtimeSocket()
     const handler = (p: { restaurantId: string; orderId: string }) => {
@@ -198,20 +253,13 @@ export function VendorView() {
     }
   }, [activeId, refreshOrders])
 
-  // advance: PATCH /api/orders/[id]/fulfilment — P0-06 parallel state machine.
-  // csrfFetch auto-injects both the X-CSRF-Token and an Idempotency-Key header
-  // (UUID v4) for PATCH requests, so retries from a network blip or a double
-  // click are deduped server-side.
-  //
-  // Wave 5 Task 5A — ADDITIVE reward issuance:
-  //   When the PATCH transitions to PICKED_UP, ALSO fire-and-forget a call to
-  //   POST /api/rewards/on-picked-up { orderId }. Reward issuance is fully
-  //   idempotent server-side (RewardLedgerEntry.idempotencyKey unique on
-  //   `ORDER_PICKED_UP:${orderId}:${ruleKey}` per rule), so a duplicate call
-  //   (network retry, double-tap) is a no-op returning the existing ledger
-  //   entries. Reward issuance failure does NOT block the vendor flow — the
-  //   call is awaited via .catch(() => {}) to swallow any errors silently.
-  //   On success, an optional non-blocking toast shows the points earned.
+  // ─────────────────────────────────────────────────────────────────────
+  // V2 (Phase 3/5) — Fulfilment transition actions.
+  // Reuse hardened V1 canonical fulfilment route. Server-authoritative only.
+  // The UI NEVER optimistically sets order.status before server success.
+  // After server 2xx: updates local state FROM THE SERVER RESPONSE (not
+  // a fabricated value), then triggers an authoritative refresh.
+  // ─────────────────────────────────────────────────────────────────────
   const advance = useCallback(
     async (order: VendorOrder) => {
       const current = order.fulfilmentStatus ?? 'PREPARING'
@@ -222,7 +270,7 @@ export function VendorView() {
         const res = await csrfFetch(`/api/orders/${order.id}/fulfilment`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ status: next, actorRole: 'VENDOR_OWNER' }),
+          body: JSON.stringify({ status: next }),
         })
         const data = await res.json().catch(() => null)
         if (!res.ok) {
@@ -232,31 +280,33 @@ export function VendorView() {
             `Failed to advance fulfilment (${res.status})`
           throw new Error(typeof msg === 'string' ? msg : 'Update failed')
         }
+        // V2 (Phase 8) — Server truth only: update local state FROM the
+        // server response (not a fabricated value). The server response is
+        // authoritative; local state is a cache, never the source of truth.
         const newStatus: string = data?.fulfilment?.status ?? next
         const newOtp: string | undefined =
           data?.fulfilment?.pickupOtp ?? order.fulfilmentOtp ?? order.pickupOtp
-        // Optimistically update local state from the API response so the card
-        // re-renders immediately (e.g. PREPARING → ALMOST_READY) without
-        // waiting for the full list refresh.
+        // V2: capture pickupOtpId when transitioning to READY_FOR_PICKUP.
+        // This is the OtpRequest record ID (NOT the code) needed by
+        // pickup-verify. The code is sent to the customer's phone.
+        const newOtpId: string | undefined = data?.pickupOtpId ?? order.pickupOtpId
         setOrders((prev) =>
           prev.map((o) =>
             o.id === order.id
-              ? { ...o, fulfilmentStatus: newStatus, fulfilmentOtp: newOtp }
+              ? { ...o, fulfilmentStatus: newStatus, fulfilmentOtp: newOtp, pickupOtpId: newOtpId }
               : o,
           ),
         )
         const shortLabel = FULFILMENT_STATUS_META[next]?.short ?? next
-        toast({ title: `${order.restaurant.name} → ${shortLabel}` })
+        toast({ title: `Order #${order.id.slice(-6).toUpperCase()} → ${shortLabel}` })
 
-        // -------------------------------------------------------------------
+        // V2 (Phase 5) — Queue relocation: if the order moved to a different
+        // queue, switch the active queue tab so the vendor sees it.
+        const updatedOrder: VendorOrder = { ...order, fulfilmentStatus: newStatus, fulfilmentOtp: newOtp, pickupOtpId: newOtpId }
+        const newQueue = queueForOrder(updatedOrder)
+        setQueueTab(newQueue)
+
         // Task 5A — ADDITIVE reward issuance (fire-and-forget, non-blocking).
-        // Fires ONLY when the transition was to PICKED_UP. Uses a deterministic
-        // Idempotency-Key header (ORDER_PICKED_UP-${orderId}) — dashes instead
-        // of colons because the regex on the server (/^[a-zA-Z0-9_-]{8,128}$/)
-        // rejects colons. The server's inherent idempotency via ledger-entry
-        // keys (which DO use colons — those are stored in a DB column, not
-        // validated by the header regex) is the primary dedup mechanism.
-        // -------------------------------------------------------------------
         if (newStatus === 'PICKED_UP') {
           void csrfFetch(`/api/rewards/on-picked-up`, {
             method: 'POST',
@@ -283,6 +333,9 @@ export function VendorView() {
               // Swallow — reward issuance failure must NOT block the vendor flow.
             })
         }
+
+        // Authoritative refresh (fetches full order list + fulfilment state)
+        refreshOrders()
       } catch (e) {
         toast({
           title: 'Update failed',
@@ -293,14 +346,14 @@ export function VendorView() {
         setBusyOrderId(null)
       }
     },
-    [toast],
+    [refreshOrders, toast],
   )
 
-  // accept: POST /api/vendor/orders/[id]/accept — Task 3C endpoint that records
-  // Fulfilment.acceptedAt (additive nullable column — does NOT touch the P0-06
-  // state machine). Idempotent server-side (returns 200 with alreadyAccepted:
-  // true if already accepted), so retries from a network blip or a double click
-  // are safe. csrfFetch auto-injects the X-CSRF-Token + Idempotency-Key.
+  // ─────────────────────────────────────────────────────────────────────
+  // V2 (Phase 4) — Accept action.
+  // Reuse existing authoritative Vendor accept endpoint.
+  // Server-authoritative only. No optimistic state mutation before success.
+  // ─────────────────────────────────────────────────────────────────────
   const accept = useCallback(
     async (order: VendorOrder) => {
       setBusyOrderId(order.id)
@@ -320,9 +373,9 @@ export function VendorView() {
         }
         const acceptedAtIso: string | undefined = data?.acceptedAt
         const alreadyAccepted: boolean = data?.alreadyAccepted === true
-        // Optimistically update local state — the Accept button disappears and
-        // the "Accepted ✓" badge appears immediately (no full list refresh
-        // needed).
+        // V2 (Phase 8) — Server truth only: update acceptedAt FROM the server
+        // response (not a fabricated value). This is a post-success cache
+        // update, NOT an optimistic mutation.
         setOrders((prev) =>
           prev.map((o) =>
             o.id === order.id
@@ -334,8 +387,13 @@ export function VendorView() {
           title: alreadyAccepted ? 'Already accepted' : 'Order accepted!',
           description: alreadyAccepted
             ? 'This order was already accepted.'
-            : `${order.restaurant.name} accepted. Starting prep.`,
+            : `Order #${order.id.slice(-6).toUpperCase()} accepted. Starting prep.`,
         })
+        // V2 (Phase 4) — queue relocation: order moves from NEW to PREPARING
+        const updatedOrder: VendorOrder = { ...order, acceptedAt: acceptedAtIso ?? null }
+        setQueueTab(queueForOrder(updatedOrder))
+        // Authoritative refresh
+        refreshOrders()
       } catch (e) {
         toast({
           title: 'Accept failed',
@@ -346,13 +404,10 @@ export function VendorView() {
         setBusyOrderId(null)
       }
     },
-    [toast],
+    [refreshOrders, toast],
   )
 
-  // setPrepTime: Task 4A MVP — client-only update. Persists the vendor-entered
-  // prep time on the order's local state + toast confirmation. Shows "Est.
-  // ready: {createdAt + prepTime}" on the card. Future: a PATCH endpoint will
-  // persist this server-side (the API does NOT exist yet — per task spec).
+  // setPrepTime: Task 4A MVP — client-only update.
   const setPrepTime = useCallback(
     (order: VendorOrder, minutes: number) => {
       setOrders((prev) =>
@@ -360,8 +415,6 @@ export function VendorView() {
           o.id === order.id ? { ...o, prepTimeMins: minutes } : o,
         ),
       )
-      // Clear the draft so the input shows the persisted value (mirroring the
-      // order.prepTimeMins that was just set).
       setPrepTimeDrafts((prev) => {
         const next = { ...prev }
         delete next[order.id]
@@ -375,8 +428,7 @@ export function VendorView() {
     [toast],
   )
 
-  // cancel: still uses the legacy /status route with CANCELLED — this is the
-  // Order.status path (not the fulfilment path) per the task spec.
+  // cancel: uses the legacy /status route with CANCELLED (Order.status path).
   const cancel = useCallback(
     async (order: VendorOrder) => {
       setBusyOrderId(order.id)
@@ -384,7 +436,7 @@ export function VendorView() {
         const res = await csrfFetch(`/api/orders/${order.id}/status`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ status: 'CANCELLED', actorRole: 'VENDOR_OWNER' }),
+          body: JSON.stringify({ status: 'CANCELLED' }),
         })
         if (!res.ok) {
           const data = await res.json().catch(() => null)
@@ -428,19 +480,124 @@ export function VendorView() {
     [toast],
   )
 
+  // ─────────────────────────────────────────────────────────────────────
+  // V2 (Phase 6-7) — Pickup verification.
+  // Uses the existing canonical POST /api/orders/[id]/pickup/verify endpoint.
+  // The vendor enters the 6-digit OTP code that the customer received.
+  // The otpId + qrToken are resolved from the order's cached state
+  // (otpId from the fulfilment PATCH response, qrToken reconstructed from
+  // orderId + pickupOtp). The OTP code is NEVER displayed to the vendor.
+  // ─────────────────────────────────────────────────────────────────────
+  const openVerifyModal = useCallback((order: VendorOrder) => {
+    setVerifyOrderId(order.id)
+    setVerifyOtpCode('')
+    setVerifyError(null)
+  }, [])
+
+  const closeVerifyModal = useCallback(() => {
+    setVerifyOrderId(null)
+    setVerifyOtpCode('')
+    setVerifyError(null)
+    setVerifying(false)
+  }, [])
+
+  const verifyPickup = useCallback(
+    async (order: VendorOrder) => {
+      // V2 — resolve otpId + qrToken from the order's cached state.
+      // The otpId was captured from the fulfilment PATCH response when the
+      // order transitioned to READY_FOR_PICKUP. If it's missing (e.g., the
+      // order was loaded after the transition and the PATCH response wasn't
+      // captured), we cannot proceed — the vendor must refresh.
+      const otpId = order.pickupOtpId
+      if (!otpId) {
+        setVerifyError(
+          'Pickup OTP record not found. Please refresh the order list and try again.',
+        )
+        return
+      }
+      if (verifyOtpCode.length !== 6) {
+        setVerifyError('Please enter the 6-digit code.')
+        return
+      }
+      // V2 — reconstruct the qrToken from orderId + pickupOtp.
+      // Format: snakzap:pickup:${orderId}:otp:${pickupOtp}
+      // The pickupOtp is the Order's pickup code (available to the vendor
+      // via the fulfilment GET — but the vendor does NOT show it to the
+      // customer; the customer receives it via SMS).
+      const pickupOtp = order.fulfilmentOtp ?? order.pickupOtp
+      if (!pickupOtp || pickupOtp === '000000') {
+        setVerifyError(
+          'No pickup OTP has been issued for this order. Ensure the order reached Ready for Pickup.',
+        )
+        return
+      }
+      const qrToken = `snakzap:pickup:${order.id}:otp:${pickupOtp}`
+
+      setVerifying(true)
+      setVerifyError(null)
+      try {
+        const res = await csrfFetch(`/api/orders/${order.id}/pickup/verify`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ otpId, code: verifyOtpCode, qrToken }),
+        })
+        const data = await res.json().catch(() => null)
+        if (!res.ok) {
+          // V2 (Phase 7) — Wrong OTP: controlled error, status remains
+          // READY_FOR_PICKUP, modal remains truthful (stays open).
+          const msg =
+            data?.error?.message ||
+            data?.error?.details?.reason ||
+            `Verification failed (${res.status})`
+          throw new Error(typeof msg === 'string' ? msg : 'Verification failed')
+        }
+        // V2 — Success: PICKED_UP. Close modal + authoritative refresh.
+        toast({
+          title: 'Pickup verified!',
+          description: `Order #${order.id.slice(-6).toUpperCase()} → Picked Up`,
+        })
+        closeVerifyModal()
+        // Queue relocation: order moves to COMPLETED
+        setQueueTab('completed')
+        refreshOrders()
+      } catch (e) {
+        setVerifyError((e as Error).message)
+      } finally {
+        setVerifying(false)
+      }
+    },
+    [closeVerifyModal, refreshOrders, toast, verifyOtpCode],
+  )
+
   const active = restaurants.find((r) => r.id === activeId)
-  // Active = not cancelled, not picked-up on either the order or fulfilment side.
-  // Completed = picked up on either side (covers legacy /status PICKED_UP and
-  // new /fulfilment PICKED_UP).
-  const activeOrders = orders.filter(
-    (o) =>
-      o.status !== 'CANCELLED' &&
-      o.status !== 'PICKED_UP' &&
-      o.fulfilmentStatus !== 'PICKED_UP',
-  )
-  const completed = orders.filter(
-    (o) => o.status === 'PICKED_UP' || o.fulfilmentStatus === 'PICKED_UP',
-  )
+
+  // V2 (Phase 2) — Queue separation. Orders are partitioned into mutually
+  // exclusive queues. An order appears in EXACTLY ONE queue.
+  const queueOrders = useMemo(() => {
+    const buckets: Record<QueueKey, VendorOrder[]> = {
+      new: [],
+      preparing: [],
+      ready: [],
+      completed: [],
+      cancelled: [],
+    }
+    for (const o of orders) {
+      buckets[queueForOrder(o)].push(o)
+    }
+    return buckets
+  }, [orders])
+
+  // V2 — queue counts for the tab badges
+  const queueCounts = useMemo(() => {
+    const counts: Record<QueueKey, number> = {
+      new: queueOrders.new.length,
+      preparing: queueOrders.preparing.length,
+      ready: queueOrders.ready.length,
+      completed: queueOrders.completed.length,
+      cancelled: queueOrders.cancelled.length,
+    }
+    return counts
+  }, [queueOrders])
 
   return (
     <div className="px-4 py-6">
@@ -479,42 +636,61 @@ export function VendorView() {
 
           {loading ? (
             <div className="space-y-3">{Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-32 w-full rounded-xl" />)}</div>
-          ) : activeOrders.length === 0 ? (
-            <div className="rounded-xl border border-dashed py-16 text-center text-muted-foreground">
-              <ChefHat className="mx-auto mb-2 h-8 w-8" /> No active orders right now.
-            </div>
           ) : (
-            <div className="space-y-3">
-              {activeOrders.map((o) => (
-                <VendorOrderCard
-                  key={o.id}
-                  order={o}
-                  busy={busyOrderId === o.id}
-                  restaurantPrepTimeMins={active?.prepTimeMins ?? 20}
-                  prepTimeDraft={prepTimeDrafts[o.id]}
-                  onPrepTimeDraftChange={(v) =>
-                    setPrepTimeDrafts((prev) => ({ ...prev, [o.id]: v }))
-                  }
-                  onAccept={() => accept(o)}
-                  onSetPrepTime={(mins) => setPrepTime(o, mins)}
-                  onAdvance={() => advance(o)}
-                  onCancel={() => cancel(o)}
-                />
-              ))}
-              {completed.length > 0 && (
-                <div className="mt-6">
-                  <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Completed today ({completed.length})</h3>
-                  <div className="space-y-2">
-                    {completed.slice(0, 5).map((o) => (
-                      <div key={o.id} className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
-                        <span className="text-muted-foreground">#{o.id.slice(-6).toUpperCase()} · {o.itemsCount} items</span>
-                        <span className="font-medium">{inr(o.totalAmount)}</span>
-                      </div>
-                    ))}
-                  </div>
+            <>
+              {/* V2 (Phase 2) — Queue tabs */}
+              <Tabs value={queueTab} onValueChange={(v) => setQueueTab(v as QueueKey)} className="mb-4">
+                <TabsList className="flex h-auto flex-wrap gap-1">
+                  {(Object.keys(QUEUE_META) as QueueKey[]).map((qk) => {
+                    const meta = QUEUE_META[qk]
+                    const Icon = meta.icon
+                    const count = queueCounts[qk]
+                    return (
+                      <TabsTrigger key={qk} value={qk} className="gap-1.5 text-xs">
+                        <Icon className="h-3.5 w-3.5" />
+                        {meta.label}
+                        {count > 0 && (
+                          <span className="ml-0.5 rounded-full bg-teal-600 px-1.5 py-0.5 text-[10px] font-bold text-white">
+                            {count}
+                          </span>
+                        )}
+                      </TabsTrigger>
+                    )
+                  })}
+                </TabsList>
+              </Tabs>
+
+              {/* V2 (Phase 12) — Per-queue empty state */}
+              {queueOrders[queueTab].length === 0 ? (
+                <div className="rounded-xl border border-dashed py-16 text-center text-muted-foreground">
+                  {(() => {
+                    const meta = QUEUE_META[queueTab]
+                    const Icon = meta.icon
+                    return <><Icon className="mx-auto mb-2 h-8 w-8" /> {meta.empty}</>
+                  })()}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {queueOrders[queueTab].map((o) => (
+                    <VendorOrderCard
+                      key={o.id}
+                      order={o}
+                      busy={busyOrderId === o.id}
+                      restaurantPrepTimeMins={active?.prepTimeMins ?? 20}
+                      prepTimeDraft={prepTimeDrafts[o.id]}
+                      onPrepTimeDraftChange={(v) =>
+                        setPrepTimeDrafts((prev) => ({ ...prev, [o.id]: v }))
+                      }
+                      onAccept={() => accept(o)}
+                      onSetPrepTime={(mins) => setPrepTime(o, mins)}
+                      onAdvance={() => advance(o)}
+                      onCancel={() => cancel(o)}
+                      onVerifyPickup={() => openVerifyModal(o)}
+                    />
+                  ))}
                 </div>
               )}
-            </div>
+            </>
           )}
         </>
       ) : (
@@ -527,26 +703,147 @@ export function VendorView() {
           </div>
         )
       )}
+
+      {/* V2 (Phase 6-7) — Pickup verification modal */}
+      <PickupVerifyDialog
+        order={orders.find((o) => o.id === verifyOrderId) ?? null}
+        open={verifyOrderId !== null}
+        code={verifyOtpCode}
+        onCodeChange={setVerifyOtpCode}
+        verifying={verifying}
+        error={verifyError}
+        onVerify={() => {
+          const o = orders.find((x) => x.id === verifyOrderId)
+          if (o) verifyPickup(o)
+        }}
+        onClose={closeVerifyModal}
+      />
     </div>
   )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// V2 (Phase 6-7) — Pickup Verify Dialog
+// Minimal OTP verification UI. Shows only the order reference + OTP input.
+// Does NOT expose the stored OTP, qrToken, or otpId.
+// ─────────────────────────────────────────────────────────────────────────────
+function PickupVerifyDialog({
+  order,
+  open,
+  code,
+  onCodeChange,
+  verifying,
+  error,
+  onVerify,
+  onClose,
+}: {
+  order: VendorOrder | null
+  open: boolean
+  code: string
+  onCodeChange: (v: string) => void
+  verifying: boolean
+  error: string | null
+  onVerify: () => void
+  onClose: () => void
+}) {
+  if (!order) return null
+  return (
+    <Dialog open={open} onOpenChange={(o) => { if (!o) onClose() }}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5 text-teal-600" />
+            Verify Pickup
+          </DialogTitle>
+          <DialogDescription>
+            Order <span className="font-mono font-semibold">#{order.id.slice(-6).toUpperCase()}</span>
+            {' '}&middot; {order.restaurant.name}
+            <br />
+            Ask the customer for the 6-digit code they received, then enter it below.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col items-center gap-4 py-4">
+          {/* V2 (Phase 13) — Order reference + customer-safe context only.
+              No OTP, no qrToken, no payment secrets shown. */}
+          <div className="w-full rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Items</span>
+              <span className="font-medium">{order.itemsCount}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Total</span>
+              <span className="font-medium">{inr(order.totalAmount)}</span>
+            </div>
+          </div>
+
+          <div className="flex flex-col items-center gap-2">
+            <label htmlFor="pickup-otp" className="text-sm font-medium text-muted-foreground">
+              Pickup code
+            </label>
+            <InputOTP
+              id="pickup-otp"
+              maxLength={6}
+              value={code}
+              onChange={onCodeChange}
+              disabled={verifying}
+              aria-label="6-digit pickup code"
+            >
+              <InputOTPGroup>
+                <InputOTPSlot index={0} />
+                <InputOTPSlot index={1} />
+                <InputOTPSlot index={2} />
+              </InputOTPGroup>
+              <InputOTPSeparator />
+              <InputOTPGroup>
+                <InputOTPSlot index={3} />
+                <InputOTPSlot index={4} />
+                <InputOTPSlot index={5} />
+              </InputOTPGroup>
+            </InputOTP>
+          </div>
+
+          {error && (
+            <p className="text-center text-sm text-red-600 dark:text-red-400" role="alert">
+              {error}
+            </p>
+          )}
+        </div>
+
+        <DialogFooter className="gap-2">
+          <Button variant="outline" onClick={onClose} disabled={verifying}>
+            Cancel
+          </Button>
+          <Button
+            onClick={onVerify}
+            disabled={verifying || code.length !== 6}
+            className="bg-teal-600 hover:bg-teal-700"
+          >
+            {verifying ? (
+              <>
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                Verifying…
+              </>
+            ) : (
+              <>
+                <ShieldCheck className="mr-1 h-4 w-4" />
+                Verify & Complete
+              </>
+            )}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // VendorOrderCard — single order in the queue.
-// Task 4A enhancements (additive — preserves existing Advance + Cancel + OTP):
-//   - Accept button: shown ONLY when acceptedAt === null (the additive GET
-//     /api/orders/[id]/accepted endpoint resolved + the timestamp is null).
-//     Calls POST /api/vendor/orders/[id]/accept (Task 3C endpoint) — idempotent
-//     server-side. On success: optimistic local state update + "Order accepted!"
-//     toast. framer-motion press feedback (tap-scale).
-//   - Accepted ✓ sub-badge: shown when acceptedAt is set (replaces the Accept
-//     button — Accept is inherently idempotent so the button disappears).
-//   - Prep-time setter: number input (minutes) + Save button. Placeholder =
-//     restaurant.prepTimeMins. On save: client-only update (Task 4A MVP —
-//     no API yet) + "Prep time set to X min" toast + "Est. ready: {time}"
-//     display below the setter.
-//   - Better visual hierarchy: order # prominent, status + Accepted badge row,
-//     items list, total + time ago on the right.
+// V2 changes:
+//   - REMOVED plaintext OTP display (Phase 13/23: no OTP secret rendered)
+//   - Action matrix (Phase 3): explicit labels per state, no generic "Next"
+//   - "Verify Pickup" button replaces "Mark Picked Up" at READY_FOR_PICKUP
+//   - Read-only at PICKED_UP
 // ─────────────────────────────────────────────────────────────────────────────
 function VendorOrderCard({
   order,
@@ -558,47 +855,31 @@ function VendorOrderCard({
   onSetPrepTime,
   onAdvance,
   onCancel,
+  onVerifyPickup,
 }: {
   order: VendorOrder
   busy: boolean
-  /** Restaurant-level default prep time (placeholder for the input). */
   restaurantPrepTimeMins: number
-  /** Current draft value for the prep-time input (string for controlled input). */
   prepTimeDraft: string | undefined
-  /** Update the draft when the vendor types. */
   onPrepTimeDraftChange: (value: string) => void
-  /** Accept the order — POST /api/vendor/orders/[id]/accept (Task 3C). */
   onAccept: () => void
-  /** Save the prep time (Task 4A MVP — client-only). */
   onSetPrepTime: (minutes: number) => void
   onAdvance: () => void
   onCancel: () => void
+  onVerifyPickup: () => void
 }) {
   const prefersReduced = useReducedMotion()
-  // The fulfilment state is the source of truth for the vendor card. If the
-  // fetch hasn't landed yet (or failed), default to PREPARING — the lazy-create
-  // baseline — so the card always renders a sensible next-step button.
   const fulfilmentStatus = order.fulfilmentStatus ?? 'PREPARING'
   const meta = FULFILMENT_STATUS_META[fulfilmentStatus] ?? FULFILMENT_STATUS_META.PREPARING
   const next = NEXT_FULFILMENT_STATUS[fulfilmentStatus]
-  const nextMeta = next ? FULFILMENT_STATUS_META[next] : null
   const isReady = fulfilmentStatus === 'READY_FOR_PICKUP'
-  // Prefer the fulfilment OTP (lazy-copied from Order.pickupOtp) but fall back
-  // to the order OTP if the fulfilment field is missing.
-  const pickupOtp = order.fulfilmentOtp ?? order.pickupOtp
   const isTerminal = !next
 
-  // Accept button visibility: only when the additive acceptedAt fetch has
-  // resolved AND the value is null (i.e. vendor hasn't accepted yet).
-  // undefined (still loading) → hide the button (don't flash the button then
-  // hide it). null → show Accept. string (set) → show Accepted ✓ badge.
   const acceptedAt = order.acceptedAt
   const showAcceptButton = acceptedAt === null
   const isAccepted = typeof acceptedAt === 'string' && acceptedAt.length > 0
 
-  // Prep time: vendor override (order.prepTimeMins) or restaurant default.
   const effectivePrepMins = order.prepTimeMins ?? restaurantPrepTimeMins
-  // Est. ready = createdAt + effectivePrepMins (minutes). Format as HH:MM.
   const estReadyAt = useMemo(() => {
     const created = new Date(order.createdAt)
     const ready = new Date(created.getTime() + effectivePrepMins * 60_000)
@@ -609,8 +890,6 @@ function VendorOrderCard({
     })
   }, [order.createdAt, effectivePrepMins])
 
-  // Prep-time draft handling: the input shows the draft if the vendor is
-  // typing, otherwise the effective prep time (so the saved value is shown).
   const draftValue = prepTimeDraft ?? String(effectivePrepMins)
   const draftMinutes = Number(draftValue)
   const isDraftValid =
@@ -722,18 +1001,16 @@ function VendorOrderCard({
             </div>
           </div>
 
-          {/* Pickup OTP — shown when status is READY_FOR_PICKUP */}
-          {isReady && pickupOtp && (
-            <div className="mt-3 flex items-center justify-between rounded-lg bg-teal-50 px-3 py-2 dark:bg-teal-950/40">
-              <span className="text-xs text-muted-foreground">Pickup OTP</span>
-              <span className="font-mono text-xl font-bold tracking-[0.25em] text-teal-700 dark:text-teal-300">
-                {pickupOtp}
-              </span>
-            </div>
-          )}
+          {/* V2 — REMOVED plaintext OTP display (Phase 13/23: no OTP secret rendered).
+              The OTP is sent to the customer's phone. The vendor enters it via
+              the Verify Pickup modal — never displayed on the card. */}
 
-          {/* Action row: Accept (when not yet accepted) + Advance + Cancel */}
+          {/* V2 (Phase 3) — Action matrix.
+              Only transitions legal from current server state are exposed.
+              Explicit labels — no generic "Next" button.
+              PICKED_UP → read-only (no action buttons). */}
           <div className="mt-3 space-y-2">
+            {/* NEW queue: Accept button */}
             {showAcceptButton && (
               <motion.div
                 whileTap={prefersReduced ? undefined : { scale: 0.97 }}
@@ -756,25 +1033,59 @@ function VendorOrderCard({
             )}
 
             <div className="flex items-center gap-2">
-              {next && (
+              {/* PREPARING → Mark Almost Ready */}
+              {next === 'ALMOST_READY' && (
+                <Button
+                  onClick={onAdvance}
+                  disabled={busy}
+                  className="flex-1 bg-amber-500 hover:bg-amber-600"
+                  aria-label="Mark order as almost ready"
+                >
+                  {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
+                  {!busy && <Clock className="mr-1 h-4 w-4" />}
+                  Mark Almost Ready
+                </Button>
+              )}
+
+              {/* ALMOST_READY → Mark Ready for Pickup */}
+              {next === 'READY_FOR_PICKUP' && (
                 <Button
                   onClick={onAdvance}
                   disabled={busy}
                   className="flex-1 bg-teal-600 hover:bg-teal-700"
+                  aria-label="Mark order as ready for pickup"
                 >
                   {busy && <Loader2 className="mr-1 h-4 w-4 animate-spin" />}
-                  {!busy && next === 'ALMOST_READY' && <Clock className="mr-1 h-4 w-4" />}
-                  {!busy && next === 'READY_FOR_PICKUP' && <Bell className="mr-1 h-4 w-4" />}
-                  {!busy && next === 'PICKED_UP' && <CheckCircle2 className="mr-1 h-4 w-4" />}
-                  Mark {nextMeta?.short ?? next}
+                  {!busy && <Bell className="mr-1 h-4 w-4" />}
+                  Mark Ready for Pickup
                 </Button>
               )}
+
+              {/* READY_FOR_PICKUP → Verify Pickup (opens modal, NOT a direct transition) */}
+              {isReady && (
+                <Button
+                  onClick={onVerifyPickup}
+                  disabled={busy}
+                  className="flex-1 bg-teal-600 hover:bg-teal-700"
+                  aria-label={`Verify pickup for order ${order.id.slice(-6).toUpperCase()}`}
+                >
+                  {busy ? (
+                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  ) : (
+                    <ShieldCheck className="mr-1 h-4 w-4" />
+                  )}
+                  Verify Pickup
+                </Button>
+              )}
+
+              {/* PICKED_UP — terminal read-only confirmation */}
               {isTerminal && (
-                // PICKED_UP — terminal handoff confirmation chip.
                 <div className="flex-1 rounded-md bg-emerald-50 px-3 py-2 text-center text-xs font-medium text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
                   <CheckCircle2 className="mr-1 inline h-3 w-3" /> Handed off to customer
                 </div>
               )}
+
+              {/* Cancel button (not for terminal/cancelled orders) */}
               {order.status !== 'CANCELLED' && order.status !== 'PICKED_UP' && !isTerminal && (
                 <Button
                   variant="outline"

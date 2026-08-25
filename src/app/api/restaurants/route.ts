@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { getSessionUser } from '@/lib/session'
 
 // GET /api/restaurants?q=&veg=&campusId=
 //
@@ -29,11 +30,24 @@ export async function GET(req: NextRequest) {
   const vegOnly = req.nextUrl.searchParams.get('veg') === '1'
   // Wave 2C: campusId — filter via RestaurantCampus junction (additive).
   const campusId = req.nextUrl.searchParams.get('campusId')?.trim() ?? ''
+  // V2 (Phase 16): role=vendor — filter restaurants by vendor ownership.
+  // When role=vendor + the caller is a VENDOR_OWNER, returns ONLY restaurants
+  // where Restaurant.ownerUserId === session.userId. This enforces cross-
+  // vendor UI isolation (Vendor A's UI never shows Vendor B's restaurants).
+  const roleFilter = req.nextUrl.searchParams.get('role')
+  let vendorOwnerFilter: Record<string, unknown> = {}
+  if (roleFilter === 'vendor') {
+    const session = await getSessionUser()
+    if (session && session.role === 'VENDOR_OWNER') {
+      vendorOwnerFilter = { ownerUserId: session.userId }
+    }
+  }
 
   const restaurants = await db.restaurant.findMany({
     where: {
       isActive: true,
       isSuspended: false,
+      ...vendorOwnerFilter,
       ...(q
         ? {
             OR: [

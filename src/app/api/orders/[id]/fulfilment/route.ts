@@ -18,6 +18,7 @@ import {
   FULFILMENT_STATUSES,
   isValidFulfilmentTransition,
 } from '@/lib/fulfilment-state'
+import { scryptSync } from 'crypto'
 
 // ----------------------------------------------------------------------------
 // V1 SECURITY/INTEGRITY REPAIR (SNAKZAP-VENDOR-LIFECYCLE-V1-SECURITY-INTEGRITY-REPAIR-02)
@@ -140,9 +141,12 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
         }
 
         // Read the order (must exist — Fulfilment is 1:1 to Order).
+        // V2: include user.phone so we can issue a pickup OTP at READY_FOR_PICKUP
+        // (mirrors the /status route's createOtp call — consistency fix, NOT a
+        // state-machine redesign).
         const order = await tx.order.findUnique({
           where: { id },
-          select: { id: true, pickupOtp: true, status: true, restaurantId: true },
+          select: { id: true, pickupOtp: true, status: true, restaurantId: true, user: { select: { phone: true } } },
         })
         if (!order) {
           return {
@@ -309,6 +313,56 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
           }
         }
 
+        // -------------------------------------------------------------------
+        // V2 — Pickup OTP issuance at READY_FOR_PICKUP.
+        // When the fulfilment transitions to READY_FOR_PICKUP, issue a pickup
+        // OTP to the customer's phone (mirrors the /status route's behavior).
+        // This ensures the canonical POST /api/orders/[id]/pickup/verify
+        // endpoint can verify the OTP later. The otpId is returned in the
+        // response so the vendor UI can pass it to pickup-verify.
+        //
+        // CRITICAL: The OTP record is created using `tx.otpRequest.create`
+        // (NOT `db.otpRequest.create` via `createOtp()`) because on SQLite,
+        // a write from the global `db` client while a `tx` transaction holds
+        // a BEGIN IMMEDIATE write lock causes "database is locked" errors.
+        // Using `tx` ensures the OTP record is created in the SAME transaction
+        // as the fulfilment transition — atomic + no lock conflict.
+        //
+        // This is NOT a state-machine redesign — it's a consistency fix so
+        // the V2 vendor UI's pickup-verify flow works via the hardened
+        // /fulfilment route (instead of requiring the legacy /status route).
+        // -------------------------------------------------------------------
+        let pickupOtpId: string | null = null
+        if (desired === 'READY_FOR_PICKUP' && order.user?.phone && order.pickupOtp === '000000') {
+          // Generate the 6-digit code + hash (mirrors otp-service.ts hashCode).
+          const otpCode = String(Math.floor(100000 + Math.random() * 900000))
+          const salt = Buffer.from('snakzap-otp-salt')
+          const codeHash = scryptSync(otpCode, salt, 32).toString('hex')
+          const expiresAt = new Date(Date.now() + 5 * 60 * 1000) // 5-min TTL
+          // Create the OTP record INSIDE the transaction.
+          const otpRec = await tx.otpRequest.create({
+            data: {
+              channel: 'phone',
+              target: order.user.phone,
+              purpose: 'pickup',
+              codeHash,
+              expiresAt,
+            },
+          })
+          pickupOtpId = otpRec.id
+          // Update Order.pickupOtp so the QR token + pickup-verify can use it.
+          await tx.order.update({
+            where: { id },
+            data: { pickupOtp: otpCode },
+          })
+          // Also update the Fulfilment's cached pickupOtp (lazy-created copy).
+          await tx.fulfilment.update({
+            where: { id: fulfilment.id },
+            data: { pickupOtp: otpCode },
+          })
+          logInfo('fulfilment-pickup-otp-issued', { orderId: id, phone: order.user.phone, otpId: pickupOtpId }, traceId)
+        }
+
         // Build new status history (parallel to Order.statusHistory).
         const now = new Date()
         const history = JSON.parse(fulfilment.statusHistory || '[]') as {
@@ -405,6 +459,11 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
           },
           from,
           to: desired,
+          // V2: include the pickup OTP ID when issued (for vendor pickup-verify).
+          // This is NOT the OTP code itself — it's the OtpRequest record ID
+          // needed by the pickup-verify endpoint. The code is sent to the
+          // customer's phone (never shown to the vendor).
+          ...(pickupOtpId ? { pickupOtpId } : {}),
         }
 
         // Store idempotency record (Sub-Wave 3c: also stores request hash).

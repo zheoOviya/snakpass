@@ -391,7 +391,11 @@ export async function verifyPickupAttribution(
   //     consumed (which is the safe direction — a replay would be rejected).
   //   - The cross-credential check (otp.target === order.user.phone) provides
   //     the binding between the OTP credential and the order owner.
-  const otpResult = await verifyOtp(otpId, code)
+  // V2 fix: pass `tx` to verifyOtp so it uses the transaction client (NOT
+  // the global `db`). On SQLite, using `db` while a BEGIN IMMEDIATE write
+  // lock is held causes "database is locked" errors. Using `tx` ensures the
+  // OTP consume + the fulfilment transition are in the SAME transaction.
+  const otpResult = await verifyOtp(otpId, code, tx)
   if (!otpResult.ok) {
     logWarn(
       'pickup-attr-otp-verification-failed',
