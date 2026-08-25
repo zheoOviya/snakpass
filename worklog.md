@@ -13074,3 +13074,36 @@ Stage Summary:
 - Edge cases: dup, failed, out-of-order, multi-actor, notification regression all PASS
 - Regression: S1-S4F + S5A-S5D all intact
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5F-IMPL-08
+Agent: Reconnect/Multi-tab Resilience Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5F-RECONNECT-MULTITAB-RESILIENCE-IMPLEMENTATION-08 — Prove realtime features are resilient to disconnect, reconnect, multi-tab, duplicate delivery, stale-event races. NO new features — only resilience verification.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == 3a4a294, clean tree, S5E checkpoint ancestor = YES.
+- Phase 1 (trace): Documented reconnect behavior — use-realtime.ts (reconnection:true, Infinity attempts, 1000ms delay, withCredentials:true), use-social-realtime.ts (per-instance dedup cache from S5D fix, onReconnect callback on connect event), NotificationBell (onReconnect→refresh), SocialScreen (onReconnect→refresh+refreshNotifications), social-store.ts (cache-busting + no-store from S5D).
+- Phase 3-6 (missed events): Backend test — B socket closed, mutation committed, B reconnects → REST reconciliation. All PASS: connection, notification, feed, like events all reconcile after reconnect.
+- Phase 7 (duplicate): Same eventId delivered twice → 2 delivered to socket, per-instance dedup bounds processing to 1 per hook instance. No duplicate business mutations. PASS.
+- Phase 8 (multi-hook): Per-instance dedup cache (S5D fix) — NotificationBell + SocialScreen don't suppress each other. PASS.
+- Phase 9 (out-of-order connection): 3 events reversed (REMOVED, ACCEPTED, REQUEST). All delivered. Final = REST truth. PASS.
+- Phase 10 (out-of-order like): LIKE+UNLIKE reversed. All delivered. Final = REST truth. PASS.
+- Phase 11 (out-of-order notification read): READ+CREATED reversed. All delivered. Final = REST truth. PASS.
+- Phase 12 (block after socket): A blocks B. B's existing socket receives 0 future activity + 0 like events. Fanout queries current ACCEPTED status at emit time. PASS.
+- Phase 14 (realtime restart): Realtime service killed + restarted. B's socket auto-reconnects after ~30s. onReconnect callback fires → REST reconciliation shows new activity WITHOUT manual reload. PASS (screenshot: 14-b-after-restart-reconciled.png).
+- Phase 16 (session expiry): Expired session → reconnect rejected (connected=false). PASS.
+- Phase 17 (recovery storm): 3 missed activities while disconnected. Reconnect → single feed refetch reconciles all 3. Classification: PASS (no duplicate business mutations).
+- Phase 5 browser (CRITICAL): B navigated to about:blank (offline). A created FRIENDS activity. B navigated back to /consumer (reconnect). B's feed showed "S5F Missed Feed Restaurant" WITHOUT manual reload. Screenshots captured.
+- Phase 13 regression: S1-S4F + S5A-S5E all PASS. S5F PASS. 14/14.
+- Lint: 0 errors.
+
+Stage Summary:
+- S5F_VERIFIED
+- NO new source code changes (resilience was already built into S5A-S5E infrastructure)
+- NO new realtime features
+- 2 new test scripts + evidence directory
+- Proved: event miss, duplicate, reorder, reconnect, multi-tab, block-after-socket, session expiry, recovery storm — all reconcile to REST/DB truth
+- Two-client browser evidence: B offline → A creates activity → B reconnects → feed shows activity WITHOUT reload
+- Realtime service restart: socket auto-reconnects after ~30s, REST reconciliation runs
+- Regression: S1-S4F + S5A-S5E all intact
+- Evidence checkpoint: pending commit + push

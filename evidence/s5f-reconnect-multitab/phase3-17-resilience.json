@@ -1,0 +1,67 @@
+{
+  "phase": "S5F",
+  "tests": [
+    {
+      "test": "T7_dup_event_delivered_to_socket",
+      "delivered": 2,
+      "result": "PASS",
+      "detail": "2 delivered (at-least-once)"
+    },
+    {
+      "test": "T9_out_of_order_connection_all_delivered",
+      "delivered": 3,
+      "result": "PASS"
+    },
+    {
+      "test": "T10_out_of_order_like_all_delivered",
+      "delivered": 2,
+      "result": "PASS"
+    },
+    {
+      "test": "T11_out_of_order_notification_all_delivered",
+      "delivered": 2,
+      "result": "PASS"
+    },
+    {
+      "test": "T12_blocked_no_activity_event",
+      "bReceived": 0,
+      "result": "PASS",
+      "detail": "Blocked B must not receive activity events after block"
+    },
+    {
+      "test": "T12_blocked_no_like_event",
+      "bReceived": 0,
+      "result": "PASS",
+      "detail": "Blocked B must not receive like events after block"
+    },
+    {
+      "test": "T5_db_committed_while_disconnected",
+      "actExists": true,
+      "result": "PASS"
+    },
+    {
+      "test": "T5_reconnect_rest_reconciliation",
+      "hasMissedAct": true,
+      "result": "PASS",
+      "detail": "B reconnects and REST shows missed activity"
+    },
+    {
+      "test": "T16_expired_session_rejected",
+      "connected": false,
+      "result": "PASS",
+      "detail": "Expired session must be rejected on reconnect"
+    },
+    {
+      "test": "T17_recovery_storm_feed_reconciled",
+      "stormCount": 3,
+      "result": "PASS",
+      "detail": "After reconnect, feed shows all 3 missed activities"
+    },
+    {
+      "test": "T17_classification",
+      "classification": "PASS",
+      "detail": "Recovery storm: REST refetch reconciles all missed events. No duplicate business mutations (DB is source of truth)."
+    }
+  ],
+  "VERDICT": "BLOCKED"
+}
