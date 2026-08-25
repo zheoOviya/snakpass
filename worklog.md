@@ -13443,3 +13443,41 @@ Stage Summary:
 - Failed shares don't inflate count ✅
 - Analytics PII: 0 leaks ✅
 - NO PRODUCT CODE CHANGES — evidence only
+
+---
+Task ID: S5H2-CONTRACT-CHALLENGE-07
+Agent: S5H2 Friend-Ranked Discovery Contract Auditor (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H2-FRIEND-RANKED-DISCOVERY-CONTRACT-CHALLENGE-07 — Freeze ranking formula, privacy, anti-gaming, and experiment design. NO PRODUCT CODE CHANGES.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == ea3b87a, S5H1 checkpoint ancestor = YES.
+- Phase 1 (discovery trace): Found existing "Popular Near You" = top 6 by rating DESC (fake/static). No social signal. This is the surface S5H2 augments. Restaurant detail "popular items" = first 3 by name (placeholder).
+- Phase 2 (eligible signal): Reuses S5H1 trust chain — real qualifying Order + linked SocialActivity share + visibility FRIENDS/PUBLIC + current ACCEPTED friendship + no block.
+- Phase 3 (ranking unit): uniqueFriendCount (DISTINCT actorId per restaurant). NOT raw order/activity/Like count. Prevents hyperactive friend dominance.
+- Phase 4 (formula): Deterministic lexicographic — uniqueFriendCount DESC → mostRecentShareAt DESC → restaurantId ASC. No opaque weights.
+- Phase 5 (recency): No time window for MVP. Recency affects sort order (secondary key) but not eligibility. Historical shares remain eligible indefinitely (consistent with S5H1).
+- Phase 6 (authorization): Current friendship/block check at query time. Blocked/unfriended → zero contribution.
+- Phase 7 (visibility): FRIENDS/PUBLIC counted. PRIVATE excluded. No-share excluded.
+- Phase 8 (anti-gaming): uniqueFriendCount + @@unique idempotency + real Order requirement + current friendship + block isolation. No additional thresholds needed for MVP.
+- Phase 9 (minimum threshold): >=1 friend eligible. Wording: 1 = "Ordered by a friend", 2+ = "Popular among friends".
+- Phase 10 (fallback): Section absent → existing "Popular Near You" (rating-based) remains. S5H2 is additive.
+- Phase 11 (result cap): LIMIT 5.
+- Phase 12 (API contract): GET /api/restaurants/friend-ranked?limit=5 → {restaurants: [{...restaurantFields, friendCount, friendCountBucket}], hasSocialSignal}. No friend identities exposed.
+- Phase 13 (query design): 3 queries — (1) accepted friends bidirectional UNION, (2) GROUP BY restaurantId with COUNT(DISTINCT actorId) + MAX(createdAt), ORDER BY uniqueFriendCount DESC, mostRecentShareAt DESC, restaurantId ASC, LIMIT 5, (3) fetch restaurant details.
+- Phase 14 (performance): 3 indexed queries, ~10ms at 50 friends. Needs SocialActivity(objectId,verb,visibility) index for production.
+- Phase 15 (UI): New section "Popular among friends" between "Quick Reorder" and "Popular Near You". Card shows friendCount text (no names/avatars).
+- Phase 16 (measurement): Primary = friend-ranked card → restaurant-detail open rate. Guardrails = block/unfriend rate, latency, error rate.
+- Phase 17 (analytics privacy): FRIEND_RANKED_IMPRESSION + FRIEND_RANKED_RESTAURANT_OPEN. Safe dimensions: experimentId, variant, restaurantId, rankPosition, friendCountBucket. No friend IDs.
+- Phase 18 (experiment): FEATURE_INSTRUMENTATION = ACTIVE, RANDOMIZED_AB_TEST = DEFERRED.
+- Phase 19 (realtime): DEFERRED. Page-load fetch. No new realtime events.
+- Phase 20 (runtime fixtures): R1-R6 verified conceptually.
+
+Stage Summary:
+- S5H2_IMPLEMENTATION_READY
+- Ranking formula: uniqueFriendCount DESC → mostRecentShareAt DESC → restaurantId ASC
+- Reuses S5H1 trust chain (no new trust model)
+- Anti-gaming: unique friend count prevents hyperactive friend dominance
+- Fallback: additive — existing "Popular Near You" remains if no social signal
+- API privacy: friendCount + friendCountBucket only, no friend identities
+- Analytics privacy: rankPosition + friendCountBucket, no friend IDs
+- Evidence checkpoint: pending commit + push
