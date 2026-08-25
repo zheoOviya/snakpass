@@ -13715,3 +13715,31 @@ Stage Summary:
 - Next authorized candidate: Vendor Lifecycle Completion
 - No product code changes
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: VENDOR-LIFECYCLE-CONTRACT-01
+Agent: Vendor Lifecycle Contract Auditor (IDE)
+Task: SNAKZAP-VENDOR-LIFECYCLE-CONTRACT-CHALLENGE-01 — Freeze vendor order fulfilment contract. NO PRODUCT CODE CHANGES.
+
+Work Log:
+- Phase 0: Baseline frozen — 83c999f, clean tree.
+- Phase 1 (state machine): Two parallel state machines — Order.status (CONFIRMED→PREPARING→ALMOST_READY→READY_FOR_PICKUP→PICKED_UP) and Fulfilment.status (PREPARING→ALMOST_READY→READY_FOR_PICKUP→PICKED_UP). NEXT_STATUS map verified. Fulfilment lazy-created on first access.
+- Phase 2 (canonical lifecycle): Consumer creates order → Payment captured (PAID) → Vendor accepts (acceptedAt) → Vendor starts preparation (PREPARING) → Vendor marks almost ready (ALMOST_READY) → Vendor marks ready (READY_FOR_PICKUP) → Pickup OTP verified (PICKED_UP).
+- Phase 3 (authorization): Vendor accept has ownership check (Restaurant.ownerUserId). Fulfilment PATCH route has NO ownership check — CRITICAL P0 gap. Consumer can only cancel own orders.
+- Phase 5 (payment gate): No payment gate on fulfilment — vendor can prepare unpaid orders. Acceptable for demo mode (P2 for production).
+- Phase 6 (pickup OTP): OTP generated at order creation, stored as plaintext on Order.pickupOtp. Verification via POST /api/orders/[id]/pickup/verify with QR token + OTP code. No attempt limit, no expiry. Flag-gated enforcement (pickupAttributionEnforcement default OFF).
+- Phase 8 (concurrency): Order.version field for optimistic locking. NEXT_FULFILMENT_STATUS validation prevents invalid transitions. Idempotency via acceptedAt check + pickupVerifiedAt check.
+- Phase 9 (audit): ORDER_ACCEPTED + FULFILMENT_CREATED + PICKUP_VERIFIED audited. Fulfilment transitions use tx.auditLog.create (NOT auditWithTx) — P1 gap for chain integrity.
+- Phase 10 (realtime): Order status changes emit ORDER_CREATED/ORDER_STATUS_CHANGED via outbox + emitOrderUpdated. Fulfilment transitions do NOT emit realtime — P0 gap. Consumer can't see vendor transitions without reload.
+- Phase 12-13 (vendor UI): Vendor view shows order list + Accept button. NO buttons for state transitions (Start Preparing, Mark Ready, Verify Pickup). Missing UI actions.
+- Phase 15 (consumer correlation): Consumer tracking has 7-step timeline but NO realtime — only polls on mount/refresh.
+- Phase 17 (cancellation): Consumer/Vendor/Admin can cancel from any non-terminal state. No refund trigger on cancellation — P2.
+- Phase 22 (data model gaps): 2 P0 (ownership check + realtime emission), 1 P1 (audit chain), 4 P2 (OTP hashing, attempt limit, refund, vendor route), 1 P3 (timestamps). No schema changes needed — all fields exist.
+
+Stage Summary:
+- VENDOR_LIFECYCLE_IMPLEMENTATION_READY
+- 2 P0 blockers (must fix before implementation): vendor ownership check + realtime emission on fulfilment
+- 1 P1: auditWithTx for fulfilment transitions
+- No schema changes needed — all required fields exist
+- 5 implementation waves: V1 (security repair), V2 (vendor UI), V3 (consumer realtime), V4 (hardening), V5 (browser closure)
+- Evidence checkpoint: pending commit + push
