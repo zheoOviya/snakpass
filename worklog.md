@@ -13215,3 +13215,27 @@ Stage Summary:
 - Reconnect latency: p50=2002ms, p95=3903ms, max=4574ms, invariant VALID
 - NO PRODUCT CODE CHANGES — evidence only
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5H-PLAN-FIRST-13
+Agent: Virality Experiment Plan Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5H-VIRALITY-EXPERIMENTS-PLAN-FIRST-13 — Design evidence-backed Social virality experiments. NO PRODUCT CODE CHANGES.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == b2bcca8, clean tree, S5G checkpoint ancestor = YES.
+- Phase 1 (product goal): SnakZap is campus food-ordering (pickup-first). Social exists to improve restaurant discovery (friends' orders → new restaurant discovery) and retention (gift/group/social obligation). NOT generic engagement/vanity metrics.
+- Phase 2 (signal inventory): Traced 10 reusable signals — friend graph, activity stream, likes, visibility, notifications, restaurant popular items (PLACEHOLDER — fake, first 3 by name), friends' restaurant orders, gift lifecycle, group orders, campus affinity. Key gap: restaurant detail has NO social signals; "popular items" is placeholder.
+- Phase 3 (candidate loops): Evaluated V1-V10. V1 (friend activity feed) and V4 (realtime feed) already exist. V2 (friends liked this), V3 (friend-ranked popular), V6 (restaurant discovery through friends), V7 (new-user seed) viable. V5 (share/invite), V8 (aggregation), V9 (re-engagement notification), V10 (mutual-friend) rejected.
+- Phase 4 (quality test): Each viable loop has clear trigger→action→reward→reinvestment. Rejected loops lack actionable signal or add notification spam.
+- Phase 5 (privacy): All viable experiments preserve FRIENDS/PUBLIC visibility, block isolation, phone privacy. No new notifications. No PII beyond name+avatarColor. No graph leakage (max 3 avatars).
+- Phase 6 (abuse): Like unique constraint prevents farming. Ordering requires payment. V3 counts distinct friends not orders. No new abuse surface.
+- Phase 7 (metrics): Primary = restaurant-detail-opens-from-social. Guardrails = friend request acceptance, block rate, notification opt-out. Counter = like count (NOT success metric).
+- Phase 8 (prioritization): Rank 1 = V2+V6 (social proof on restaurant detail, 9/10). Rank 2 = V3 (friend-ranked popular, 7/10). Rank 3 = V7 (new-user seed, 6/10).
+- Phase 9 (waves): S5H1 (social proof, 2-3 days), S5H2 (friend-ranked discovery, 2-3 days), S5H3 (new-user activation, 2-3 days), S5H4 (measurement closure, 1-2 days).
+
+Stage Summary:
+- S5H_EXPERIMENT_PLAN_READY
+- NO PRODUCT CODE CHANGES — plan only
+- 3 experiments selected (V2+V6, V3, V7), 4 rejected (V5, V8, V9, V10)
+- Minimum viable experiment: S5H1 "Friends Ordered Here" social proof on restaurant detail
+- Evidence checkpoint: pending commit + push
