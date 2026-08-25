@@ -3,7 +3,7 @@ import { db, withTransaction, TransactionConflictError } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { withErrorHandler, apiError } from '@/lib/errors'
 import { newTraceId, info as logInfo } from '@/lib/logger'
-import { enqueueSocialEvent } from '@/lib/social-realtime'
+import { enqueueSocialEvent, enqueueLikeFanout } from '@/lib/social-realtime'
 
 // ----------------------------------------------------------------------------
 // GJ-02 S2: Persistent Likes — POST/DELETE /api/social/activities/[id]/like
@@ -144,6 +144,22 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
           })
         }
 
+        // S5E: Feed realtime invalidation — emit SOCIAL_ACTIVITY_LIKED to the
+        // activity actor AND accepted friends who may have this activity
+        // visible in their feed. Recipients are server-derived (committed DB
+        // truth — SocialConnection ACCEPTED). Blocked/non-friends excluded.
+        // Only emitted when a NEW Like row was actually created (isNewLike).
+        // On duplicate Like (idempotent), no new row → no event → no false
+        // count increment. entityId = activityId (minimal, no PII).
+        // The client refetches GET /api/social/feed → authoritative likeCount
+        // + likedByMe. Socket payload does NOT carry count.
+        await enqueueLikeFanout(tx, {
+          activityId,
+          actorId: activity.actorId,
+          visibility: activity.visibility,
+          eventType: 'SOCIAL_ACTIVITY_LIKED',
+        })
+
         return { isNewLike: true }
       })
       isNewLike = result.isNewLike
@@ -182,14 +198,64 @@ export const DELETE = (req: NextRequest, { params }: { params: Promise<{ id: str
       return apiError('AUTHENTICATION_REQUIRED', 'Authentication required', 401, undefined, traceId) as unknown as NextResponse
     }
 
-    // Idempotent Unlike: delete if exists (no visibility check needed for unlike —
-    // the user can only delete their OWN like, which was already authorized at POST time)
-    await db.like.deleteMany({
-      where: { userId: session.userId, activityId },
+    // Load activity (needed for actorId — the realtime event target)
+    const activity = await db.socialActivity.findUnique({
+      where: { id: activityId },
+      select: { id: true, actorId: true, visibility: true },
     })
-    logInfo('social-like-removed', { activityId, userId: session.userId }, traceId)
+    if (!activity) {
+      return apiError('NOT_FOUND', 'Activity not found', 404, undefined, traceId) as unknown as NextResponse
+    }
 
-    // Count remaining likes
+    // S5E: Wrap Unlike in withTransaction + emit SOCIAL_ACTIVITY_UNLIKED.
+    // deleteMany is idempotent (returns count=0 if already unliked).
+    // Only emit the realtime event if a Like was actually deleted (wasLiked=true).
+    // On duplicate Unlike (idempotent), no row deleted → no event → no false decrement.
+    let wasLiked = false
+    try {
+      const result = await withTransaction(async (tx) => {
+        const delResult = await tx.like.deleteMany({
+          where: { userId: session.userId, activityId },
+        })
+        wasLiked = delResult.count > 0
+
+        if (wasLiked) {
+          // S5E: Emit SOCIAL_ACTIVITY_UNLIKED to the activity actor AND
+          // accepted friends who may have this activity visible in their feed.
+          // Recipients are server-derived. Blocked/non-friends excluded.
+          // Only emitted when a Like was actually deleted (wasLiked=true).
+          // On idempotent unlike, no row deleted → no event → no false decrement.
+          // entityId = activityId (minimal, no PII). Client refetches REST.
+          await enqueueLikeFanout(tx, {
+            activityId,
+            actorId: activity.actorId,
+            visibility: activity.visibility,
+            eventType: 'SOCIAL_ACTIVITY_UNLIKED',
+          })
+        }
+
+        return { wasLiked }
+      })
+      wasLiked = result.wasLiked
+      if (wasLiked) {
+        logInfo('social-like-removed', { activityId, userId: session.userId }, traceId)
+      } else {
+        logInfo('social-like-already-removed', { activityId, userId: session.userId }, traceId)
+      }
+    } catch (error) {
+      if (error instanceof TransactionConflictError) {
+        return apiError(
+          'CONFLICT',
+          'Unlike conflicted with a concurrent request. Please retry.',
+          409,
+          undefined,
+          traceId,
+        ) as unknown as NextResponse
+      }
+      throw error
+    }
+
+    // Count remaining likes (authoritative DB count)
     const likeCount = await db.like.count({ where: { activityId } })
 
     return NextResponse.json({ liked: false, likeCount }) as unknown as NextResponse

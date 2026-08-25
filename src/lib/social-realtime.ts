@@ -179,6 +179,59 @@ export async function enqueueActivityFeedFanout(
 }
 
 // ----------------------------------------------------------------------------
+// S5E: Like/Unlike fanout — emit SOCIAL_ACTIVITY_LIKED / SOCIAL_ACTIVITY_UNLIKED
+// to the activity actor AND all accepted friends who may have the activity
+// visible in their feed.
+//
+// Recipient model (Phase 4):
+//   - Activity actor: always receives the event (they own the activity)
+//   - Accepted friends: receive the event if they can see the activity in their feed
+//     (FRIENDS/PUBLIC visibility only — PRIVATE activities are not in any feed)
+//   - Blocked users: excluded (BLOCKED != ACCEPTED)
+//   - Non-friends: excluded
+//
+// The realtime event is an INVALIDATION SIGNAL only — the client refetches
+// GET /api/social/feed which returns authoritative likeCount + likedByMe.
+// Socket payload does NOT carry count.
+//
+// PAYLOAD: minimal envelope { eventId, type, occurredAt, entityId=activityId }.
+// ----------------------------------------------------------------------------
+export async function enqueueLikeFanout(
+  tx: Prisma.TransactionClient,
+  params: {
+    activityId: string
+    actorId: string
+    visibility: string // 'FRIENDS' | 'PUBLIC' | 'PRIVATE'
+    eventType: 'SOCIAL_ACTIVITY_LIKED' | 'SOCIAL_ACTIVITY_UNLIKED'
+  },
+): Promise<{ recipientCount: number }> {
+  // Always send to the actor (they own the activity)
+  const recipients = new Set<string>([params.actorId])
+
+  // FRIENDS/PUBLIC: also fanout to accepted friends who may have the activity
+  // in their feed. PRIVATE: actor only (activity not in any feed).
+  if (params.visibility !== 'PRIVATE') {
+    const friends = await tx.socialConnection.findMany({
+      where: { followerId: params.actorId, status: 'ACCEPTED' },
+      select: { followeeId: true },
+    })
+    for (const edge of friends) {
+      recipients.add(edge.followeeId)
+    }
+  }
+
+  for (const targetUserId of recipients) {
+    await enqueueSocialEvent(tx, {
+      type: params.eventType,
+      targetUserId,
+      entityId: params.activityId,
+    })
+  }
+
+  return { recipientCount: recipients.size }
+}
+
+// ----------------------------------------------------------------------------
 // Event type → client invalidation hint
 // ----------------------------------------------------------------------------
 

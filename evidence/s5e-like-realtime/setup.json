@@ -1,0 +1,14 @@
+{
+  "userA": {
+    "id": "cmt8dqb810001mbd9u60batjy",
+    "sessionToken": "33cd9d5169386681f7f5c61fedd729244b42c444fccf65dcde180c41e02e6233"
+  },
+  "userB": {
+    "id": "cmt8dqb820003mbd9f9xxiru2",
+    "sessionToken": "e031ca7b46e5d95b2f8837e118bfa6bed34b17e0b40c40b26f4564c4c976df3e"
+  },
+  "userC": {
+    "id": "cmt8dqb830005mbd94ykg8n0j",
+    "sessionToken": "2f855e3d2089aa39c10a12cb69dccb198316c23cd422a918f9407567b66733dd"
+  }
+}

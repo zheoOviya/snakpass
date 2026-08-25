@@ -13039,3 +13039,38 @@ Stage Summary:
 - Edge cases: dedup, disconnect, out-of-order, like projection, rollback all PASS
 - Regression: S1-S4F + S5A-S5C all intact
 - Evidence checkpoint: pending commit + push
+
+---
+Task ID: S5E-IMPL-07
+Agent: Like Realtime Implementation Agent (IDE)
+Task: PRODUCT-GJ02-SOCIAL-S5E-LIKE-REALTIME-IMPLEMENTATION-07 — Implement realtime reconciliation for Like/Unlike state. DATABASE=source of truth, REST=authoritative, REALTIME=invalidation signal only.
+
+Work Log:
+- Phase 0: Baseline frozen — LOCAL_HEAD == REMOTE_MAIN == fcca0829, clean tree, S5D checkpoint ancestor = YES.
+- Phase 1 (trace): Documented Like contract — POST /api/social/activities/[id]/like (idempotent, visibility-gated, notification+SOCIAL_NOTIFICATION_CREATED from S5C), DELETE (was raw db.like.deleteMany, no tx, no event). Feed projects likeCount + likedByMe on read. @@unique([userId, activityId]) enforces idempotency.
+- Phase 2-5 (implementation): Added enqueueLikeFanout helper to social-realtime.ts — sends SOCIAL_ACTIVITY_LIKED/UNLIKED to activity actor AND accepted friends (FRIENDS/PUBLIC). PRIVATE = actor only. Server-derived recipients from SocialConnection ACCEPTED. Blocked/non-friends excluded.
+- POST route: Added enqueueLikeFanout(SOCIAL_ACTIVITY_LIKED) inside withTransaction. Only emitted when isNewLike=true (dedup at source — duplicate like emits 0 events).
+- DELETE route: Wrapped deleteMany in withTransaction + added enqueueLikeFanout(SOCIAL_ACTIVITY_UNLIKED). Only emitted when wasLiked=true (idempotent — no row deleted → no event → no false decrement). Added activity lookup (for actorId) + 404 for non-existent activity.
+- Phase 5-17 (backend integration): 18/18 PASS — like/unlike events emitted to correct recipients, PII-clean envelope, dedup at source, failed like/unlike no phantom, multi-actor count correct, out-of-order final=REST truth, notification preserved after unlike (S3 policy), PRIVATE like denied (403).
+- Phase 5+6 (browser — CRITICAL): B (friend) has Social Feed open. C likes A's FRIENDS activity → B's feed shows likeCount "1" WITHOUT reload (URL unchanged, network shows realtime-triggered GET /api/social/feed). C unlikes → B's feed reverts to no count WITHOUT reload. Screenshots captured.
+- Phase 7 (dup like): idempotent — likeRows=1, notifCount=1, first like emits 1 event, duplicate emits 0. PASS.
+- Phase 9 (privacy): PRIVATE like denied (403). Non-friend/block exclusion via SocialConnection ACCEPTED filter. PASS.
+- Phase 10-11 (failed like/unlike): 404 → no DB row, no outbox, no event. Idempotent unlike → no row deleted, no event. PASS.
+- Phase 13 (out-of-order): LIKE+UNLIKE delivered in reverse. Final = REST truth (0 likes). PASS.
+- Phase 14 (multi-actor): B likes(1), C likes(2), B unlikes(1). A receives 2 LIKE + 1 UNLIKE events. No count drift. PASS.
+- Phase 16 (notification regression): S5C notification realtime intact. Like notification preserved after unlike (S3 policy — historical notifications not deleted). PASS.
+- Phase 17 (privacy audit): LIKE + UNLIKE envelopes = [eventId, type, occurredAt, entityId]. No phone, blockedBy, token, likeCount, likedByMe, liker in payload. PASS.
+- Phase 13 regression: S1-S4F + S5A-S5D all PASS. S5E PASS. 13/13.
+- Lint: 0 errors.
+
+Stage Summary:
+- S5E_VERIFIED
+- 2 files modified (social-realtime.ts, like/route.ts)
+- New helper: enqueueLikeFanout (actor + accepted friends fanout, PRIVATE=actor only)
+- POST emits SOCIAL_ACTIVITY_LIKED (only when isNewLike=true)
+- DELETE wrapped in withTransaction + emits SOCIAL_ACTIVITY_UNLIKED (only when wasLiked=true)
+- Two-client browser evidence: B's feed likeCount changes WITHOUT reload on Like AND Unlike
+- Security: non-friend=0, blocked=0, PRIVATE=0, no PII in payload, no dup rows/notifications
+- Edge cases: dup, failed, out-of-order, multi-actor, notification regression all PASS
+- Regression: S1-S4F + S5A-S5D all intact
+- Evidence checkpoint: pending commit + push
