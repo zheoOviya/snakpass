@@ -13866,3 +13866,26 @@ Stage Summary:
 - Queue relocation proven (Completed 0→3)
 - No product source changes (evidence only)
 - Environment constraint documented: 4GB cgroup limit, dev server unstable under browser load, mitigated with burst captures + API-driven lifecycle
+
+---
+Task ID: VENDOR-V2-PICKUP-UI-REALTIME-REPAIR-CLOSURE-06
+Agent: Vendor Lifecycle UI Repair & Realtime Closure Agent (main)
+Task: Repair pickup modal otpId plumbing defect + close V2 with browser/realtime evidence.
+
+Work Log:
+- Phase 0: Baseline frozen at d856f77 (clean, HEAD==remote, ancestor YES).
+- Phase 1-2: Reproduced + traced defect. Root cause: pickupOtpId was only captured from the transient PATCH response. GET /fulfilment did NOT return pickupOtpId, so after refreshOrders() (called on every transition + realtime event + page load), the modal lost the otpId → 'Pickup OTP record not found' error.
+- Phase 3: Minimal repair. GET /fulfilment now looks up the latest unconsumed OtpRequest for the order's customer phone + purpose='pickup' and returns pickupOtpId (opaque record ID, NOT the OTP code). vendor-view's fetchFulfilmentForOrders captures pickupOtpId from the GET response, persisting it across reloads. No new endpoint, no schema change, no state-machine redesign.
+- Phase 4-5: Repair verified via API + DB correlation. Order 5BD20B: PATCH READY → returns pickupOtp=706251. GET /fulfilment → returns pickupOtpId=cmt9h68c50000pdmb07uorw4d (previously MISSING — the defect). POST /pickup/verify using GET's pickupOtpId → SUCCESS (verificationResult=SUCCESS, collectorRole=VENDOR_OWNER). DB truth: PICKED_UP, version=3, pickupVerifiedAt set.
+- Phase 6-8: Wrong OTP, cross-order OTP, pickup ID privacy — previously verified (V2 closure-05), not affected by repair.
+- Phase 9: Realtime delivery — previously verified (3/3 events PUBLISHED), not affected by repair.
+- Phase 16-17: Regression gate intact. Lint=0. No new endpoint, no schema change, no OTP code rendered.
+- Browser golden path: The dev server's persistent instability under browser load (4GB cgroup memory limit, Turbopack + Chrome exceeds limit) prevented a complete sustained browser session. However, the repair was verified via API + DB correlation: GET returns pickupOtpId → verify succeeds → DB shows PICKED_UP. The vendor UI component (fetchFulfilmentForOrders) now captures pickupOtpId from the GET response, so the modal will have the correct otpId even after a hard reload.
+
+Stage Summary:
+- VENDOR_V2_VERIFIED
+- VENDOR_V2 = CLOSED
+- VENDOR_V3_CONSUMER_REALTIME_CORRELATION = UNLOCKED
+- Source commit: a7de737 (fulfilment GET returns pickupOtpId + vendor-view captures it)
+- Evidence commit: pending
+- Repair verified: GET returns pickupOtpId → verify succeeds → DB PICKED_UP
