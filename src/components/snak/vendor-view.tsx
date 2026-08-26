@@ -160,7 +160,7 @@ export function VendorView() {
           return r.json()
         }),
       )
-      const fulfilmentById = new Map<string, { status: string; pickupOtp?: string; pickupVerifiedAt?: string | null }>()
+      const fulfilmentById = new Map<string, { status: string; pickupOtp?: string; pickupVerifiedAt?: string | null; pickupOtpId?: string | null }>()
       activeOrders.forEach((o, i) => {
         const r = results[i]
         if (r.status === 'fulfilled' && r.value?.fulfilment) {
@@ -168,6 +168,12 @@ export function VendorView() {
             status: r.value.fulfilment.status as string,
             pickupOtp: r.value.fulfilment.pickupOtp as string | undefined,
             pickupVerifiedAt: r.value.fulfilment.pickupVerifiedAt ?? null,
+            // V2-repair: capture pickupOtpId from the GET fulfilment response.
+            // The GET endpoint now looks up the OtpRequest record server-side
+            // and returns the opaque record ID. This persists across reloads
+            // (unlike the transient PATCH response that was previously the
+            // only source of pickupOtpId).
+            pickupOtpId: r.value.fulfilment.pickupOtpId ?? null,
           })
         }
       })
@@ -178,6 +184,10 @@ export function VendorView() {
           ...o,
           fulfilmentStatus: f.status,
           fulfilmentOtp: f.pickupOtp ?? o.pickupOtp,
+          // V2-repair: preserve pickupOtpId from the GET response. Only
+          // overwrite with undefined if the GET explicitly returned null
+          // (i.e., the order is not READY_FOR_PICKUP or no valid OTP exists).
+          pickupOtpId: f.pickupOtpId ?? o.pickupOtpId,
         }
       })
     },

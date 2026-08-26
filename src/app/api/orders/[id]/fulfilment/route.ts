@@ -546,7 +546,9 @@ export const GET = (_req: NextRequest, { params }: { params: Promise<{ id: strin
     const fulfilment = await withTransaction(async (tx) => {
       const order = await tx.order.findUnique({
         where: { id },
-        select: { id: true, pickupOtp: true, userId: true, restaurantId: true },
+        // V2-repair: include user.phone so we can look up the pickupOtpId
+        // (the OtpRequest record ID) for READY_FOR_PICKUP orders.
+        select: { id: true, pickupOtp: true, userId: true, restaurantId: true, user: { select: { phone: true } } },
       })
       if (!order) return null
 
@@ -584,25 +586,56 @@ export const GET = (_req: NextRequest, { params }: { params: Promise<{ id: strin
         })
         logInfo('fulfilment-lazy-created', { orderId: id, fulfilmentId: f.id }, traceId)
       }
-      return f
+
+      // V2-repair: Look up the pickupOtpId (OtpRequest record ID) for this order.
+      // This is the opaque record ID needed by the vendor UI's pickup-verify modal
+      // to call POST /api/orders/[id]/pickup/verify. Without this, the modal loses
+      // the otpId after any page reload or refreshOrders() call (the PATCH response
+      // that originally returned it is transient and not preserved in local state).
+      //
+      // The lookup is server-side + authoritative — the vendor UI never fabricates
+      // the otpId. Only the latest unconsumed OTP for this order's customer phone
+      // + purpose='pickup' is returned. The OTP CODE is never exposed here.
+      let pickupOtpId: string | null = null
+      if (f.status === 'READY_FOR_PICKUP' && !f.pickupVerifiedAt && order.user?.phone) {
+        const otpRecord = await tx.otpRequest.findFirst({
+          where: {
+            target: order.user.phone,
+            purpose: 'pickup',
+            consumed: false,
+            expiresAt: { gt: new Date() },
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { id: true },
+        })
+        pickupOtpId = otpRecord?.id ?? null
+      }
+
+      return { fulfilment: f, pickupOtpId }
     })
 
     if (!fulfilment) {
       return apiError('NOT_FOUND', 'Order not found', 404, undefined, traceId)
     }
 
+    const { fulfilment: f, pickupOtpId } = fulfilment
+
     return NextResponse.json({
       fulfilment: {
-        id: fulfilment.id,
-        orderId: fulfilment.orderId,
-        status: fulfilment.status,
-        version: fulfilment.version,
-        pickupOtp: fulfilment.pickupOtp,
-        pickupVerifiedAt: fulfilment.pickupVerifiedAt,
-        pickupVerifiedBy: fulfilment.pickupVerifiedBy,
-        createdAt: fulfilment.createdAt,
-        updatedAt: fulfilment.updatedAt,
-        statusHistory: fulfilment.statusHistory,
+        id: f.id,
+        orderId: f.orderId,
+        status: f.status,
+        version: f.version,
+        pickupOtp: f.pickupOtp,
+        // V2-repair: expose the opaque pickupOtpId (OtpRequest record ID)
+        // for vendor pickup-verify. This is NOT the OTP code — it's the record
+        // ID needed to call pickup-verify. The code is sent to the customer's phone.
+        pickupOtpId,
+        pickupVerifiedAt: f.pickupVerifiedAt,
+        pickupVerifiedBy: f.pickupVerifiedBy,
+        createdAt: f.createdAt,
+        updatedAt: f.updatedAt,
+        statusHistory: f.statusHistory,
       },
     })
   })
