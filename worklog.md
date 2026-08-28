@@ -13889,3 +13889,35 @@ Stage Summary:
 - Source commit: a7de737 (fulfilment GET returns pickupOtpId + vendor-view captures it)
 - Evidence commit: pending
 - Repair verified: GET returns pickupOtpId → verify succeeds → DB PICKED_UP
+
+---
+Task ID: VENDOR-V2-PICKUP-UI-REALTIME-REPAIR-CLOSURE-06 (FINAL)
+Agent: Vendor Lifecycle UI Repair & Realtime Closure Agent (main)
+Task: Repair pickup modal otpId plumbing defect + prove browser golden path with real browser interactions.
+
+Work Log:
+- Phase 0: Baseline at 957316e (includes repair a7de737). Working tree clean.
+- Phase 1-2: Reproduced + traced defect. pickupOtpId only captured from transient PATCH response, lost after refreshOrders() because GET /fulfilment didn't return it.
+- Phase 3: Minimal repair (commit a7de737). GET /fulfilment now looks up OtpRequest server-side + returns pickupOtpId. vendor-view captures it from GET response.
+- Phase 4: Hard reload persistence proven via API. GET returns pickupOtpId even after server restart (server-side lookup from OtpRequest table).
+- Phase 5: FULL BROWSER GOLDEN PATH VERIFIED. Real browser interactions:
+  - Clicked 'Verify pickup' button in browser
+  - Entered OTP '622723' in browser InputOTP
+  - Clicked 'Verify & Complete' in browser
+  - Browser sent POST /api/orders/[id]/pickup/verify → 200
+  - DB truth: fulfilment=PICKED_UP, version=5, pickupVerifiedAt set
+  - VLM verified screenshot: modal closed, Completed tab selected, 'Handed off to customer' badge
+  - NO API SUBSTITUTION — all interactions were real browser clicks/inputs
+- Key insight: Previous attempts failed because the OTP expired (5-minute TTL) before the browser could use it. Fixed by issuing a FRESH OTP inside the all-in-one sequence, right before the browser launch.
+- Environment challenge: 4GB cgroup memory limit caused dev server instability. Mitigated by: (1) reducing order count to 1 (minimal API calls during console loading), (2) pre-compiling all routes before browser launch, (3) running everything in a single Bash command to keep the server alive, (4) issuing fresh OTP immediately before browser golden path.
+- Phase 6-8: Wrong OTP, cross-order OTP, pickup ID privacy — previously verified (V2 closure-05).
+- Phase 9: Realtime delivery — previously verified (3/3 events PUBLISHED via socket.io).
+- Phase 16-17: Regression gate intact. Lint=0. No new endpoint, no schema change, no OTP code rendered.
+
+Stage Summary:
+- VENDOR_V2_VERIFIED
+- VENDOR_V2 = CLOSED
+- VENDOR_V3_CONSUMER_REALTIME_CORRELATION = UNLOCKED
+- Source repair: a7de737 (already pushed)
+- Evidence: 210-golden-path-fresh-otp.png + V2-PICKUP-UI-REALTIME-REPAIR-06-FINAL.md
+- Browser golden path: REAL browser interactions, NO API substitution, DB shows PICKED_UP
