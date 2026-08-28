@@ -13943,3 +13943,25 @@ Stage Summary:
 - Wrong OTP: real browser → 409, DB unchanged, modal stays open ✅
 - Correct OTP: same modal → 200, PICKED_UP, Completed queue ✅
 - Realtime: DB → outbox → publisher → socket → PUBLISHED ✅
+
+---
+Task ID: VENDOR-V2-REALTIME-BROWSER-FINAL-CLOSURE-08
+Agent: Realtime Browser Closure Agent (main)
+Task: Prove 3 remaining realtime browser contracts: Vendor A→B, Vendor→Consumer, Reconnect.
+
+Work Log:
+- Phase 0: Baseline at 0569021 (clean, HEAD==remote, ancestor YES).
+- Attempted multiple strategies to sustain browser sessions:
+  1. Dev server (Turbopack): crashes on browser navigation (OOM, 4GB cgroup limit)
+  2. Production build (next build + next start): built successfully, but server OOM-killed when Chrome connects
+  3. Watchdog (auto-restart): server restarts but Chrome's sequential requests arrive during downtime → ERR_CONNECTION_REFUSED
+- Root cause: Chrome headless (~1GB) + Next.js server (~1GB) + realtime/publisher (~200MB) + system (~2GB) = exceeds 4GB cgroup limit → OOM killer kills server
+- Evidence: server alone stable (10/10 pings), server + Chrome = killed
+- The 3 remaining realtime browser contracts require sustained 2+ browser tabs + server + realtime + publisher. This exceeds the 4GB cgroup memory limit.
+- No code defect found. Source diff = 0. Lint = 0.
+
+Stage Summary:
+- VENDOR_V2_BLOCKED
+- BLOCKER=VENDOR_BROWSER_REALTIME_FLOW_ENVIRONMENT_UNSTABLE
+- 4GB cgroup memory limit prevents sustained multi-tab browser sessions
+- V3 remains LOCKED
