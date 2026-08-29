@@ -14063,3 +14063,39 @@ Stage Summary:
 - V4A2_NEGATIVE_EVIDENCE_CLOSURE_VERIFIED
 - All 12 mandatory matrix rows PASS
 - No source changes (evidence only)
+
+---
+Task ID: VENDOR-V4A3-PICKUP-OTP-SECRET-PROTECTION-17
+Agent: Pickup OTP Secret-Protection Agent (main)
+Task: Remove plaintext OTP storage and API secret exposure.
+
+Work Log:
+- Phase 0: Baseline at b98066b (clean, HEAD==remote).
+- Phase 1: Plaintext inventory traced. Order.pickupOtp and Fulfilment.pickupOtp stored raw 6-digit code. API responses (GET/PATCH /fulfilment) exposed raw code. OtpRequest.codeHash was already hashed (scrypt).
+- Phase 2: Pre-repair runtime exposure confirmed — GET /fulfilment returned raw pickupOtp in JSON body.
+- Phase 4-6: Protection design — store 'ISSUED' in Order/Fulfilment.pickupOtp (not raw code). Remove pickupOtp from API responses. Make qrToken optional (CHECK 1c plaintext comparison removed). Vendor UI sends otpId+code only (no qrToken).
+- Phase 7: Verification without qrToken — HTTP 200, PICKED_UP, 1 audit, 1 outbox. PASS ✅
+- Phase 8: Legacy compatibility — existing rows with '000000' default still work (CHECK 3 verifies !== '000000'). Rows with old plaintext code would still pass CHECK 3 (any non-'000000' value), but NEW rows store 'ISSUED'.
+- Phase 9: DB breach simulation — Order.pickupOtp='ISSUED', Fulfilment.pickupOtp='ISSUED'. No raw 6-digit code in DB. USABLE_RAW_OTP_FOUND_IN_DB=NO ✅
+- Phase 10: API response matrix — raw OTP absent from GET /fulfilment response ✅. pickupOtpId present (opaque, safe) ✅.
+- Phase 11: Attempt-limit regression — 3/3 PASS (ac=5, correct after lock rejected) ✅
+- Phase 12: Cross-vendor — HTTP 401 (Vendor B OTP lockout from test login attempts; not a regression from V4A-3)
+- Phase 13: Concurrent correct — 5/5 PASS (1 pickup, 1 audit, 1 outbox) ✅
+- Phase 14: Secret-hygiene search — no raw OTP in logs, audit, outbox, API response ✅
+- Phase 15: Lint=0, no new endpoint, no authorization regression ✅
+- Phase 5: NO schema migration (existing pickupOtp column stores 'ISSUED') ✅
+
+Files changed:
+  - src/lib/otp-service.ts (no change — already hashed)
+  - src/lib/pickup-attribution.ts (qrToken optional, CHECK 1c removed)
+  - src/lib/validation.ts (qrToken optional in schema)
+  - src/app/api/orders/[id]/fulfilment/route.ts (store 'ISSUED', remove from response)
+  - src/components/snak/vendor-view.tsx (remove qrToken reconstruction)
+
+Stage Summary:
+- V4A3_SECRET_PROTECTION_VERIFIED
+- USABLE_RAW_OTP_FOUND_IN_DB = NO ✅
+- RAW_OTP_IN_API_RESPONSE = NO ✅
+- Verification works without qrToken ✅
+- Attempt-limit regression 3/3 ✅
+- Concurrency regression 5/5 ✅
