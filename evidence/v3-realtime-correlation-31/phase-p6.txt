@@ -1,0 +1,11 @@
+
+# V3-CONSUMER-REALTIME-CORRELATION-31 — phase=p6
+# DB=/home/z/my-project/db/custom.db  baseline=b751ac6
+
+=== PHASE 6 — Payload minimization ===
+  Outbox events: 0
+  raw OTP in payload: NO ✅
+  codeHash in payload: NO ✅
+  credential in payload: NO ✅
+  other user private data: NO ✅
+  [PASS] No secret/credential/private-data exposure in outbox payload

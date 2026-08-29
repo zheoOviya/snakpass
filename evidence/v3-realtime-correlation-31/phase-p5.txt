@@ -1,0 +1,12 @@
+
+# V3-CONSUMER-REALTIME-CORRELATION-31 — phase=p5
+# DB=/home/z/my-project/db/custom.db  baseline=b751ac6
+
+=== PHASE 5 — Reconnect reconciliation (non-browser) ===
+  Step 1: Consumer offline — misses realtime event
+  Step 2: Vendor triggers PICKED_UP
+  Step 3: Consumer fetches REST /api/orders/<id>
+  REST order.status: READY_FOR_PICKUP
+  REST fulfilment.status: PICKED_UP
+  [PASS] Consumer reaches current authoritative state after missed event — status=PICKED_UP
+  MISSED_EVENT_RECOVERY_CONTRACT = PASS

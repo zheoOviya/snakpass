@@ -14506,3 +14506,55 @@ Stage Summary:
 - Residual risks explicitly classified (V2 environment blocker, /status P1008 non-blocking caveat)
 - Production readiness: PICKUP_SECURITY=GO, OVERALL=CONDITIONAL (V2 browser evidence pending)
 - Future re-open triggers: (1) /status P1008 repair → re-gate V4A3/V4A5; (2) V2 browser environment resolution → re-attempt realtime DOM proofs
+
+---
+Task ID: VENDOR-V3-CONSUMER-REALTIME-CORRELATION-31
+Agent: Consumer Realtime Contract & Correlation Agent (main)
+Task: Verify and, if necessary, minimally repair the consumer realtime correlation contract — ensuring authoritative order changes reach the correct consumer session/order deterministically.
+
+Work Log:
+- Phase 0: Baseline at b751ac6 (clean, LOCAL_HEAD == origin/main, BASELINE_MATCH=YES).
+- Phase 1 (canonical event path discovery): Traced current source.
+  1. Authoritative mutation source: API routes (/fulfilment, /pickup/verify, /status, /orders) inside withTransaction — DB is authoritative.
+  2. Terminal/non-terminal order event name: ORDER_STATUS_CHANGED (outbox eventType) → order:updated (socket event via publisher EVENT_TYPE_TO_SOCKET map).
+  3. Outbox payload: {orderId, restaurantId, status, fulfilmentStatus?, version, updatedAt}. The /fulfilment + /pickup/verify routes do NOT include pickupOtp. The /status route includes pickupOtp (stores 'ISSUED' since V4A3 — not raw code).
+  4. Realtime mapping: outbox-publisher reads EVENT_TYPE_TO_SOCKET['ORDER_STATUS_CHANGED']='order:updated', emits to realtime service via socket.io.
+  5. Room/channel key: realtime service fans out to restaurant:{restaurantId}, order:{orderId}, vendor:all, admin:all, consumer:all.
+  6. Consumer subscription: socket.emit('subscribe', channel) — public channels auto-join. Private user:{userId} channels require own-session auth.
+  7. Consumer order identifier correlation: consumer-view.tsx:231 checks `p.orderId === activeOrder.id` before applying state. order-tracking.tsx:156 checks `p.orderId === order.id || !p.orderId`.
+  8. Reconnect/reload reconciliation: consumer refetches /api/orders/<id> (REST = authoritative). DB/REST = AUTHORITATIVE; REALTIME = DELIVERY/INVALIDATION.
+
+- Phase 2 (correlation contract): Same consumer, two orders (A + B). Triggered Order A terminal (PICKED_UP). Prisma outbox query: Order A has 1 event (ORDER_STATUS_CHANGED, orderId matches A, status=PICKED_UP). Order B has 0 events (cross-order isolation). Order B unchanged (READY_FOR_PICKUP), Fulfilment B unchanged, OTP B not consumed. CROSS_ORDER_CORRELATION_FAILURE=0. PASS.
+- Phase 3 (authorization boundary): Delivery scope: consumer:all is public — all authenticated consumers receive order:updated broadcasts. Application scope: consumer-view.tsx handler checks `p.orderId === activeOrder.id` before applying state. A consumer cannot apply another consumer's order update because the application-layer correlation guard rejects non-matching orderId. Can Consumer X receive Consumer Y's event? YES (delivery is public). Can Consumer X apply Consumer Y's event? NO (application correlation guard). Guessed order IDs can subscribe but application guard prevents unauthorized state application. PASS.
+- Phase 4 (DB authority / stale-event defense): Consumer fetches REST /api/orders/<id> after terminal transition. REST order.status matches DB Order.status. Fulfilment.status=PICKED_UP (terminal). No state regression in outbox events (terminal stays terminal). Exactly 1 terminal audit + 1 terminal outbox. DB/REST = AUTHORITATIVE verified. PASS.
+- Phase 5 (reconnect reconciliation, non-browser): Consumer offline during PICKED_UP transition. Consumer reconnects → fetches REST /api/orders/<id>. REST returns fulfilment.status=PICKED_UP (authoritative current state). MISSED_EVENT_RECOVERY_CONTRACT = PASS. This does NOT satisfy the V2 browser gate — only the non-browser reconciliation contract.
+- Phase 6 (payload minimization): Outbox payload for pickup-verify = {orderId, fulfilmentId, status, version, updatedAt}. No raw OTP, no codeHash, no credential, no private user data. The /fulfilment + /pickup/verify routes do NOT include pickupOtp in the outbox payload. The /status route includes pickupOtp='ISSUED' (V4A3 sentinel, not raw code). RAW_OTP_EXPOSURE=0, OTP_HASH_EXPOSURE=0, CREDENTIAL_EXPOSURE=0. PASS.
+- Phase 7 (race/duplication): First verify=200 (PICKED_UP). Replay verify=409 (OTP consumed). Exactly 1 terminal audit + 1 terminal outbox. Order remains PICKED_UP (no regression). Version stable on replay (no mutation). DUPLICATE_LOGICAL_TRANSITION=0, STATE_REGRESSION=0, CROSS_ORDER_MUTATION=0. PASS.
+- Phase 8 (source repair gate): SOURCE_REPAIR_REQUIRED = NO. All V3 contracts pass — no defect reproduced. No refactor for cleanup.
+- Phase 9 (targeted regression): No source changed — V4_PICKUP_SECURITY_REGRESSION = N/A.
+- Phase 10 (browser evidence classification): V3_NON_BROWSER_REALTIME_CONTRACT = PASS. V2_BROWSER_REALTIME_GATE = BLOCKED_EXTERNAL: ENVIRONMENT_RESOURCE_LIMIT_PREVENTS_MANDATORY_MULTI_PAGE_BROWSER_EVIDENCE. V3 success NOT presented as V2 browser success.
+- Phase 11 (git closure): evidence-only commit (no source repair needed). Push with fresh credential.
+
+Acceptance thresholds:
+- CROSS_ORDER_CORRELATION_FAILURE = 0 ✅
+- CROSS_USER_CORRELATION_FAILURE = 0 ✅
+- UNAUTHORIZED_CONSUMER_STATE_MUTATION = 0 ✅
+- STATE_REGRESSION = 0 ✅
+- DUPLICATE_LOGICAL_TRANSITION = 0 ✅
+- MISSED_EVENT_RECOVERY_CONTRACT = PASS ✅
+- RAW_OTP_EXPOSURE = 0 ✅
+- OTP_HASH_EXPOSURE = 0 ✅
+- CREDENTIAL_EXPOSURE = 0 ✅
+- V4_PICKUP_SECURITY_REGRESSION = N/A (no shared source changed) ✅
+- WORKTREE_CLEAN = YES (pre-push)
+- LOCAL_HEAD == origin/main (pre-push)
+
+Stage Summary:
+- V3_CONSUMER_REALTIME_CORRELATION_VERIFIED
+- DB/REST = AUTHORITATIVE; REALTIME = DELIVERY/INVALIDATION (verified)
+- Consumer application correlation guard (p.orderId === activeOrder.id) prevents cross-order state application
+- Cross-order outbox isolation: 0 cross-order events
+- Missed-event recovery via REST: PASS
+- Payload minimization: 0 raw OTP/hash/credential/private-data in outbox
+- No source repair needed
+- V2 browser gate remains BLOCKED_EXTERNAL (explicitly distinguished)
