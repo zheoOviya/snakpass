@@ -14099,3 +14099,28 @@ Stage Summary:
 - Verification works without qrToken ✅
 - Attempt-limit regression 3/3 ✅
 - Concurrency regression 5/5 ✅
+
+---
+Task ID: VENDOR-V4A3-SECURE-BINDING-LEGACY-CORRECTION-18
+Agent: Pickup Credential Binding & Secret-Protection Repair Agent (main)
+Task: Restore OTP→order binding after V4A3 plaintext removal removed CHECK 1c.
+
+Work Log:
+- Phase 0: Baseline at 71837ee (clean, HEAD==remote).
+- Phase 1: Binding trace confirmed. OtpRequest had NO orderId field. purpose='pickup' was generic — not order-specific. Binding gap confirmed: OTP_BINDING_SECURITY_REGRESSION.
+- Phase 2: Cross-order attack on V4A3 code: OTP X (same customer) used against Order Y → verifyOtp consumed OTP X (consumed=true), then CHECK 7c rejected → OTP X burned. FAIL ❌
+- Phase 3-4: Design — store purpose='pickup:<orderId>' in OtpRequest.purpose (existing String field, NO schema migration). Check purpose BEFORE verifyOtp() to prevent consumption on mismatch.
+- Phase 5: Legacy — existing rows with plaintext pickupOtp are not used for verification (CHECK 1c removed, CHECK 3 only checks !=='000000'). New rows store 'ISSUED'. Old raw-code rows would pass CHECK 3 but are never used as verification material.
+- Phase 6: qrToken is optional. The OTP→order binding is now via purpose field (server-side, authoritative). No client-side binding needed.
+- Phase 7: API exposure — raw OTP absent from GET /fulfilment response ✅. pickupOtpId present (opaque) ✅. DB stores 'ISSUED' (no raw code) ✅. OtpRequest.purpose='pickup:<orderId>' ✅.
+- Phase 8: Correct credential + correct order → 200 PICKED_UP, 1 audit, 1 outbox ✅.
+- Phase 9: Cross-order → 409 OTP_ORDER_MISMATCH, OTP X NOT consumed, NOT burned ✅. Wrong code → 409 ac=1 ✅. Consumed → 409 ✅. Expired → 409 ✅.
+- Phase 10: Attempt-limit regression 3/3 PASS ✅.
+- Phase 11: Concurrent correct 5/5 PASS ✅.
+- Phase 14: Lint=0. No new endpoint. No authorization regression ✅.
+
+Stage Summary:
+- V4A3_BINDING_SECRET_CORRECTION_VERIFIED
+- WHAT NOW BINDS OTP TO EXACT ORDER? OtpRequest.purpose='pickup:<orderId>'
+- Cross-order attack: OTP X → Order Y = 409, OTP X not consumed, not burned ✅
+- No schema migration ✅
