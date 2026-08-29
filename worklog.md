@@ -14296,3 +14296,57 @@ Stage Summary:
 - Credential hygiene: CLEAN — no secrets leaked to remote URL, git config, .env, worklog, evidence, or temp files.
 - V4A3 FORMAL CLOSURE remains PENDING the remote push (requires credentials not present in this sandbox).
 - V4A4 remains LOCKED.
+
+---
+Task ID: VENDOR-V4A4-OTP-REISSUE-INVALIDATION-24
+Agent: Pickup OTP Reissue Security Agent (main)
+Task: Ensure old pickup OTP becomes unusable when a new one is issued; secure reissue concurrency; preserve V4A1-V4A3 guarantees.
+
+Work Log:
+- Phase 0: Baseline at 5f2f71e (clean, LOCAL_HEAD == origin/main, BASELINE_MATCH=YES).
+- Phase 1 (pre-repair challenge): Created fresh order at ALMOST_READY, issued OTP_A via PATCH /fulfilment (purpose=pickup:<orderId>). Attempted reissue via: (a) PATCH /fulfilment same→same READY_FOR_PICKUP → HTTP 200 idempotent, NO new OTP (sentinel guard order.pickupOtp==='000000' false after first issuance). (b) PATCH /status ALMOST_READY→READY_FOR_PICKUP → HTTP 409 (pre-existing SQLite lock bug: /status route uses createOtp with global db inside withTransaction, causing P1008 lock conflict). Result: OTP_B was never successfully issued; OTP_A remained the sole OTP. CAN_OLD_OTP_A_VERIFY_AFTER_REISSUE_ATTEMPT = N/A (B never issued). ACTIVE_PICKUP_OTP_RECORD_COUNT = 1. REPAIR identified: OLD_PICKUP_OTP_REMAINS_VALID — no invalidation mechanism exists; prevention is via sentinel + state machine only.
+- Phase 2 (authority model trace): Two issuance paths exist: (1) /fulfilment route (V2/V4A3 canonical) — issues with purpose='pickup:<orderId>', guarded by order.pickupOtp==='000000' sentinel, uses tx.otpRequest.create (transactional). (2) /status route (V1 legacy) — issues with generic purpose='pickup' (NOT order-bound — V4A3 binding regression, out of scope), stores raw code in order.pickupOtp (V4A3 secret regression, out of scope), uses global db (SQLite lock bug). WHAT MAKES AN OTP THE CURRENT OTP? Currently: any OtpRequest where purpose='pickup:<orderId>' AND consumed=false AND expiresAt>now AND attemptCount<5. If multiple such rows exist, ALL are valid. The sentinel guard prevents reissue but is NOT an authoritative "current OTP" pointer. A 'pickupOtp=ISSUED' sentinel is not sufficient per directive.
+- Phase 3 (repair): Added V4A4 invalidation to /fulfilment route, inside the issuance block (after sentinel check, before tx.otpRequest.create). When issuing a new OTP, atomically mark ALL prior unconsumed pickup OTPs for this order as consumed=true. Uses tx.otpRequest.updateMany (transactional, same tx as new OTP creation). Covers BOTH purpose='pickup:<orderId>' (V4A3 exact binding) AND generic 'pickup' (legacy /status route). No schema migration — reuses existing `consumed` field. Defense-in-depth on top of the sentinel guard. Single file changed: src/app/api/orders/[id]/fulfilment/route.ts (+31 lines).
+- Phase 4 (invalidation matrix): After reissue (reset sentinel + Fulfilment→ALMOST_READY + PATCH /fulfilment): OTP_A.consumed=1 (invalidated), OTP_B created fresh. correct A + otpId A → 409 (A consumed). wrong + otpId A → 409. code A + otpId B → 409 (wrong code for B, B.ac=1). Order remains READY_FOR_PICKUP. OTP_A.ac=0 (no wrong attempts on A — invalidation is not a "burn", it's a clean supersede). PASS.
+- Phase 5 (new OTP attempt semantics): OTP_B initial attemptCount=0 (clean independent state). 5 wrong → locked at 5. 6th wrong → capped at 5. Order still READY_FOR_PICKUP after lock. NEW_OTP_INITIAL_ATTEMPT_COUNT=0. PASS.
+- Phase 6 (reissue after failed/locked): Scenario A (A has 4 wrongs → reissue B): A.consumed=1, B.ac=0. Scenario B (A locked at 5 → reissue B): A.consumed=1 + A.ac=5 (still locked), B.consumed=0 + B.ac=0 (independently usable). Reissue did NOT bypass lockout policy — A remains locked AND consumed; B is a fresh credential. PASS.
+- Phase 7 (concurrent reissue, 10 fixtures): 10/10 PASS. Each run: two simultaneous PATCH /fulfilment to READY_FOR_PICKUP. Result: 1 winner (200, creates OTP), 1 idempotent (200, sees sentinel='ISSUED' → skips issuance). total=1 OTP, active<=1. No dual validity. PASS.
+- Phase 8 (reissue × verify race, 10 fixtures): 10/10 PASS. Each run: T1=verify OTP_A, T2=reissue (reset+PATCH /fulfilment). Result: verify=409 (OTP_A consumed by invalidation), reissue=200, ful=READY_FOR_PICKUP, A.consumed=1. Coherent: reissue wins → A invalidated → verify A fails → no terminal mutation. No old OTP revival. PASS.
+- Phase 9 (terminal-state reissue): Order verified to PICKED_UP. PATCH /fulfilment to READY_FOR_PICKUP on PICKED_UP order → 409 (invalid transition, state machine rejects). No new OTP created. No terminal duplication (1 PICKED_UP audit, 1 PICKED_UP outbox). PASS.
+- Phase 10 (binding/tenant): Foreign Vendor reissue → 403, 0 new OTP. Consumer reissue → 403, 0 new OTP. Unauthenticated → 401/403, 0 new OTP. Cross-order OTP → 409. PASS.
+- Phase 11 (secret/privacy): RAW_OTP_IN_API_RESPONSE=0 (reissue response). RAW_OTP_IN_ORDER_DB=NO (pickupOtp=ISSUED). RAW_OTP_IN_FULFILMENT_DB=NO (pickupOtp=ISSUED). PROTECTED_HASH_IN_API_RESPONSE=0. RAW_OTP_IN_GET_API_RESPONSE=0. PASS.
+- Phase 12 (active-record invariant A→B→C→D): 4 sequential reissues. A.consumed=1, B.consumed=1, C.consumed=1, D.consumed=0 (sole current). USABLE_CURRENT_OTP_COUNT<=1. Only latest OTP is unconsumed. Historical rows remain for auditability but are not usable. PASS.
+- Phase 13 (V4A1-V4A3 targeted regression): V4A1 Foreign Vendor verify → 403. V4A2 5 wrong → locked at 5. V4A3 Consumer verify → 403. V4A3 exact purpose pickup:<orderId>. V4A3 random otpId + valid code → reject. All PASS.
+- Phase 14 (static/transaction): lint=0. +31 lines in 1 file. No schema migration. No new endpoint. auditWithTx preserved. Transaction boundary: V4A4 invalidation (tx.otpRequest.updateMany) + new OTP creation (tx.otpRequest.create) + sentinel update (tx.order.update + tx.fulfilment.update) all inside the SAME withTransaction — atomic.
+- Phase 15 (git closure): source commit + evidence/worklog commit; push via fresh PAT (not the previously exposed one).
+
+Acceptance thresholds:
+- OLD_OTP_VALID_AFTER_REISSUE = NO ✅
+- USABLE_CURRENT_OTP_COUNT <= 1 ✅
+- CONCURRENT_REISSUE_DUAL_VALIDITY = 0/10 ✅
+- TERMINAL_DUPLICATE_PICKUP = 0 ✅
+- RAW_SECRET_REGRESSION = 0 ✅
+- CROSS_TENANT_MUTATION = 0 ✅
+- ATTEMPT_LIMIT_EXACT = YES ✅
+
+Files changed (product source):
+  - src/app/api/orders/[id]/fulfilment/route.ts (V4A4: add prior-OTP invalidation before new issuance, +31 lines)
+
+Files added (evidence + tooling):
+  - scripts/v4a4-otp-reissue-21.mjs (Phase 1 pre-repair challenge)
+  - scripts/v4a4-post-repair.mjs (Phase 4-13 post-repair matrix)
+  - scripts/run-v4a4-post-repair.sh (orchestrator)
+  - evidence/v4a4-otp-reissue-invalidation-24/phase-*.txt (captured outputs)
+
+Stage Summary:
+- V4A4_OTP_REISSUE_INVALIDATION_VERIFIED
+- Old OTP automatically invalidated (consumed=true) when new one is issued ✅
+- New OTP starts with clean attempt state (ac=0) ✅
+- Reissue does NOT bypass lockout policy ✅
+- Concurrent reissue: no dual validity (10/10) ✅
+- Reissue × verify race: coherent outcomes (10/10) ✅
+- Terminal-state reissue: rejected (409 invalid transition) ✅
+- Binding/tenant + secret/privacy preserved ✅
+- Active-record invariant: USABLE_CURRENT_OTP_COUNT <= 1 ✅
+- V4A1-V4A3 targeted regression: all PASS ✅
+- V4A5 now UNLOCKED

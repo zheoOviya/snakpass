@@ -1,0 +1,17 @@
+
+# V4A4-OTP-REISSUE-INVALIDATION-24 — phase=p8
+# DB=/home/z/my-project/db/custom.db  baseline=5f2f71e
+
+=== PHASE 8 — Reissue × verify race (10 fixtures) ===
+  [PASS] Run 1: coherent (verify=409 reissue=200 ful=READY_FOR_PICKUP A.consumed=1)
+  [PASS] Run 2: coherent (verify=409 reissue=200 ful=READY_FOR_PICKUP A.consumed=1)
+  [PASS] Run 3: coherent (verify=409 reissue=200 ful=READY_FOR_PICKUP A.consumed=1)
+  [PASS] Run 4: coherent (verify=409 reissue=200 ful=READY_FOR_PICKUP A.consumed=1)
+  [PASS] Run 5: coherent (verify=409 reissue=200 ful=READY_FOR_PICKUP A.consumed=1)
+  [PASS] Run 6: coherent (verify=409 reissue=200 ful=READY_FOR_PICKUP A.consumed=1)
+  [PASS] Run 7: coherent (verify=409 reissue=200 ful=READY_FOR_PICKUP A.consumed=1)
+  [PASS] Run 8: coherent (verify=409 reissue=200 ful=READY_FOR_PICKUP A.consumed=1)
+  [PASS] Run 9: coherent (verify=409 reissue=200 ful=READY_FOR_PICKUP A.consumed=1)
+  [PASS] Run 10: coherent (verify=409 reissue=200 ful=READY_FOR_PICKUP A.consumed=1)
+
+# Phase p8 result: PASS

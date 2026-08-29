@@ -1,0 +1,12 @@
+
+# V4A4-OTP-REISSUE-INVALIDATION-24 — phase=p13
+# DB=/home/z/my-project/db/custom.db  baseline=5f2f71e
+
+=== PHASE 13 — V4A1-V4A3 targeted regression ===
+  [PASS] V4A1: Foreign Vendor verify → 403 — http=403
+  [PASS] V4A2: 5 wrong → locked at 5 — ac=5
+  [PASS] V4A3: Consumer verify → 403 — http=403
+  [PASS] V4A3: exact purpose pickup:<orderId> — purpose=pickup:09dffacd69624744b7d1af2f
+  [PASS] V4A3: random otpId + valid code → reject — http=409
+
+# Phase p13 result: PASS

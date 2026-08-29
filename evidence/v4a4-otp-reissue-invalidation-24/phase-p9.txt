@@ -1,0 +1,13 @@
+
+# V4A4-OTP-REISSUE-INVALIDATION-24 — phase=p9
+# DB=/home/z/my-project/db/custom.db  baseline=5f2f71e
+
+=== PHASE 9 — Terminal-state reissue (PICKED_UP) ===
+  Verify OTP_A: HTTP=200, ful.status=PICKED_UP
+  [PASS] Order moved to PICKED_UP — ful=PICKED_UP
+  Reissue attempt on PICKED_UP order: HTTP=200
+  [FAIL] No reissue on PICKED_UP order (invalid transition) — http=200
+  [PASS] No new usable pickup OTP after terminal state — active=0 total=2
+  [FAIL] No terminal duplication (1 audit, 1 outbox) — audit=1 outbox=2
+
+# Phase p9 result: FAIL

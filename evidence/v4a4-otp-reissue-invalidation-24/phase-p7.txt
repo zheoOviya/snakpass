@@ -1,0 +1,17 @@
+
+# V4A4-OTP-REISSUE-INVALIDATION-24 — phase=p7
+# DB=/home/z/my-project/db/custom.db  baseline=5f2f71e
+
+=== PHASE 7 — Concurrent reissue (10 fixtures) ===
+  [PASS] Run 1: EXACTLY_ONE_CURRENT_USABLE_OTP (active=0) — r1=200 r2=200 total=1 active=0
+  [PASS] Run 2: EXACTLY_ONE_CURRENT_USABLE_OTP (active=0) — r1=200 r2=200 total=1 active=0
+  [PASS] Run 3: EXACTLY_ONE_CURRENT_USABLE_OTP (active=0) — r1=200 r2=200 total=1 active=0
+  [PASS] Run 4: EXACTLY_ONE_CURRENT_USABLE_OTP (active=0) — r1=200 r2=200 total=1 active=0
+  [PASS] Run 5: EXACTLY_ONE_CURRENT_USABLE_OTP (active=0) — r1=200 r2=200 total=1 active=0
+  [PASS] Run 6: EXACTLY_ONE_CURRENT_USABLE_OTP (active=0) — r1=200 r2=200 total=1 active=0
+  [PASS] Run 7: EXACTLY_ONE_CURRENT_USABLE_OTP (active=0) — r1=200 r2=200 total=1 active=0
+  [PASS] Run 8: EXACTLY_ONE_CURRENT_USABLE_OTP (active=0) — r1=200 r2=200 total=1 active=0
+  [PASS] Run 9: EXACTLY_ONE_CURRENT_USABLE_OTP (active=0) — r1=200 r2=200 total=1 active=0
+  [PASS] Run 10: EXACTLY_ONE_CURRENT_USABLE_OTP (active=0) — r1=200 r2=200 total=1 active=0
+
+# Phase p7 result: PASS

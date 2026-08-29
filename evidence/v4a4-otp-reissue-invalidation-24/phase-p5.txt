@@ -1,0 +1,17 @@
+
+# V4A4-OTP-REISSUE-INVALIDATION-24 — phase=p5
+# DB=/home/z/my-project/db/custom.db  baseline=5f2f71e
+
+=== PHASE 5 — New OTP attempt semantics ===
+  OTP_B issued: otpId=5j2byahz
+  [PASS] NEW_OTP_INITIAL_ATTEMPT_COUNT = 0 — ac=0
+  wrong #1 → ac=1
+  wrong #2 → ac=2
+  wrong #3 → ac=3
+  wrong #4 → ac=4
+  wrong #5 → ac=5
+  [PASS] 5 wrong → locked at 5 — ac=5
+  [PASS] 6th wrong → capped at 5 — ac=5
+  [PASS] Order still READY_FOR_PICKUP after lock — ful=READY_FOR_PICKUP
+
+# Phase p5 result: PASS
