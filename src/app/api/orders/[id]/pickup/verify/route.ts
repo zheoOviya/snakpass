@@ -111,13 +111,17 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
         }
 
         // -------------------------------------------------------------------
-        // RBAC ownership check (CONSUMER → own order only)
+        // V4A-1: RBAC ownership check (CONSUMER → own order, VENDOR_OWNER → owning restaurant)
         // -------------------------------------------------------------------
         // Allowed roles for pickup verification:
         //   - CONSUMER       → only their own order (ownership check below)
-        //   - VENDOR_OWNER   → any restaurant (schema lacks ownerId on Restaurant)
+        //   - VENDOR_OWNER   → only orders for restaurants they own (ownership check below)
         //   - ADMIN          → any
         //   - SUPER_ADMIN    → any
+        //
+        // V4A-1 REPAIR: Previously VENDOR_OWNER could verify ANY order's pickup
+        // (cross-tenant mutation). Now mirrors the V1-hardened fulfilment PATCH
+        // route's ownership check: Restaurant.ownerUserId === session.userId.
         const allowedRoles = ['CONSUMER', 'VENDOR_OWNER', 'ADMIN', 'SUPER_ADMIN']
         if (!allowedRoles.includes(session.role)) {
           return {
@@ -134,13 +138,13 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
           }
         }
 
-        // For CONSUMER, load the order to check ownership BEFORE the
-        // attribution check (so we don't even attempt QR+OTP verification for
-        // a consumer who is not the order owner).
-        if (session.role === 'CONSUMER') {
+        // For CONSUMER and VENDOR_OWNER, load the order to check ownership
+        // BEFORE the attribution check (so we don't even attempt QR+OTP
+        // verification for an unauthorized caller).
+        if (session.role === 'CONSUMER' || session.role === 'VENDOR_OWNER') {
           const order = await tx.order.findUnique({
             where: { id: orderId },
-            select: { id: true, userId: true },
+            select: { id: true, userId: true, restaurantId: true },
           })
           if (!order) {
             return {
@@ -151,18 +155,41 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
               },
             }
           }
-          if (order.userId !== session.userId) {
-            return {
-              type: 'error' as const,
-              status: 403,
-              body: {
-                error: {
-                  code: 'AUTHORIZATION_DENIED',
-                  message: 'You can only verify pickup for your own orders',
-                  traceId,
-                  details: { orderId, orderOwnerId: order.userId, requesterId: session.userId },
+          if (session.role === 'CONSUMER') {
+            // CONSUMER → only own order
+            if (order.userId !== session.userId) {
+              return {
+                type: 'error' as const,
+                status: 403,
+                body: {
+                  error: {
+                    code: 'AUTHORIZATION_DENIED',
+                    message: 'You can only verify pickup for your own orders',
+                    traceId,
+                    details: { orderId, orderOwnerId: order.userId, requesterId: session.userId },
+                  },
                 },
-              },
+              }
+            }
+          } else {
+            // VENDOR_OWNER → only restaurants they own
+            const restaurant = await tx.restaurant.findUnique({
+              where: { id: order.restaurantId },
+              select: { ownerUserId: true },
+            })
+            if (!restaurant || restaurant.ownerUserId !== session.userId) {
+              return {
+                type: 'error' as const,
+                status: 403,
+                body: {
+                  error: {
+                    code: 'AUTHORIZATION_DENIED',
+                    message: 'You do not own the restaurant for this order.',
+                    traceId,
+                    details: { orderId, restaurantId: order.restaurantId, requesterId: session.userId },
+                  },
+                },
+              }
             }
           }
         }
