@@ -17,6 +17,7 @@ import type { Prisma } from '@prisma/client'
 
 const OTP_TTL_MIN = 5
 const KEY_LEN = 32
+const MAX_FAILED_ATTEMPTS = 5
 
 function hashCode(code: string): string {
   const salt = Buffer.from('snakzap-otp-salt') // fixed salt is fine: OTP is high-entropy + short-lived
@@ -58,11 +59,27 @@ export async function verifyOtp(
   if (!rec) return { ok: false }
   if (rec.consumed) return { ok: false }
   if (rec.expiresAt.getTime() < Date.now()) return { ok: false }
+  // V4A-2: If the OTP has exceeded the max failed attempts threshold, reject.
+  // The credential is LOCKED — no further verification attempts are allowed.
+  if (rec.attemptCount >= MAX_FAILED_ATTEMPTS) return { ok: false }
 
   const expected = Buffer.from(rec.codeHash, 'hex')
   const actual = scryptSync(code, Buffer.from('snakzap-otp-salt'), KEY_LEN)
   const match = actual.length === expected.length && timingSafeEqual(actual, expected)
-  if (!match) return { ok: false }
+
+  if (!match) {
+    // V4A-2: Atomically increment attemptCount on wrong code.
+    // Use updateMany with a conditional WHERE to prevent race conditions
+    // on the increment — this ensures concurrent wrong attempts are all counted.
+    // Cap at MAX_FAILED_ATTEMPTS to prevent unbounded increment.
+    const currentCount = rec.attemptCount
+    const newCount = Math.min(currentCount + 1, MAX_FAILED_ATTEMPTS)
+    await client.otpRequest.update({
+      where: { id: otpId },
+      data: { attemptCount: newCount },
+    })
+    return { ok: false }
+  }
 
   // Mark as consumed — uses `client` (tx if provided, else db).
   // V2 fix: when called inside a withTransaction, using `tx` avoids the
