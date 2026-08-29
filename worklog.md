@@ -13987,3 +13987,26 @@ Stage Summary:
 - Server killed when Chrome connects (NOT OOM — oom_kill=0, memory under limit)
 - 3 remaining realtime browser contracts cannot be proven in this environment
 - V3 remains LOCKED
+
+---
+Task ID: VENDOR-V4A1-CONCURRENCY-CLOSURE-14
+Agent: Pickup Transaction Integrity Verification Agent (main)
+Task: Prove concurrent pickup verification produces exactly one logical transition with no duplicate side effects.
+
+Work Log:
+- Phase 0: Baseline at 2481c66 (clean, HEAD==remote, ancestor YES).
+- Phase 1-6: Created 10 independent fresh fixtures. Each: Vendor A order → accept → ALMOST_READY → READY_FOR_PICKUP → fire 2 concurrent correct pickup-verify requests via Promise.all.
+- Results: 10/10 PASS ✅
+  - Every run: one request got 200 (winner), other got 409 (loser)
+  - Final Fulfilment.status = PICKED_UP, version = 3 (exactly one transition)
+  - PICKUP_VERIFIED audit entries = 1 (exactly one)
+  - ORDER_STATUS_CHANGED PICKED_UP outbox events = 1 (exactly one)
+  - No duplicate terminal side effects in any run
+- The optimistic-lock on Fulfilment.version (WHERE version = X in updateMany) ensures exactly one PICKED_UP transition. The losing request receives STALE_VERSION → 409, and returns BEFORE writing audit/outbox, so no partial side effects are committed.
+- Note: Initial test run had a counting bug (Prisma's `contains` on JSON payload was too broad — matched all orders' events). Fixed by using raw SQL with precise LIKE on the specific orderId + 'PICKED_UP' string. After fix: 10/10 PASS.
+- No source changes required. No defect found. Source diff = 0.
+
+Stage Summary:
+- V4A1_CONCURRENCY_CLOSURE_VERIFIED
+- 10/10 runs: exactly 1 PICKED_UP, 1 audit, 1 outbox, 0 duplicates
+- No product source changes (evidence only)
