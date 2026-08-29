@@ -235,7 +235,8 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
               orderId: fulfilment.orderId,
               status: fulfilment.status,
               version: fulfilment.version,
-              pickupOtp: fulfilment.pickupOtp, // V4A-3: '000000' or 'ISSUED' (never raw code)
+              // V4A-3: pickupOtp removed from all API responses
+              // pickupOtp: fulfilment.pickupOtp,
               updatedAt: fulfilment.updatedAt,
               statusHistory: fulfilment.statusHistory,
             },
@@ -605,7 +606,7 @@ export const GET = (_req: NextRequest, { params }: { params: Promise<{ id: strin
         const otpRecord = await tx.otpRequest.findFirst({
           where: {
             target: order.user.phone,
-            purpose: { startsWith: 'pickup:' }, // V4A-3: match any pickup OTP (bound to any order)
+            purpose: `pickup:${id}`, // V4A-3: exact order-scoped lookup (not startsWith)
             consumed: false,
             expiresAt: { gt: new Date() },
           },
