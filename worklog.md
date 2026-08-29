@@ -14151,3 +14151,35 @@ Stage Summary:
 - DB breach = no usable code ✅
 - Sentinel = non-secret marker ✅
 - Attempt-limit + concurrency regression ✅
+
+---
+Task ID: VENDOR-V4A3-MANDATORY-EVIDENCE-FINALIZATION-20
+Agent: Pickup Security Closure Verification Agent (main)
+Task: Capture 4 missing mandatory security evidence rows for V4A3 closure.
+
+Work Log:
+- Phase 0: Baseline at d6679dd (clean, HEAD==remote).
+- Phase 1 (Foreign Vendor PATCH): Vendor B PATCH on Vendor A's order → 403. No mutation, no audit, no outbox, rawOtp absent. PASS ✅
+- Phase 2 (Admin API exposure): Admin GET /fulfilment → 200. rawOtp absent ✅, codeHash absent ✅, pickupOtpId absent. No secret material in admin response. PASS ✅
+- Phase 3 (Foreign Vendor + valid credential): Vendor B attempted pickup-verify with valid credential on Vendor A's order → 403. OTP not consumed, attemptCount unchanged (0), order READY_FOR_PICKUP, 0 audit, 0 outbox. Authorization boundary rejects before credential oracle. PASS ✅
+- Phase 4 (Consumer + valid credential): Consumer (owns order) attempted pickup-verify → 200. PICKED_UP, 1 audit, 1 outbox, OTP consumed. Consumer pickup is allowed per existing contract (consumer owns order). PASS ✅
+- Phase 5 (Random otpId + valid code): Used otpIdB (from order B) + code A (valid for order A) against order A → 409. OTP A not consumed, attemptCount=0, order A READY_FOR_PICKUP, 0 audit, 0 outbox. PASS ✅
+
+Side-effect matrix:
+| Case | HTTP | OTP consumed | attemptCount Δ | Order | Audit | Outbox | Result |
+|------|------|-------------|----------------|-------|-------|--------|--------|
+| Foreign Vendor PATCH | 403 | N/A | 0 | unchanged | 0 | 0 | PASS ✅ |
+| Foreign Vendor valid credential | 403 | false | 0 | READY | 0 | 0 | PASS ✅ |
+| Consumer valid credential | 200 | true | 0 | PICKED_UP | 1 | 1 | PASS ✅ |
+| Random otpId + valid code | 409 | false | 0 | READY | 0 | 0 | PASS ✅ |
+
+API exposure summary:
+- RAW_OTP_API_RESPONSE = 0 ✅ (tested: Owner GET, Owner PATCH, Foreign GET, Foreign PATCH, Admin GET, Consumer GET, verify response)
+- PROTECTED_CODE_HASH_API_RESPONSE = 0 ✅
+
+Source diff: 0 (evidence only, no code changes)
+
+Stage Summary:
+- V4A3_MANDATORY_EVIDENCE_FINALIZATION_VERIFIED
+- All 4 missing mandatory rows PASS ✅
+- No product source changes
