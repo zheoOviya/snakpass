@@ -233,7 +233,15 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
         }
       }
 
-      const total = body.items.reduce((s: number, i: { price: number; quantity: number }) => s + i.price * i.quantity, 0)
+      // P1-REPAIR-34: Compute total from SERVER-AUTHORITATIVE MenuItem.price,
+      // NOT from client-supplied body.items[i].price. The client could otherwise
+      // dictate the payment amount (e.g., submit price=1 for a ₹100 item).
+      // The MenuItem.price was fetched at line 164-167 (menuItemMap).
+      const total = body.items.reduce((s: number, i: { menuItemId: string; quantity: number }) => {
+        const menuItem = menuItemMap.get(i.menuItemId)
+        if (!menuItem) return s // validated above; TypeScript doesn't know
+        return s + menuItem.price * i.quantity
+      }, 0)
       const itemsCount = body.items.reduce((s: number, i: { quantity: number }) => s + i.quantity, 0)
       const otp = String(Math.floor(100000 + Math.random() * 900000))
       const now = new Date().toISOString()
@@ -251,13 +259,16 @@ export const POST = (req: NextRequest) => withErrorHandler(async () => {
           note: body.note ?? null,
           statusHistory: JSON.stringify([{ status: 'CONFIRMED', at: now }]),
           orderItems: {
-            create: body.items.map((i: { menuItemId: string; name: string; price: number; quantity: number }) => ({
-              menuItemId: i.menuItemId,
-              name: i.name,
-              price: i.price,
-              quantity: i.quantity,
-              subtotal: i.price * i.quantity,
-            })),
+            create: body.items.map((i: { menuItemId: string; quantity: number }) => {
+              const menuItem = menuItemMap.get(i.menuItemId)!
+              return {
+                menuItemId: i.menuItemId,
+                name: menuItem.name,
+                price: menuItem.price, // server-authoritative price
+                quantity: i.quantity,
+                subtotal: menuItem.price * i.quantity,
+              }
+            }),
           },
         },
         include: { orderItems: true, restaurant: { select: { id: true, name: true } } },
