@@ -344,7 +344,7 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
             data: {
               channel: 'phone',
               target: order.user.phone,
-              purpose: 'pickup',
+              purpose: `pickup:${id}`, // V4A-3: bind OTP to exact order
               codeHash,
               expiresAt,
             },
@@ -605,7 +605,7 @@ export const GET = (_req: NextRequest, { params }: { params: Promise<{ id: strin
         const otpRecord = await tx.otpRequest.findFirst({
           where: {
             target: order.user.phone,
-            purpose: 'pickup',
+            purpose: { startsWith: 'pickup:' }, // V4A-3: match any pickup OTP (bound to any order)
             consumed: false,
             expiresAt: { gt: new Date() },
           },

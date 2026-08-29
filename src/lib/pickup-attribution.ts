@@ -92,6 +92,7 @@ export type PickupAttributionFailureReason =
   | 'FULFILMENT_NOT_READY'   // Fulfilment.status !== 'READY_FOR_PICKUP'
   | 'OTP_VERIFICATION_FAILED' // verifyOtp() returned ok:false
   | 'OTP_TARGET_MISMATCH'      // otp.target !== order.user.phone (cross-credential)
+  | 'OTP_ORDER_MISMATCH'       // V4A-3: otp.purpose !== 'pickup:<orderId>' (cross-order)
   | 'STALE_VERSION'            // optimistic-lock version mismatch on PICKED_UP flip
   | 'FULFILMENT_MISSING'       // No Fulfilment row exists (defensive — should be lazy-created)
 
@@ -377,22 +378,47 @@ export async function verifyPickupAttribution(
   }
 
   // -------------------------------------------------------------------------
-  // CHECK 7: verifyOtp() returns ok AND otp.target === order.user.phone
-  // (cross-credential check — prevents a consumer from verifying pickup for
-  // ANOTHER consumer's order using their own OTP).
   // -------------------------------------------------------------------------
-  // NOTE: verifyOtp() uses the global `db` client (NOT the txn `tx`). This is
-  // acceptable because:
-  //   - The OTP record is in the OtpRequest table (separate from Order/
-  //     Payment/Fulfilment). Its `consumed` flag is independent of the
-  //     Fulfilment.status flip — if the txn later rolls back, the OTP remains
-  //     consumed (which is the safe direction — a replay would be rejected).
-  //   - The cross-credential check (otp.target === order.user.phone) provides
-  //     the binding between the OTP credential and the order owner.
-  // V2 fix: pass `tx` to verifyOtp so it uses the transaction client (NOT
-  // the global `db`). On SQLite, using `db` while a BEGIN IMMEDIATE write
-  // lock is held causes "database is locked" errors. Using `tx` ensures the
-  // OTP consume + the fulfilment transition are in the SAME transaction.
+  // CHECK 7 (V4A-3: split into 7a + 7b + 7c for atomic ordering):
+  // 7a: Read OTP record FIRST (before verification) to check purpose binding.
+  //     This prevents cross-order attacks from consuming a valid OTP credential
+  //     that belongs to a different order.
+  // 7b: verifyOtp() — scrypt comparison + consume (only if 7a passes)
+  // 7c: otp.target === order.user.phone (cross-credential)
+  // 7d: otp.purpose === 'pickup:<orderId>' (exact order binding)
+  // -------------------------------------------------------------------------
+  // V4A-3: Read the OTP record FIRST to check purpose BEFORE consuming it.
+  // This prevents a cross-order attack from burning a legitimate OTP.
+  const otpRecord = await tx.otpRequest.findUnique({
+    where: { id: otpId },
+    select: { purpose: true, consumed: true, expiresAt: true, attemptCount: true },
+  })
+  if (!otpRecord) {
+    return failure('OTP_VERIFICATION_FAILED', 409, `OTP record not found.`, {
+      orderId, otpId, verifierUserId: verifier.userId,
+    })
+  }
+  // CHECK 7d (BEFORE consumption): OTP is bound to the EXACT order being verified.
+  const expectedPurpose = `pickup:${orderId}`
+  if (otpRecord.purpose !== expectedPurpose) {
+    logWarn(
+      'pickup-attr-otp-order-mismatch',
+      { orderId, otpPurpose: otpRecord.purpose, expectedPurpose },
+      traceId,
+    )
+    return failure(
+      'OTP_ORDER_MISMATCH',
+      409,
+      `OTP was issued for a different order. Cross-order pickup is not allowed.`,
+      {
+        orderId, otpId,
+        otpPurpose: otpRecord.purpose ?? null,
+        verifierUserId: verifier.userId,
+      },
+    )
+  }
+
+  // CHECK 7b: verifyOtp() — scrypt comparison + consume (inside transaction)
   const otpResult = await verifyOtp(otpId, code, tx)
   if (!otpResult.ok) {
     logWarn(
