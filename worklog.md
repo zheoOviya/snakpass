@@ -14558,3 +14558,43 @@ Stage Summary:
 - Payload minimization: 0 raw OTP/hash/credential/private-data in outbox
 - No source repair needed
 - V2 browser gate remains BLOCKED_EXTERNAL (explicitly distinguished)
+
+---
+Task ID: VENDOR-V3-REALTIME-DELIVERY-AUTHORIZATION-REPAIR-32
+Agent: Realtime Authorization & Privacy Repair Agent (main)
+Task: Reproduce cross-user order metadata delivery defect, determine canonical authorization model, and minimally repair the confirmed defect. Correct the overclaimed V3 VERIFIED from commit 9b0d5b2.
+
+Work Log:
+- Phase 0: Baseline at 9b0d5b2 (clean, LOCAL_HEAD=9b0d5b2, origin/main=b751ac6, ahead=1, WORKTREE=CLEAN). The 9b0d5b2 commit is local-only and NOT pushed (per directive: DO_NOT_PUSH_AS_CURRENT_FINAL_VERDICT).
+- Phase 1 (defect reproduction): Created Consumer A (owns Order A) + Consumer B (owns Order B). Connected both via socket.io with session cookies. TEST 1 (consumer:all broadcast): Consumer A subscribed to consumer:all, emitted Order B event → Consumer A RECEIVED Order B's event (orderId, status). CROSS_USER_ORDER_ID_EXPOSURE=YES, CROSS_USER_STATUS_EXPOSURE=YES. TEST 2 (order:{orderId} subscribe): Consumer A subscribed to order:{OrderB} (foreign order) → RECEIVED 2 events. UNAUTHORIZED_ORDER_ROOM_SUBSCRIPTION=YES. Defect CONFIRMED: any authenticated consumer can receive any other consumer's order metadata.
+- Phase 2 (authorization contract): Consumer A may subscribe/apply Order A only. Consumer A must NOT receive Order B private update. Consumer A must NOT subscribe Order B room. Same inverse for Consumer B. Vendor: existing authorized scope (restaurant:{id} ownership-checked). Admin: existing authorized scope (admin:all).
+- Phase 3 (source repair): Minimal repair in mini-services/realtime/index.ts + src/components/snak/consumer-view.tsx:
+  1. order:{orderId} subscribe authorization: CONSUMER role must own the order (DB check: Order.userId === session.userId). Vendors/admins use vendor:all/admin:all for their scope.
+  2. consumer:all broadcast REMOVED from order:updated + order:created fanout. Consumers now receive ONLY their own order events via order:{orderId} (ownership-checked). consumer:all retained only for genuinely public events (killswitch).
+  3. Non-service socket cannot emit order:updated/order:created (isService check). Prevents forgery.
+  4. restaurant:{restaurantId} subscribe authorization: VENDOR_OWNER must own the restaurant (DB check). Admins allowed.
+  5. vendor:all/admin:all role-scoped (VENDOR_OWNER/ADMIN/SUPER_ADMIN only).
+  6. Unknown channels fail-closed (deny).
+  7. consumer-view.tsx: dynamically subscribes to order:{activeOrder.id} (ownership-checked by realtime service) when an active order is selected.
+  No schema migration. No new endpoint. Reuses existing session/DB helpers.
+- Phase 4 (authorization matrix post-repair): Consumer A (owns A) receives Order A event (1) ✅. Consumer B (owns B) does NOT receive Order A (0) ✅. Consumer C (unrelated) does NOT receive Order A (0) ✅ — no consumer:all broadcast + ownership-denied. Consumer B receives OWN Order B (1) ✅. Non-service cannot forge order events (Consumer A emit rejected, 0 received) ✅. CROSS_USER_PRIVATE_EVENT_DELIVERY=0, UNAUTHORIZED_ORDER_ROOM_SUBSCRIPTION=0, UNAUTHORIZED_STATE_APPLICATION=0. ALL PASS.
+- Phase 5 (duplicate/out-of-order event test): Direct socket event delivery (not OTP replay). Duplicate event: 2 deliveries (expected — realtime is best-effort invalidation; consumer refetches REST which is authoritative). Out-of-order: 2 deliveries (DB authoritative, no regression). Terminal repeated: 2 deliveries. Wrong-order notification: 0 (ownership-denied) ✅. Unknown-order: 0 ✅. CROSS_ORDER_APPLICATION=0, STATE_REGRESSION=0, UNAUTHORIZED_REFETCH=0. ALL PASS.
+- Phase 6 (payload minimization): Received event fields: orderId, restaurantId, status, totalAmount, updatedAt, pickupOtp, fulfilmentId, version. raw OTP=0 ✅, codeHash=0 ✅, credential=0 ✅, private data=0 ✅. Cross-user private order metadata exposure=0 (Consumer A only receives own order). The pickupOtp field value is 'ISSUED' (V4A3 sentinel, not raw code). PASS.
+- Phase 7 (targeted regression): V4 pickup security unchanged (no pickup/OTP route touched). Consumer correlation guard (p.orderId === activeOrder.id) preserved as defense-in-depth. Vendor realtime mapping preserved (vendor:all + restaurant:{id}). Admin realtime mapping preserved (admin:all). Missed-event REST reconciliation preserved (consumer refetches /api/orders/<id>). V4_PICKUP_SECURITY_REGRESSION=PASS (no shared source changed).
+- Phase 8 (V2 distinction): V2_BROWSER_REALTIME_GATE = BLOCKED_EXTERNAL: ENVIRONMENT_RESOURCE_LIMIT_PREVENTS_MANDATORY_MULTI_PAGE_BROWSER_EVIDENCE. This repair does NOT close V2.
+- Phase 9 (evidence correction): This worklog entry is the corrected evidence. Commit 9b0d5b2 (overclaimed VERIFIED) is NOT amended — the history transparently shows: 9b0d5b2 (initial V3 evidence — overclaimed VERIFIED) → <this commit> (V3 delivery authorization/privacy repair + corrected evidence). The overclaim was: 9b0d5b2 said "other user's private order data exposure = 0" which was false — consumer:all broadcast cross-user order metadata. This repair fixes the actual defect.
+- Phase 10 (remote closure): push with fresh credential only. The 4 prior PATs are spent/forbidden.
+
+Files changed (product source):
+  - mini-services/realtime/index.ts (V3-REPAIR-32: order:{orderId} subscribe auth, remove consumer:all from order fanout, non-service emit rejection, restaurant:{id} + vendor:all/admin:all role-scoping, fail-closed unknown channels)
+  - src/components/snak/consumer-view.tsx (V3-REPAIR-32: dynamic order:{activeOrder.id} subscription)
+
+Stage Summary:
+- V3_REALTIME_DELIVERY_AUTHORIZATION_REPAIRED
+- Cross-user delivery defect reproduced (consumer:all broadcast + order:{orderId} no ownership check)
+- Repair: ownership-checked order:{orderId} subscribe + removed consumer:all from order fanout + non-service emit rejection
+- Authorization matrix: all rows PASS (Consumer A receives own only, B/C denied)
+- Duplicate/out-of-order: DB authoritative, no regression, wrong-order/unknown-order rejected
+- Payload minimization: 0 raw OTP/hash/credential/private-data; cross-user metadata exposure=0
+- V4 pickup security preserved (no shared source changed)
+- Commit 9b0d5b2 overclaim corrected (NOT amended — transparent history)
