@@ -335,32 +335,33 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
         // -------------------------------------------------------------------
         let pickupOtpId: string | null = null
         if (desired === 'READY_FOR_PICKUP' && order.user?.phone && order.pickupOtp === '000000') {
-          // V4A4 — OTP Reissue Invalidation (defense-in-depth).
+          // V4A4 — OTP Reissue Invalidation (defense-in-depth, order-scoped).
           // Before issuing a new pickup OTP, atomically invalidate ALL prior
-          // unconsumed pickup OTPs for this order. This establishes the
+          // unconsumed pickup OTPs for THIS EXACT ORDER. This establishes the
           // authoritative invariant:
           //   "the current OTP is the most recently issued one; all prior OTPs
-          //    are permanently unusable when a new one is issued."
+          //    for this order are permanently unusable when a new one is issued."
+          //
+          // V4A4-ORDER-SCOPE-LOCKOUT-CORRECTION-25:
+          //   The invalidation is scoped to EXACT order binding via
+          //   `purpose = 'pickup:<orderId>'`. Generic `purpose='pickup'` rows
+          //   (from the legacy /status route) are NOT invalidated here because
+          //   the OtpRequest model has NO orderId field — a generic 'pickup' row
+          //   carries no recoverable order identity, so consuming it by phone
+          //   target alone would cross order boundaries (same consumer with two
+          //   orders would have Order X's reissue invalidate Order Y's OTP).
+          //   Exact order binding is the authoritative scope (per V4A3).
           //
           // The sentinel guard above (order.pickupOtp === '000000') prevents
-          // reissue in normal operation (once an OTP is issued, pickupOtp is
-          // set to 'ISSUED'). This invalidation is defense-in-depth: if a prior
-          // OTP exists (e.g., from the legacy /status route which issues with
-          // generic 'pickup' purpose, or from a race/bug that bypassed the
-          // sentinel), it is automatically marked consumed → verifyOtp rejects
-          // it (rec.consumed === true → ok: false).
+          // reissue in normal production operation (once an OTP is issued,
+          // pickupOtp is set to 'ISSUED'). This invalidation is defense-in-depth:
+          // if a prior order-bound OTP somehow exists (e.g., a race/bug that
+          // bypassed the sentinel), it is automatically marked consumed.
           //
           // No schema migration — reuses the existing `consumed` field.
-          // Covers BOTH 'pickup:<orderId>' (V4A3 exact binding) AND generic
-          // 'pickup' (legacy /status route) to ensure no prior credential
-          // survives a new issuance.
           await tx.otpRequest.updateMany({
             where: {
-              target: order.user.phone,
-              OR: [
-                { purpose: `pickup:${id}` },
-                { purpose: 'pickup' },
-              ],
+              purpose: `pickup:${id}`,
               consumed: false,
             },
             data: { consumed: true },
