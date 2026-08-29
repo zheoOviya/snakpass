@@ -1,0 +1,60 @@
+
+# P1-PAYMENT-ORDER-PICKUP-GOLDEN-PATH-34 — phase=p8
+# baseline=29390ca
+
+=== PHASE 8 — Consumer final-state correctness ===
+  REST order.status: undefined
+  REST order.totalAmount: undefined
+FATAL 24 | `))}toString(){return this.lines.join(`
+25 | `)}};var hd={red:ce,gray:Hr,dim:Ce,bold:W,underline:Y,highlightSource:e=>e.highlight()},yd={red:e=>e,gray:e=>e,dim:e=>e,bold:e=>e,underline:e=>e,highlightSource:e=>e};function bd({message:e,originalMethod:r,isPanic:t,callArguments:n}){return{functionName:`prisma.${r}()`,message:e,isPanic:t??!1,callArguments:n}}function Ed({callsite:e,message:r,originalMethod:t,isPanic:n,callArguments:i},o){let s=bd({message:r,originalMethod:t,isPanic:n,callArguments:i});if(!e||typeof window<"u"||process.env.NODE_ENV==="production")return s;let a=e.getLocation();if(!a||!a.lineNumber||!a.columnNumber)return s;let l=Math.max(1,a.lineNumber-3),u=Pn.read(a.fileName)?.slice(l,a.lineNumber),c=u?.lineAt(a.lineNumber);if(u&&c){let p=xd(c),d=wd(c);if(!d)return s;s.functionName=`${d.code})`,s.location=a,n||(u=u.mapLineAt(a.lineNumber,h=>h.slice(0,d.openingBraceIndex))),u=o.highlightSource(u);let f=String(u.lastLineNumber).length;if(s.contextLines=u.mapLines((h,g)=>o.gray(String(g).padStart(f))+" "+h).mapLines(h=>o.dim(h)).prependSymbolA
+26 | `)}function Pd(e){let r=[e.fileName];return e.lineNumber&&r.push(String(e.lineNumber)),e.columnNumber&&r.push(String(e.columnNumber)),r.join(":")}function Tn(e){let r=e.showColors?hd:yd,t;return t=Ed(e,r),vd(t,r)}var la=O(Ki());function na(e,r,t){let n=ia(e),i=Td(n),o=Rd(i);o?Sn(o,r,t):r.addErrorMessage(()=>"Unknown error")}function ia(e){return e.errors.flatMap(r=>r.kind==="Union"?ia(r):[r])}function Td(e){let r=new Map,t=[];for(let n of e){if(n.kind!=="InvalidArgumentType"){t.push(n);continue}let i=`${n.selectionPath.join(".")}:${n.argumentPath.join(".")}`,o=r.get(i);o?r.set(i,{...n,argument:{...n.argument,typeNames:Sd(o.argument.typeNames,n.argument.typeNames)}}):r.set(i,n)}return t.push(...r.values()),t}function Sd(e,r){return[...new Set(e.concat(r))]}function Rd(e){return ji(e,(r,t)=>{let n=ra(r),i=ra(t);return n!==i?n-i:ta(r)-ta(t)})}function ra(e){let r=0;return Array.isArray(e.selectionPath)&&(r+=e.selectionPath.length),Array.isArray(e.argumentPath)&&(r+=e.argumentPath.length),r}function ta(e){switch(
+27 | `)}getCurrentLineLength(){return this.currentLine.length}indentedCurrentLine(){let r=this.currentLine.padStart(this.currentLine.length+2*this.currentIndent);return this.marginSymbol?this.marginSymbol+r.slice(1):r}};oa();var Rn=class{constructor(r){this.value=r}write(r){r.write(this.value)}markAsError(){this.value.markAsError()}};var An=e=>e,Cn={bold:An,red:An,green:An,dim:An,enabled:!1},aa={bold:W,red:ce,green:qe,dim:Ce,enabled:!0},Cr={write(e){e.writeLine(",")}};var Pe=class{constructor(r){this.contents=r}isUnderlined=!1;color=r=>r;underline(){return this.isUnderlined=!0,this}setColor(r){return this.color=r,this}write(r){let t=r.getCurrentLineLength();r.write(this.color(this.contents)),this.isUnderlined&&r.afterNextNewline(()=>{r.write(" ".repeat(t)).writeLine(this.color("~".repeat(this.contents.length)))})}};var ze=class{hasError=!1;markAsError(){return this.hasError=!0,this}};var Ir=class extends ze{items=[];addItem(r){return this.items.push(new Rn(r)),this}getField(r){return this.items[r]}getPrintWidth(){
+28 | Note that ${s.bold("include")} statements only accept relation fields.`,a})}function Id(e,r,t){let n=r.arguments.getDeepSubSelectionValue(e.selectionPath)?.asObject();if(n){let i=n.getField("omit")?.value.asObject();if(i){Dd(e,r,i);return}if(n.hasField("select")){Od(e,r);return}}if(t?.[We(e.outputType.name)]){kd(e,r);return}r.addErrorMessage(()=>`Unknown field at "${e.selectionPath.join(".")} selection"`)}function Dd(e,r,t){t.removeAllFields();for(let n of e.outputType.fields)t.addSuggestion(new le(n.name,"false"));r.addErrorMessage(n=>`The ${n.red("omit")} statement includes every field of the model ${n.bold(e.outputType.name)}. At least one field must be included in the result`)}function Od(e,r){let t=e.outputType,n=r.arguments.getDeepSelectionParent(e.selectionPath)?.value,i=n?.isEmpty()??!1;n&&(n.removeAllFields(),pa(n,t)),r.addErrorMessage(o=>i?`The ${o.red("`select`")} statement for type ${o.bold(t.name)} must not be empty. ${dt(o)}`:`The ${o.red("`select`")} statement for type ${o.bold(t.name)} needs $
+29 | `)}};function _r(e){return new Zi(ga(e))}function ga(e){let r=new Dr;for(let[t,n]of Object.entries(e)){let i=new kn(t,ha(n));r.addField(i)}return r}function ha(e){if(typeof e=="string")return new Q(JSON.stringify(e));if(typeof e=="number"||typeof e=="boolean")return new Q(String(e));if(typeof e=="bigint")return new Q(`${e}n`);if(e===null)return new Q("null");if(e===void 0)return new Q("undefined");if(Sr(e))return new Q(`new Prisma.Decimal("${e.toFixed()}")`);if(e instanceof Uint8Array)return Buffer.isBuffer(e)?new Q(`Buffer.alloc(${e.byteLength})`):new Q(`new Uint8Array(${e.byteLength})`);if(e instanceof Date){let r=mn(e)?e.toISOString():"Invalid Date";return new Q(`new Date("${r}")`)}return e instanceof Me?new Q(`Prisma.${e._getName()}`):kr(e)?new Q(`prisma.${We(e.modelName)}.$fields.${e.name}`):Array.isArray(e)?Kd(e):typeof e=="object"?ga(e):new Q(Object.prototype.toString.call(e))}function Kd(e){let r=new Ir;for(let t of e)r.addItem(ha(t));return r}function _n(e,r){let t=r==="pretty"?aa:Cn,n=e.renderAllMes
+
+PrismaClientValidationError: 
+Invalid `db.order.findUnique()` invocation in
+/home/z/my-project/scripts/p1-golden-path-34.mjs:321:34
+
+  318 console.log(`  REST order.status: ${restOrder?.status}`)
+  319 console.log(`  REST order.totalAmount: ${restOrder?.totalAmount}`)
+  320 
+→ 321 const dbOrder = await db.order.findUnique({
+        where: {
+          id: undefined,
+      ?   AND?: OrderWhereInput | OrderWhereInput[],
+      ?   OR?: OrderWhereInput[],
+      ?   NOT?: OrderWhereInput | OrderWhereInput[],
+      ?   userId?: StringFilter | String,
+      ?   restaurantId?: StringFilter | String,
+      ?   status?: StringFilter | String,
+      ?   totalAmount?: IntFilter | Int,
+      ?   pickupOtp?: StringFilter | String,
+      ?   isCatering?: BoolFilter | Boolean,
+      ?   headcount?: IntNullableFilter | Int | Null,
+      ?   itemsCount?: IntFilter | Int,
+      ?   note?: StringNullableFilter | String | Null,
+      ?   createdAt?: DateTimeFilter | DateTime,
+      ?   updatedAt?: DateTimeFilter | DateTime,
+      ?   statusHistory?: StringFilter | String,
+      ?   version?: IntFilter | Int,
+      ?   user?: UserScalarRelationFilter | UserWhereInput,
+      ?   restaurant?: RestaurantScalarRelationFilter | RestaurantWhereInput,
+      ?   orderItems?: OrderItemListRelationFilter,
+      ?   payment?: PaymentNullableScalarRelationFilter | PaymentWhereInput | Null,
+      ?   fulfilment?: FulfilmentNullableScalarRelationFilter | FulfilmentWhereInput | Null,
+      ?   socialActivities?: SocialActivityListRelationFilter
+        },
+        include: {
+          fulfilment: true
+        }
+      })
+
+Argument `where` of type OrderWhereUniqueInput needs at least one of `id` arguments. Available options are marked with ?.
+ clientVersion: "6.19.2",
+
+      at Nn (/home/z/my-project/node_modules/@prisma/client/runtime/library.js:29:1363)
+      at handleRequestError (/home/z/my-project/node_modules/@prisma/client/runtime/library.js:121:6911)
+      at handleAndLogRequestError (/home/z/my-project/node_modules/@prisma/client/runtime/library.js:121:6593)
+      at request (/home/z/my-project/node_modules/@prisma/client/runtime/library.js:121:6300)
+

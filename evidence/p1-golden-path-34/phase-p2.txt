@@ -1,0 +1,18 @@
+
+# P1-PAYMENT-ORDER-PICKUP-GOLDEN-PATH-34 — phase=p2
+# baseline=29390ca
+
+=== PHASE 2 — Price integrity ===
+  Test 1: Normal order (server-authoritative price)
+  createOrder: HTTP=200, totalAmount=30000
+  [PASS] Order total = server price × quantity (30000) — total=30000
+  Test 2: Client sends lower price (price=1)
+  createOrder: HTTP=200, totalAmount=30000
+  [PASS] Order total = server price × quantity (30000, NOT 2) — total=30000
+  Test 3: Client sends higher price (price=999999)
+  createOrder: HTTP=200, totalAmount=15000
+  [PASS] Order total = server price × quantity (15000, NOT 999999) — total=15000
+  [PASS] OrderItem.price = server price (15000, not client 1) — price=15000
+  [PASS] OrderItem.subtotal = server price × qty (30000) — subtotal=30000
+
+  CLIENT_CONTROLLED_FINAL_AMOUNT = NO ✅ (server-authoritative price enforced)

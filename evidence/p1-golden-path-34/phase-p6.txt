@@ -1,0 +1,13 @@
+
+# P1-PAYMENT-ORDER-PICKUP-GOLDEN-PATH-34 — phase=p6
+# baseline=29390ca
+
+=== PHASE 6 — Fulfilment golden path ===
+  PATCH PREPARING: HTTP=200, ful.status=PREPARING
+  [PASS] Fulfilment → PREPARING — http=200 ful=PREPARING
+  PATCH ALMOST_READY: HTTP=200, ful.status=ALMOST_READY
+  [PASS] Fulfilment → ALMOST_READY — http=200 ful=ALMOST_READY
+  PATCH READY_FOR_PICKUP: HTTP=200, ful.status=READY_FOR_PICKUP
+  [PASS] Fulfilment → READY_FOR_PICKUP — http=200 ful=READY_FOR_PICKUP
+  Illegal backward transition: HTTP=409
+  [PASS] Illegal backward transition rejected (409) — http=409

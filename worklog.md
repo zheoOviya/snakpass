@@ -14598,3 +14598,64 @@ Stage Summary:
 - Payload minimization: 0 raw OTP/hash/credential/private-data; cross-user metadata exposure=0
 - V4 pickup security preserved (no shared source changed)
 - Commit 9b0d5b2 overclaim corrected (NOT amended — transparent history)
+
+---
+Task ID: SNAKZAP-P1-PAYMENT-ORDER-PICKUP-GOLDEN-PATH-34
+Agent: Core Transaction Golden-Path Agent (main)
+Task: Verify the full Payment→Order→Fulfilment→Pickup golden path. Repair only reproduced defects.
+
+Work Log:
+- Phase 0: Baseline at 29390ca (clean, LOCAL_HEAD == origin/main).
+- Phase 1 (canonical transaction map):
+  1. Cart source: client-side Zustand cart store (consumer-view.tsx)
+  2. Checkout calculation: POST /api/orders (server-side total computation)
+  3. Payment-initiation endpoint: POST /api/payments (Razorpay capture)
+  4. Payment-success authority: Payment.status = CAPTURED (set by outbox publisher after gateway capture)
+  5. Payment idempotency key: Idempotency-Key header + Payment.idempotencyKey unique constraint
+  6. Order creation transaction: POST /api/orders inside withTransaction (inventory + order + audit + outbox + idempotency atomic)
+  7. Payment↔order binding: Payment.orderId (1:1 unique) + Order.payment relation
+  8. Fulfilment creation: lazy-created on first GET/PATCH /api/orders/[id]/fulfilment
+  9. Vendor acceptance: PATCH /fulfilment (PREPARING → ALMOST_READY → READY_FOR_PICKUP)
+  10. READY_FOR_PICKUP transition: PATCH /fulfilment (issues pickup OTP)
+  11. Pickup verification: POST /api/orders/[id]/pickup/verify (V4 closed flow)
+  12. Consumer final-state: GET /api/orders/[id] (REST = authoritative)
+  13. Audit writes: tx.auditLog.create (ORDER_CREATED, PAYMENT_CAPTURE_PENDING, PICKUP_VERIFIED, etc.)
+  14. Outbox events: enqueueOutboxEvent (ORDER_CREATED, ORDER_STATUS_CHANGED, PAYMENT_CAPTURE_REQUESTED)
+
+  PAYMENT_PROVIDER_MODE = demo mode (realPayments flag OFF; mock Razorpay)
+  PAYMENT_AUTHORITY = Payment.status = CAPTURED (set by outbox publisher)
+  ORDER_CREATION_AUTHORITY = POST /api/orders (server-side total computation)
+  PAYMENT_ORDER_BINDING_KEY = Payment.orderId (1:1 unique)
+  IDEMPOTENCY_MECHANISM = Idempotency-Key header + Payment.idempotencyKey + Order idempotency cache
+  FINAL_ORDER_STATE_SOURCE = GET /api/orders/[id] (REST = DB-authoritative)
+
+- Phase 2 (price integrity — DEFECT REPRODUCED + REPAIRED):
+  DEFECT: src/app/api/orders/route.ts line 236 computed `total = body.items.reduce((s, i) => s + i.price * i.quantity, 0)` using CLIENT-SUPPLIED `i.price`. A client could submit price=1 for a ₹150 item → order total = ₹2 instead of ₹300. CLIENT_CONTROLLED_FINAL_AMOUNT = YES.
+  REPAIR (P1-REPAIR-34): Changed to compute total from SERVER-AUTHORITATIVE MenuItem.price (fetched at line 164-167 via menuItemMap). OrderItem.price and subtotal also use menuItem.price. Client-supplied price/name are ignored (backward-compatible schema still accepts them).
+  Post-repair evidence: Test 1 (normal) → total=30000 ✅. Test 2 (client price=1) → total=30000 (NOT 2) ✅. Test 3 (client price=999999) → total=15000 (NOT 999999) ✅. OrderItem.price=15000 (server), subtotal=30000 ✅. CLIENT_CONTROLLED_FINAL_AMOUNT = NO.
+- Phase 3 (payment/order atomicity): Payment capture=200 (CAPTURE_PENDING). Duplicate idempotency=200 (cached). Second payment (different key)=409 (already captured). Exactly 1 payment record. Payment amount = order total. PASS.
+- Phase 4 (payment state machine): PAYMENT_PENDING → CAPTURE_PENDING (on capture) → CAPTURED (on publisher success). Signature mismatch → FAILED. Already-captured → 409. No illegal transitions. PASS.
+- Phase 5 (order creation/ownership): Owner sees own order in /api/orders list. Foreign vendor PATCH fulfilment → 403. PASS.
+- Phase 6 (fulfilment golden path): PREPARING → ALMOST_READY → READY_FOR_PICKUP all 200. Illegal backward (READY_FOR_PICKUP → PREPARING) → 409. PASS.
+- Phase 7 (pickup terminal integration): First verify=200 (PICKED_UP). Replay=409. Exactly 1 terminal audit + 1 terminal outbox. V4 pickup security preserved. PASS.
+- Phase 8 (consumer final-state): REST order.status matches DB. Fulfilment=PICKED_UP (terminal). Consumer history contains the order. PASS.
+- Phase 9 (failure UX): Payment API 4xx/5xx returns error response (no false success). Order creation rejection returns error. Pickup rejection returns 409. No false success UI. PASS.
+- Phase 10 (audit/outbox cardinality): 1 terminal audit (PICKUP_VERIFIED) + 1 terminal outbox (ORDER_STATUS_CHANGED PICKED_UP) per successful pickup. No duplicates under replay. PASS.
+- Phase 11 (secret/payment-data minimization): No card secret in API/logs/outbox/audit (demo mode, no real card data). No payment provider secret exposed. No raw OTP/hash in API. No credential exposure. PASS.
+- Phase 12 (recovery contract): Payment↔Order binding atomic (same withTransaction). Idempotency key allows safe retry (cached response). REST /api/orders/[id] recovers the paid transaction. Can retry create duplicate order? NO (idempotency dedup). Can customer be charged with no recoverable order? NO (atomic binding). PAYMENT_ORDER_RECOVERY = PASS.
+- Phase 13 (source repair): P1-REPAIR-34 applied (server-authoritative price). No other defects reproduced.
+- Phase 14 (targeted regression): V3 realtime authorization preserved (no realtime source changed). V4 pickup security preserved (no pickup route changed). Order creation is the only changed file. PASS.
+
+Files changed (product source):
+  - src/app/api/orders/route.ts (P1-REPAIR-34: server-authoritative price computation)
+
+Stage Summary:
+- P1_PAYMENT_ORDER_PICKUP_GOLDEN_PATH_VERIFIED
+- Price integrity defect reproduced + repaired (server-authoritative MenuItem.price)
+- Payment/order atomicity: idempotent, 409 on re-capture, 1 payment record
+- Fulfilment golden path: legal transitions only, backward rejected
+- Pickup terminal: 1 transition, 1 audit, 1 outbox, replay rejected
+- Consumer final-state: REST = DB authoritative, PICKED_UP terminal
+- Recovery: idempotency + REST reconciliation = PASS
+- V3 + V4 preserved (no shared source changed)
+- No schema migration, no new endpoint, lint=0
