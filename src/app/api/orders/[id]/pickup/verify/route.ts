@@ -28,9 +28,19 @@ import {
 // Input: `{ otpId: string, code: string, qrToken: string }`
 //
 // Auth: getSessionUser() required (401 if no session).
-// RBAC: CONSUMER (own order only), VENDOR_OWNER (any restaurant), ADMIN,
-// SUPER_ADMIN. CONSUMER ownership check is enforced inside the txn (after the
-// Order row is loaded) — we read order.userId and compare to session.userId.
+// RBAC: VENDOR_OWNER (owning restaurant only), ADMIN, SUPER_ADMIN.
+//
+// V4A3-REPAIR-21 (Consumer Pickup Authorization):
+//   CONSUMER is FORBIDDEN from pickup verification. This endpoint performs a
+//   VENDOR-controlled terminal transition (READY_FOR_PICKUP → PICKED_UP) and
+//   writes the attribution audit/outbox side effects. Consumer ownership of
+//   an order does NOT grant vendor-side terminal fulfilment authority — the
+//   consumer's role in the pickup flow is to PRESENT credentials at the
+//   counter, not to self-authorize the terminal mutation.
+//   The CONSUMER rejection happens at the RBAC gate BEFORE any order/OTP
+//   lookup, so the response is a uniform 403 that reveals no credential-state
+//   distinctions (valid / wrong / expired / consumed / locked OTP all yield
+//   the same rejection — see Phase 6 oracle test).
 //
 // Idempotency (P0-17): Idempotency-Key header honored — same key on retry
 // returns the cached response. resourceType='PickupAttribution'.
@@ -111,18 +121,21 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
         }
 
         // -------------------------------------------------------------------
-        // V4A-1: RBAC ownership check (CONSUMER → own order, VENDOR_OWNER → owning restaurant)
+        // V4A3-REPAIR-21: RBAC gate — authorization BEFORE any OTP mutation.
         // -------------------------------------------------------------------
-        // Allowed roles for pickup verification:
-        //   - CONSUMER       → only their own order (ownership check below)
-        //   - VENDOR_OWNER   → only orders for restaurants they own (ownership check below)
-        //   - ADMIN          → any
-        //   - SUPER_ADMIN    → any
+        // Authoritative role contract (directive Phase 3):
+        //   - VENDOR_OWNER → allowed only for orders of restaurants they own
+        //   - ADMIN        → allowed (existing contract — unchanged)
+        //   - SUPER_ADMIN  → allowed (existing contract — unchanged)
+        //   - CONSUMER     → FORBIDDEN (no order lookup, no OTP oracle, no side effect)
+        //   - other roles  → FORBIDDEN
         //
-        // V4A-1 REPAIR: Previously VENDOR_OWNER could verify ANY order's pickup
-        // (cross-tenant mutation). Now mirrors the V1-hardened fulfilment PATCH
-        // route's ownership check: Restaurant.ownerUserId === session.userId.
-        const allowedRoles = ['CONSUMER', 'VENDOR_OWNER', 'ADMIN', 'SUPER_ADMIN']
+        // The RBAC gate runs BEFORE verifyPickupAttribution() so that an
+        // unauthorized caller can NEVER trigger OTP consumption, attemptCount
+        // increment, audit, or outbox side effects. For a CONSUMER caller this
+        // also means the response is a uniform 403 regardless of OTP state
+        // (valid / wrong / expired / consumed / locked) — see Phase 6 oracle.
+        const allowedRoles = ['VENDOR_OWNER', 'ADMIN', 'SUPER_ADMIN']
         if (!allowedRoles.includes(session.role)) {
           return {
             type: 'error' as const,
@@ -138,13 +151,14 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
           }
         }
 
-        // For CONSUMER and VENDOR_OWNER, load the order to check ownership
-        // BEFORE the attribution check (so we don't even attempt QR+OTP
-        // verification for an unauthorized caller).
-        if (session.role === 'CONSUMER' || session.role === 'VENDOR_OWNER') {
+        // VENDOR_OWNER → only restaurants they own. The order is loaded here
+        // (BEFORE the attribution check) so we never attempt QR+OTP verification
+        // for an unauthorized vendor. ADMIN / SUPER_ADMIN are NOT subject to
+        // the restaurant-ownership check (existing contract — unchanged).
+        if (session.role === 'VENDOR_OWNER') {
           const order = await tx.order.findUnique({
             where: { id: orderId },
-            select: { id: true, userId: true, restaurantId: true },
+            select: { id: true, restaurantId: true },
           })
           if (!order) {
             return {
@@ -155,41 +169,22 @@ export const POST = (req: NextRequest, { params }: { params: Promise<{ id: strin
               },
             }
           }
-          if (session.role === 'CONSUMER') {
-            // CONSUMER → only own order
-            if (order.userId !== session.userId) {
-              return {
-                type: 'error' as const,
-                status: 403,
-                body: {
-                  error: {
-                    code: 'AUTHORIZATION_DENIED',
-                    message: 'You can only verify pickup for your own orders',
-                    traceId,
-                    details: { orderId, orderOwnerId: order.userId, requesterId: session.userId },
-                  },
+          const restaurant = await tx.restaurant.findUnique({
+            where: { id: order.restaurantId },
+            select: { ownerUserId: true },
+          })
+          if (!restaurant || restaurant.ownerUserId !== session.userId) {
+            return {
+              type: 'error' as const,
+              status: 403,
+              body: {
+                error: {
+                  code: 'AUTHORIZATION_DENIED',
+                  message: 'You do not own the restaurant for this order.',
+                  traceId,
+                  details: { orderId, restaurantId: order.restaurantId, requesterId: session.userId },
                 },
-              }
-            }
-          } else {
-            // VENDOR_OWNER → only restaurants they own
-            const restaurant = await tx.restaurant.findUnique({
-              where: { id: order.restaurantId },
-              select: { ownerUserId: true },
-            })
-            if (!restaurant || restaurant.ownerUserId !== session.userId) {
-              return {
-                type: 'error' as const,
-                status: 403,
-                body: {
-                  error: {
-                    code: 'AUTHORIZATION_DENIED',
-                    message: 'You do not own the restaurant for this order.',
-                    traceId,
-                    details: { orderId, restaurantId: order.restaurantId, requesterId: session.userId },
-                  },
-                },
-              }
+              },
             }
           }
         }
