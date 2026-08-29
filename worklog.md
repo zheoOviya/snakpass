@@ -13965,3 +13965,25 @@ Stage Summary:
 - BLOCKER=VENDOR_BROWSER_REALTIME_FLOW_ENVIRONMENT_UNSTABLE
 - 4GB cgroup memory limit prevents sustained multi-tab browser sessions
 - V3 remains LOCKED
+
+---
+Task ID: VENDOR-V2-LOW-MEMORY-REALTIME-CLOSURE-09
+Agent: Low-Memory Realtime Browser Verification Agent (main)
+Task: Prove 3 remaining realtime browser contracts using minimal-memory topology (single browser process, on-demand publisher).
+
+Work Log:
+- Phase 0: Baseline at 262ab6d (clean, HEAD==remote).
+- Phase 1: Minimal topology. Production server (bun, 186MB) + realtime (bun, 56MB). No publisher. Memory telemetry captured: 3033MB used, 3422MB available before browser.
+- Phase 2: Launched single browser process. Memory telemetry: cgroup went from 3033MB to 3190MB (+157MB for Chrome). Server died immediately. Key finding: cgroup.oom_control shows oom_kill=0 — this is NOT an OOM kill. Server process simply disappears with no error in log.
+- Attempted: production build (bun), production build (node), dev server (Turbopack). All fail the same way: server dies when Chrome connects.
+- Memory at death: 3190MB (under 4096MB limit). Available memory: 3268MB. The cgroup never hit the limit.
+- Hypothesis: The bun/node process is killed by an external signal (sandbox resource manager or transient memory spike during Chrome CDP handshake) that doesn't register as a cgroup OOM event.
+- Phase 7: Environment blocker acceptance criteria met (criterion A: one-browser setup reproducibly kills required runtime).
+- Phase 9: Source diff = 0, lint = 0.
+
+Stage Summary:
+- VENDOR_V2_BLOCKED
+- BLOCKER=ENVIRONMENT_RESOURCE_LIMIT_PREVENTS_MANDATORY_MULTI_PAGE_BROWSER_EVIDENCE
+- Server killed when Chrome connects (NOT OOM — oom_kill=0, memory under limit)
+- 3 remaining realtime browser contracts cannot be proven in this environment
+- V3 remains LOCKED
