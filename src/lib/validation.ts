@@ -96,7 +96,13 @@ export const otpVerifyBodySchema = z.object({
 export const pickupVerifyBodySchema = z.object({
   otpId: uuidSchema,
   code: otpSchema,
-  qrToken: z.string().min(1, 'qrToken required'),
+  // V4A-3: qrToken is now optional — the plaintext OTP is no longer stored
+  // or exposed. The QR token was an unauthenticated credential string that
+  // forced plaintext storage. Verification is now based on:
+  //   1. otpId → OtpRequest hash comparison (timing-safe scrypt)
+  //   2. Cross-credential check (otp.target === order.user.phone)
+  //   3. V4A-1 ownership check (Restaurant.ownerUserId === session.userId)
+  qrToken: z.string().optional(),
 })
 
 // Admin login body

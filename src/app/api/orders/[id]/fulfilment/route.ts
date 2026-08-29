@@ -201,7 +201,7 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
             data: {
               orderId: id,
               status: 'PREPARING',
-              pickupOtp: order.pickupOtp,
+              pickupOtp: order.pickupOtp, // V4A-3: '000000' or 'ISSUED' (never raw code)
             },
           })
           logInfo('fulfilment-lazy-created', { orderId: id, fulfilmentId: fulfilment.id }, traceId)
@@ -235,7 +235,7 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
               orderId: fulfilment.orderId,
               status: fulfilment.status,
               version: fulfilment.version,
-              pickupOtp: fulfilment.pickupOtp,
+              pickupOtp: fulfilment.pickupOtp, // V4A-3: '000000' or 'ISSUED' (never raw code)
               updatedAt: fulfilment.updatedAt,
               statusHistory: fulfilment.statusHistory,
             },
@@ -350,15 +350,18 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
             },
           })
           pickupOtpId = otpRec.id
-          // Update Order.pickupOtp so the QR token + pickup-verify can use it.
+          // V4A-3: Store 'ISSUED' instead of the raw OTP code.
+          // The raw code is only in OtpRequest.codeHash (scrypt-hashed).
+          // Order.pickupOtp is used as a flag to indicate a real OTP was issued
+          // (CHECK 3 in pickup-attribution.ts verifies pickupOtp !== '000000').
           await tx.order.update({
             where: { id },
-            data: { pickupOtp: otpCode },
+            data: { pickupOtp: 'ISSUED' },
           })
-          // Also update the Fulfilment's cached pickupOtp (lazy-created copy).
+          // Also update the Fulfilment's cached pickupOtp.
           await tx.fulfilment.update({
             where: { id: fulfilment.id },
-            data: { pickupOtp: otpCode },
+            data: { pickupOtp: 'ISSUED' },
           })
           logInfo('fulfilment-pickup-otp-issued', { orderId: id, phone: order.user.phone, otpId: pickupOtpId }, traceId)
         }
@@ -453,7 +456,8 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
             orderId: updatedFulfilment!.orderId,
             status: updatedFulfilment!.status,
             version: updatedFulfilment!.version,
-            pickupOtp: updatedFulfilment!.pickupOtp,
+            // V4A-3: pickupOtp removed from response — no raw OTP exposed
+            // pickupOtp: updatedFulfilment!.pickupOtp,
             updatedAt: updatedFulfilment!.updatedAt,
             statusHistory: updatedFulfilment!.statusHistory,
           },
@@ -581,7 +585,7 @@ export const GET = (_req: NextRequest, { params }: { params: Promise<{ id: strin
           data: {
             orderId: id,
             status: 'PREPARING',
-            pickupOtp: order.pickupOtp,
+            pickupOtp: order.pickupOtp, // V4A-3: '000000' or 'ISSUED' (never raw code)
           },
         })
         logInfo('fulfilment-lazy-created', { orderId: id, fulfilmentId: f.id }, traceId)
@@ -626,7 +630,8 @@ export const GET = (_req: NextRequest, { params }: { params: Promise<{ id: strin
         orderId: f.orderId,
         status: f.status,
         version: f.version,
-        pickupOtp: f.pickupOtp,
+        // V4A-3: pickupOtp removed from response — no raw OTP exposed
+        // pickupOtp: f.pickupOtp,
         // V2-repair: expose the opaque pickupOtpId (OtpRequest record ID)
         // for vendor pickup-verify. This is NOT the OTP code — it's the record
         // ID needed to call pickup-verify. The code is sent to the customer's phone.

@@ -167,8 +167,10 @@ export interface VerifyPickupAttributionParams {
   otpId: string
   /** The 6-digit OTP code (will be scrypt-compared server-side) */
   code: string
-  /** The QR-encoded credential string (decoded via decodeQrToken) */
-  qrToken: string
+  /** The QR-encoded credential string (decoded via decodeQrToken). V4A-3: optional —
+   *  the plaintext OTP is no longer stored, so QR token plaintext comparison is
+   *  skipped when not provided. Verification relies on OtpRequest hash + cross-credential. */
+  qrToken?: string
   /** The verifying session (collector) — userId is written to pickupVerifiedBy */
   verifier: {
     userId: string
@@ -188,33 +190,45 @@ export async function verifyPickupAttribution(
   const now = new Date()
 
   // -------------------------------------------------------------------------
-  // CHECK 1: QR token decodes + orderId matches URL path + pickupOtp matches
+  // CHECK 1 (V4A-3: conditional on qrToken presence):
+  // QR token decodes + orderId matches URL path.
+  // V4A-3: The plaintext pickupOtp comparison (CHECK 1c) is REMOVED because
+  // the raw OTP is no longer stored in Order.pickupOtp (stored as 'ISSUED').
+  // When qrToken is not provided, CHECK 1 is skipped entirely — verification
+  // relies on OtpRequest hash comparison (CHECK 7) + cross-credential binding
+  // (CHECK 7b) + V4A-1 ownership check.
   // -------------------------------------------------------------------------
-  const decoded = decodeQrToken(qrToken)
-  if (!decoded) {
-    logWarn('pickup-attr-qr-token-invalid', { orderId, qrTokenPreview: qrToken.slice(0, 40) }, traceId)
-    return failure('QR_TOKEN_INVALID', 422, `QR token format is invalid`, {
-      orderId,
-      qrTokenPreview: qrToken.slice(0, 40),
-      verifierUserId: verifier.userId,
-    })
-  }
-  if (decoded.orderId !== orderId) {
-    logWarn(
-      'pickup-attr-qr-order-id-mismatch',
-      { urlOrderId: orderId, qrOrderId: decoded.orderId },
-      traceId,
-    )
-    return failure(
-      'QR_ORDER_ID_MISMATCH',
-      409,
-      `QR token orderId does not match URL path. QR was issued for order ${decoded.orderId}, but the request targets order ${orderId}.`,
-      {
-        urlOrderId: orderId,
-        qrOrderId: decoded.orderId,
+  if (qrToken) {
+    const decoded = decodeQrToken(qrToken)
+    if (!decoded) {
+      logWarn('pickup-attr-qr-token-invalid', { orderId, qrTokenPreview: qrToken.slice(0, 40) }, traceId)
+      return failure('QR_TOKEN_INVALID', 422, `QR token format is invalid`, {
+        orderId,
+        qrTokenPreview: qrToken.slice(0, 40),
         verifierUserId: verifier.userId,
-      },
-    )
+      })
+    }
+    if (decoded.orderId !== orderId) {
+      logWarn(
+        'pickup-attr-qr-order-id-mismatch',
+        { urlOrderId: orderId, qrOrderId: decoded.orderId },
+        traceId,
+      )
+      return failure(
+        'QR_ORDER_ID_MISMATCH',
+        409,
+        `QR token orderId does not match URL path. QR was issued for order ${decoded.orderId}, but the request targets order ${orderId}.`,
+        {
+          urlOrderId: orderId,
+          qrOrderId: decoded.orderId,
+          verifierUserId: verifier.userId,
+        },
+      )
+    }
+    // V4A-3: CHECK 1c (decoded.pickupOtp === order.pickupOtp) is REMOVED.
+    // The raw OTP is no longer stored in plaintext. The QR token's orderId
+    // binding (CHECK 1b) + OtpRequest hash (CHECK 7) + cross-credential
+    // (CHECK 7b) provide sufficient security.
   }
 
   // -------------------------------------------------------------------------
@@ -240,31 +254,15 @@ export async function verifyPickupAttribution(
     })
   }
 
-  // Now that we have the order, finish CHECK 1: pickupOtp matches Order.pickupOtp
-  if (decoded.pickupOtp !== order.pickupOtp) {
-    logWarn(
-      'pickup-attr-qr-otp-mismatch',
-      { orderId, qrOtp: decoded.pickupOtp, orderOtp: order.pickupOtp },
-      traceId,
-    )
-    return failure(
-      'QR_OTP_MISMATCH',
-      409,
-      `QR token pickupOtp does not match Order.pickupOtp. The QR token may be stale or forged.`,
-      {
-        orderId,
-        qrOtp: decoded.pickupOtp,
-        orderOtp: order.pickupOtp,
-        verifierUserId: verifier.userId,
-      },
-    )
-  }
+  // V4A-3: CHECK 1c (pickupOtp plaintext comparison) is REMOVED.
+  // Order.pickupOtp now stores 'ISSUED' (not the raw code) after READY_FOR_PICKUP.
 
   // -------------------------------------------------------------------------
   // CHECK 3: Order.pickupOtp is NOT the default '000000' — i.e., a real OTP
   // was issued when the order transitioned to READY_FOR_PICKUP. This catches
   // the case where a caller crafts a QR token for an order that never reached
   // READY_FOR_PICKUP (and thus never had a real OTP issued).
+  // V4A-3: After repair, Order.pickupOtp stores 'ISSUED' (not raw code).
   // -------------------------------------------------------------------------
   if (order.pickupOtp === '000000') {
     logWarn('pickup-attr-default-otp', { orderId, orderStatus: order.status }, traceId)

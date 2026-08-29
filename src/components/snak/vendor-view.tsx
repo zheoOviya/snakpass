@@ -166,7 +166,9 @@ export function VendorView() {
         if (r.status === 'fulfilled' && r.value?.fulfilment) {
           fulfilmentById.set(o.id, {
             status: r.value.fulfilment.status as string,
-            pickupOtp: r.value.fulfilment.pickupOtp as string | undefined,
+          // V4A-3: pickupOtp is no longer a raw code — it's 'ISSUED' or undefined.
+          // We don't need it for verification (qrToken is now optional).
+          pickupOtp: r.value.fulfilment.pickupOtp === 'ISSUED' ? 'ISSUED' : undefined,
             pickupVerifiedAt: r.value.fulfilment.pickupVerifiedAt ?? null,
             // V2-repair: capture pickupOtpId from the GET fulfilment response.
             // The GET endpoint now looks up the OtpRequest record server-side
@@ -183,7 +185,7 @@ export function VendorView() {
         return {
           ...o,
           fulfilmentStatus: f.status,
-          fulfilmentOtp: f.pickupOtp ?? o.pickupOtp,
+          fulfilmentOtp: f.pickupOtp ?? o.pickupOtp, // V4A-3: 'ISSUED' or undefined (never raw code)
           // V2-repair: preserve pickupOtpId from the GET response. Only
           // overwrite with undefined if the GET explicitly returned null
           // (i.e., the order is not READY_FOR_PICKUP or no valid OTP exists).
@@ -294,8 +296,9 @@ export function VendorView() {
         // server response (not a fabricated value). The server response is
         // authoritative; local state is a cache, never the source of truth.
         const newStatus: string = data?.fulfilment?.status ?? next
+        // V4A-3: pickupOtp no longer returned as raw code — just check for 'ISSUED'
         const newOtp: string | undefined =
-          data?.fulfilment?.pickupOtp ?? order.fulfilmentOtp ?? order.pickupOtp
+          data?.fulfilment?.pickupOtp ?? (order.fulfilmentStatus === 'READY_FOR_PICKUP' ? 'ISSUED' : undefined)
         // V2: capture pickupOtpId when transitioning to READY_FOR_PICKUP.
         // This is the OtpRequest record ID (NOT the code) needed by
         // pickup-verify. The code is sent to the customer's phone.
@@ -529,19 +532,9 @@ export function VendorView() {
         setVerifyError('Please enter the 6-digit code.')
         return
       }
-      // V2 — reconstruct the qrToken from orderId + pickupOtp.
-      // Format: snakzap:pickup:${orderId}:otp:${pickupOtp}
-      // The pickupOtp is the Order's pickup code (available to the vendor
-      // via the fulfilment GET — but the vendor does NOT show it to the
-      // customer; the customer receives it via SMS).
-      const pickupOtp = order.fulfilmentOtp ?? order.pickupOtp
-      if (!pickupOtp || pickupOtp === '000000') {
-        setVerifyError(
-          'No pickup OTP has been issued for this order. Ensure the order reached Ready for Pickup.',
-        )
-        return
-      }
-      const qrToken = `snakzap:pickup:${order.id}:otp:${pickupOtp}`
+      // V4A-3: qrToken is no longer needed — the raw OTP is not stored or exposed.
+      // The server verifies via OtpRequest hash + cross-credential check.
+      // No qrToken construction required.
 
       setVerifying(true)
       setVerifyError(null)
@@ -549,7 +542,7 @@ export function VendorView() {
         const res = await csrfFetch(`/api/orders/${order.id}/pickup/verify`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ otpId, code: verifyOtpCode, qrToken }),
+          body: JSON.stringify({ otpId, code: verifyOtpCode }),
         })
         const data = await res.json().catch(() => null)
         if (!res.ok) {
