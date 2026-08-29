@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { jwtVerify, createRemoteJWKSet } from 'jose'
 
 // P0-09 — Server-side Supabase JWT verification (DEV-002 closure)
@@ -8,21 +8,44 @@ import { jwtVerify, createRemoteJWKSet } from 'jose'
 // The server verifies the Supabase access token using the project's JWKS
 // (JSON Web Key Set) endpoint. This verifies: signature, expiry, issuer
 // (project URL), and audience. Revoked tokens are checked via Supabase Auth API.
+//
+// BUILD-TIME SAFETY: env vars are read lazily (not at module load) so that
+// `next build` doesn't crash when Supabase vars aren't set yet (e.g. during
+// Vercel build before env vars are configured).
 
-const SUPABASE_URL = process.env.SUPABASE_URL!
-const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY!
-const JWKS_URL = process.env.SUPABASE_JWKS_URL!
+const SUPABASE_URL = process.env.SUPABASE_URL ?? ''
+const SUPABASE_SECRET_KEY = process.env.SUPABASE_SECRET_KEY ?? ''
+const JWKS_URL = process.env.SUPABASE_JWKS_URL ?? ''
 
-// Server-side Supabase client with service role key (bypasses RLS, server-only).
-export const supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
-  auth: {
-    autoRefreshToken: false,
-    persistSession: false,
+// Lazy-init: only create the client when env vars are present.
+// Without this guard, createClient('', '') throws at module load time,
+// crashing the build.
+let _supabaseAdmin: SupabaseClient | null = null
+export const supabaseAdmin: SupabaseClient = new Proxy({} as SupabaseClient, {
+  get(_, prop) {
+    if (!_supabaseAdmin) {
+      if (!isSupabaseConfigured()) {
+        throw new Error('SUPABASE_NOT_CONFIGURED: Set SUPABASE_URL, SUPABASE_SECRET_KEY, SUPABASE_JWKS_URL')
+      }
+      _supabaseAdmin = createClient(SUPABASE_URL, SUPABASE_SECRET_KEY, {
+        auth: {
+          autoRefreshToken: false,
+          persistSession: false,
+        },
+      })
+    }
+    return (_supabaseAdmin as Record<string | symbol, unknown>)[prop]
   },
 })
 
-// JWKS for JWT verification
-const JWKS = createRemoteJWKSet(new URL(JWKS_URL))
+// Lazy-init JWKS — only create when configured
+let _JWKS: ReturnType<typeof createRemoteJWKSet> | null = null
+function getJWKS() {
+  if (!_JWKS) {
+    _JWKS = createRemoteJWKSet(new URL(JWKS_URL))
+  }
+  return _JWKS
+}
 
 export interface VerifiedUser {
   uid: string
@@ -43,7 +66,7 @@ export async function verifySupabaseToken(accessToken: string): Promise<Verified
   }
 
   // Verify the JWT using JWKS
-  const { payload } = await jwtVerify(accessToken, JWKS, {
+  const { payload } = await jwtVerify(accessToken, getJWKS(), {
     issuer: `${SUPABASE_URL}/auth/v1`,
     audience: 'authenticated',
   })
