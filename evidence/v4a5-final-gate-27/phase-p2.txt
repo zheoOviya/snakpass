@@ -1,0 +1,10 @@
+
+# V4A5-FINAL-PICKUP-SECURITY-GATE-27 — phase=p2
+# DB=/home/z/my-project/db/custom.db  baseline=9eff754
+
+=== PHASE 2 — Exact binding matrix ===
+  [PASS] otpId X + code X against Order Y → reject, no burn — http=403
+  [PASS] otpId X + wrong code → reject — http=409
+  [PASS] Vendor A → Order Y → 403 (foreign vendor) — http=403
+  [PASS] random otpId + valid code → reject — http=403
+  [PASS] valid otpId + random code → reject, ac+1 — http=409 ac=1

@@ -1,0 +1,12 @@
+
+# V4A5-FINAL-PICKUP-SECURITY-GATE-27 — phase=p5
+# DB=/home/z/my-project/db/custom.db  baseline=9eff754
+
+=== PHASE 5 — Old/new OTP isolation (synthetic) ===
+  OTP_B issued: otpId=ns86487b
+  [PASS] A correct → reject (A consumed) — A.consumed=1
+  [PASS] A wrong → reject (already consumed) — http=409
+  [PASS] code A + otpId B → reject (wrong code) — http=409 B.ac=1
+  [PASS] code B + otpId A → reject (A consumed) — http=409
+  [PASS] Order Y OTP unaffected by X reissue — Y.consumed=0 Y.ac=0
+  [PASS] USABLE_CURRENT_OTP_X <= 1 — activeX=0

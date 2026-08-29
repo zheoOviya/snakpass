@@ -1,0 +1,15 @@
+
+# V4A5-FINAL-PICKUP-SECURITY-GATE-27 — phase=p6
+# DB=/home/z/my-project/db/custom.db  baseline=9eff754
+
+=== PHASE 6 — Terminal replay resistance ===
+  [PASS] first verify → PICKED_UP — http=200 ful=PICKED_UP
+  [PASS] replay same code → reject — http=409
+  [PASS] no additional terminal audit — audit before=1 after=1
+  [PASS] no additional terminal outbox — outbox before=1 after=1
+  [PASS] replay wrong code → reject — http=409
+  [PASS] no additional terminal audit (wrong replay) — audit=1
+  [PASS] different vendor + same credential → reject — http=403
+  [PASS] no additional terminal audit (diff vendor) — audit=1
+  [PASS] same vendor + same credential (consumed) → reject — http=409
+  [PASS] OTP remains consumed

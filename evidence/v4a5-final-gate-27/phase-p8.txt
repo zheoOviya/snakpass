@@ -1,0 +1,18 @@
+
+# V4A5-FINAL-PICKUP-SECURITY-GATE-27 — phase=p8
+# DB=/home/z/my-project/db/custom.db  baseline=9eff754
+
+=== PHASE 8 — Cross-vendor concurrency (10 fixtures) ===
+  Run 1: owner=200 foreign=403 consumed=1 ful=PICKED_UP ✅
+  Run 2: owner=200 foreign=403 consumed=1 ful=PICKED_UP ✅
+  Run 3: owner=200 foreign=403 consumed=1 ful=PICKED_UP ✅
+  Run 4: owner=200 foreign=403 consumed=1 ful=PICKED_UP ✅
+  Run 5: owner=200 foreign=403 consumed=1 ful=PICKED_UP ✅
+  Run 6: owner=200 foreign=403 consumed=1 ful=PICKED_UP ✅
+  Run 7: owner=200 foreign=403 consumed=1 ful=PICKED_UP ✅
+  Run 8: owner=200 foreign=403 consumed=1 ful=PICKED_UP ✅
+  Run 9: owner=200 foreign=403 consumed=1 ful=PICKED_UP ✅
+  Run 10: owner=200 foreign=403 consumed=1 ful=PICKED_UP ✅
+
+  FOREIGN_VENDOR_TERMINAL_SUCCESS = 0/10
+  FOREIGN_VENDOR_OTP_MUTATION = 0/10

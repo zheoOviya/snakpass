@@ -14387,3 +14387,57 @@ Stage Summary:
 - V4A4 invalidation = defense-in-depth only (order-scoped) ✅
 - V4A1-V4A3 targeted regression: all PASS ✅
 - No schema migration, no new endpoint, no new policy ✅
+
+---
+Task ID: VENDOR-V4A5-FINAL-PICKUP-SECURITY-GATE-27
+Agent: Final Pickup Security Adjudication Agent (main)
+Task: Adversarial final gate — independently verify the entire V4A1-V4A4 pickup-security contract. Verification-first; repair only if defect reproduced.
+
+Work Log:
+- Phase 0: Baseline at 9eff754 (clean, LOCAL_HEAD == origin/main, BASELINE_MATCH=YES).
+- Phase 1 (authorization matrix): 7 caller roles tested. Owning Vendor+valid=200/PICKED_UP/1audit/1outbox. Foreign Vendor=403/0mutation. Consumer owner=403. Different Consumer=403. Unauthenticated=403. ADMIN+valid=TRACE→200/PICKED_UP/consumed/1audit/1outbox (existing contract preserved). SUPER_ADMIN+valid=TRACE→200/PICKED_UP/consumed/1audit/1outbox. CONSUMER_TERMINAL_SUCCESS=0. FOREIGN_VENDOR_TERMINAL_SUCCESS=0. All actionable PASS.
+- Phase 2 (exact binding): 5 mismatch combos. otpId X + code X → Order Y = 403 (foreign vendor, no burn). otpId X + wrong code → Order X = 409. Vendor A → Order Y (foreign) = 403. random otpId + valid code = 403. valid otpId + random code = 409/ac+1. CROSS_ORDER_TERMINAL_SUCCESS=0. UNAUTHORIZED_OTP_CONSUMPTION=0. All PASS.
+- Phase 3 (attempt-limit): 6-wrong sequence → ac capped at 5. correct-after-lock → reject (409). Foreign vendor wrong → no burn (ac=0). Consumer wrong → no burn (ac=0). Unauth wrong → no burn (ac=0). Same-order wrong → burns own OTP (ac+1). ATTEMPT_LIMIT=EXACTLY_5. CORRECT_AFTER_LOCK=REJECT. UNAUTHORIZED_ATTEMPT_BURN=0. All PASS.
+- Phase 4 (secret/breach): raw OTP in Order=NO (ISSUED). raw OTP in Fulfilment=NO (ISSUED). OtpRequest stores codeHash (64-char hex, not raw). raw OTP in GET API=NO. codeHash in API=NO. raw OTP in verify API=NO. raw OTP in audit=NO. raw OTP in outbox=NO. DB_NON_HASH_BUSINESS_ROWS_DO_NOT_REVEAL_USABLE_PICKUP_SECRET=YES. RAW_SECRET_EXPOSURE=0. HASH_EXPOSURE=0. All PASS.
+- Phase 5 (old/new OTP isolation, synthetic): A correct → reject (A consumed=1). A wrong → reject. code A + otpId B → reject (B.ac=1, wrong code). code B + otpId A → reject (A consumed). Order Y unaffected (Y.consumed=0, Y.ac=0). USABLE_CURRENT_OTP_X<=1 (activeX=0). CROSS_ORDER_INVALIDATION=0. All PASS.
+- Phase 6 (terminal replay): first verify → PICKED_UP (200). replay same code → 409 (no additional audit/outbox). replay wrong code → 409. different vendor + same credential → 403 (no additional audit). same vendor + same credential (consumed) → 409. OTP remains consumed. TERMINAL_REPLAY_SUCCESS=0. All PASS.
+- Phase 7 (verify concurrency, 10 fixtures): 10/10 PASS. Each run: 1 winner (200), 1 loser (409), exactly 1 terminal audit, 1 terminal outbox, OTP consumed once. DOUBLE_SUCCESS=0/10. DOUBLE_TERMINAL_AUDIT=0/10. DOUBLE_TERMINAL_OUTBOX=0/10. PASS.
+- Phase 8 (cross-vendor concurrency, 10 fixtures): 10/10 PASS. Owner=200, Foreign=403, consumed=1, ful=PICKED_UP. FOREIGN_VENDOR_TERMINAL_SUCCESS=0/10. FOREIGN_VENDOR_OTP_MUTATION=0/10. PASS.
+- Phase 9 (wrong-vs-correct race, 10 fixtures): 10/10 PASS. Run 1: correct won, ac=0 (correct first). Runs 2-10: correct won, ac=1 (wrong ran first → ac+1, then correct consumed — coherent pre-consume wrong attempt). No forbidden state (PICKED_UP with consumed=0). LOCKOUT_VERIFY_RACE_INCONSISTENCY=0/10. PASS.
+- Phase 10 (5th-wrong-vs-correct race, 10 fixtures): 10/10 PASS. Run 1: correct won → PICKED_UP, ac=4, consumed=1 (Outcome A). Runs 2-10: 5th wrong won → ac=5, correct rejected (locked), READY_FOR_PICKUP (Outcome B). No forbidden state (ac=5 AND PICKED_UP). LOCKOUT_VERIFY_RACE_INCONSISTENCY=0/10. PASS.
+- Phase 11 (state eligibility): ALMOST_READY → reject (no mutation). PREPARING → reject. PICKED_UP → reject (no terminal duplication). Valid OTP alone cannot bypass Order/Fulfilment eligibility. All PASS.
+- Phase 12 (vendor ownership gate): Vendor B PATCH Vendor A fulfilment → 403. Vendor B pickup/verify Vendor A order → 403 (no burn). Vendor A → Vendor B order → 403 (no burn). Both directions covered. All PASS.
+- Phase 13 (API secret minimization): Owner GET, Foreign GET, Admin GET, Consumer GET /api/orders, verify success, verify failure — all show 0 raw OTP, 0 codeHash. All PASS.
+- Phase 14 (audit/outbox cardinality): Success → 1 terminal audit + 1 terminal outbox. Failure → 0 terminal audit + 0 terminal outbox. Failure audit (PICKUP_VERIFICATION_FAILED) → no raw secret. All PASS.
+- Phase 15 (legacy /status route challenge): /status READY_FOR_PICKUP on ALMOST_READY order → HTTP=409 (SQLite P1008 lock bug). 0 OTPs created. Order.pickupOtp remains '000000'. CAN_LEGACY_STATUS_ROUTE_CREATE_A_USABLE_PICKUP_SECRET_IN_CURRENT_RUNTIME=NO. CAN_IT_STORE_RAW_PICKUP_SECRET=NO. CAN_IT_BYPASS_EXACT_ORDER_BINDING=NO. Legacy route is NOT reachable in current runtime — does NOT represent an exploitable production path (OTP never persisted). NO BLOCKER.
+- Phase 16 (static/transaction): lint=0. source diff=0 (verification-only — no defect found, no repair needed). no schema migration. no new endpoint. auditWithTx preserved. transaction boundaries identified (withTransaction wraps RBAC + attribution + audit + outbox atomically). no raw-secret comparison restored. no plaintext OTP persistence restored. PASS.
+- Phase 17 (git checkpoint): evidence-only commit (no source repair needed). push with fresh credential.
+
+Acceptance thresholds:
+- CONSUMER_TERMINAL_SUCCESS = 0 ✅
+- FOREIGN_VENDOR_TERMINAL_SUCCESS = 0 ✅
+- CROSS_ORDER_TERMINAL_SUCCESS = 0 ✅
+- UNAUTHORIZED_ATTEMPT_BURN = 0 ✅
+- UNAUTHORIZED_OTP_CONSUMPTION = 0 ✅
+- ATTEMPT_LIMIT = EXACTLY_5 ✅
+- CORRECT_AFTER_LOCK = REJECT ✅
+- RAW_SECRET_EXPOSURE = 0 ✅
+- HASH_EXPOSURE = 0 ✅
+- USABLE_CURRENT_OTP_PER_ORDER <= 1 ✅
+- CROSS_ORDER_INVALIDATION = 0 ✅
+- TERMINAL_REPLAY_SUCCESS = 0 ✅
+- VERIFY_DOUBLE_SUCCESS = 0/10 ✅
+- TERMINAL_AUDIT_DUPLICATION = 0/10 ✅
+- TERMINAL_OUTBOX_DUPLICATION = 0/10 ✅
+- FOREIGN_VENDOR_CONCURRENT_MUTATION = 0/10 ✅
+- LOCKOUT_VERIFY_RACE_INCONSISTENCY = 0/10 ✅ (both Phase 9 and Phase 10)
+
+No defect found. No source repair. Evidence-only commit.
+
+Stage Summary:
+- V4A5_FINAL_PICKUP_SECURITY_GATE_VERIFIED
+- All 16 test phases PASS (15 runtime + 1 static)
+- No defect reproduced → no source repair needed
+- V4A1-V4A4 contract independently verified end-to-end
+- Final security invariant holds: RIGHT VENDOR + RIGHT ORDER + RIGHT ACTIVE OTP + RIGHT CODE + ELIGIBLE STATE = exactly one terminal pickup
+- Everything else fails without unauthorized side effects

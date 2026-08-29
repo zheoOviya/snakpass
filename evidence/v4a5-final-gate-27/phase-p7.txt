@@ -1,0 +1,19 @@
+
+# V4A5-FINAL-PICKUP-SECURITY-GATE-27 — phase=p7
+# DB=/home/z/my-project/db/custom.db  baseline=9eff754
+
+=== PHASE 7 — Verify concurrency (10 fixtures) ===
+  Run 1: r1=200 r2=409 winners=1 auditΔ=1 outboxΔ=1 ✅
+  Run 2: r1=200 r2=409 winners=1 auditΔ=1 outboxΔ=1 ✅
+  Run 3: r1=200 r2=409 winners=1 auditΔ=1 outboxΔ=1 ✅
+  Run 4: r1=200 r2=409 winners=1 auditΔ=1 outboxΔ=1 ✅
+  Run 5: r1=200 r2=409 winners=1 auditΔ=1 outboxΔ=1 ✅
+  Run 6: r1=200 r2=409 winners=1 auditΔ=1 outboxΔ=1 ✅
+  Run 7: r1=200 r2=409 winners=1 auditΔ=1 outboxΔ=1 ✅
+  Run 8: r1=200 r2=409 winners=1 auditΔ=1 outboxΔ=1 ✅
+  Run 9: r1=200 r2=409 winners=1 auditΔ=1 outboxΔ=1 ✅
+  Run 10: r1=200 r2=409 winners=1 auditΔ=1 outboxΔ=1 ✅
+
+  DOUBLE_SUCCESS = 0/10
+  DOUBLE_TERMINAL_AUDIT = 0/10
+  DOUBLE_TERMINAL_OUTBOX = 0/10
