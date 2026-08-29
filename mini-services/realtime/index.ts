@@ -157,22 +157,73 @@ io.on('connection', (socket) => {
   const userId = socket.data.userId
   console.log(`[realtime] +client ${socket.id} user=${userId?.substring(0, 8)}.. (total ${io.engine.clientsCount})`)
 
-  // S5A: Channel subscription with authorization
+  // V3-REPAIR-32: Check if a consumer owns an order (for order:{orderId} subscribe auth).
+  // Uses the same readonly DB connection as session validation.
+  function consumerOwnsOrder(orderId: string): boolean {
+    try {
+      const row = db.prepare('SELECT userId FROM "Order" WHERE id = ?').get(orderId) as { userId: string } | null
+      return row?.userId === userId
+    } catch {
+      return false
+    }
+  }
+
+  // S5A + V3-REPAIR-32: Channel subscription with authorization
   socket.on('subscribe', (channel: string) => {
     if (typeof channel !== 'string' || channel.length === 0) return
 
     // S5A: Private user channels — can only subscribe to OWN channel
-    // (already auto-joined on connection, but explicit subscribe also allowed for own channel)
     if (channel.startsWith('user:')) {
       if (channel === `user:${userId}`) {
-        socket.join(channel) // Already joined, but explicit is fine
+        socket.join(channel)
       }
-      // Silently ignore attempts to subscribe to other users' channels
       return
     }
 
-    // Public channels (backward compatible with existing order/vendor/admin)
-    socket.join(channel)
+    // V3-REPAIR-32: order:{orderId} — consumer must OWN the order.
+    // Vendors/admins use vendor:all/admin:all for their scope; order:{orderId}
+    // is consumer-private.
+    if (channel.startsWith('order:')) {
+      const orderId = channel.slice('order:'.length)
+      if (socket.data.role === 'CONSUMER') {
+        if (!consumerOwnsOrder(orderId)) return // deny — not owner
+      }
+      socket.join(channel)
+      return
+    }
+
+    // V3-REPAIR-32: consumer:all is retained only for genuinely public events
+    // (killswitch). Order events no longer broadcast to consumer:all.
+    if (channel === 'consumer:all' && socket.data.role === 'CONSUMER') {
+      socket.join(channel)
+      return
+    }
+
+    // vendor:all / admin:all — role-scoped
+    if (channel === 'vendor:all' || channel === 'admin:all') {
+      if (socket.data.role === 'VENDOR_OWNER' || socket.data.role === 'ADMIN' || socket.data.role === 'SUPER_ADMIN') {
+        socket.join(channel)
+      }
+      return
+    }
+
+    // restaurant:{restaurantId} — vendor must own restaurant + admins
+    if (channel.startsWith('restaurant:')) {
+      const restId = channel.slice('restaurant:'.length)
+      if (socket.data.role === 'ADMIN' || socket.data.role === 'SUPER_ADMIN') {
+        socket.join(channel)
+        return
+      }
+      if (socket.data.role === 'VENDOR_OWNER') {
+        try {
+          const rest = db.prepare('SELECT ownerUserId FROM Restaurant WHERE id = ?').get(restId) as { ownerUserId: string | null } | null
+          if (rest?.ownerUserId === userId) socket.join(channel)
+        } catch { /* deny */ }
+      }
+      return
+    }
+
+    // Unknown channels — fail-closed (deny)
   })
 
   socket.on('unsubscribe', (channel: string) => {
@@ -183,19 +234,26 @@ io.on('connection', (socket) => {
     }
   })
 
-  // --- Existing order/killswitch event handlers (backward compatible) ---
+  // --- Order/killswitch event handlers ---
+  // V3-REPAIR-32: ONLY service connections (publisher) may emit 'order:updated'
+  // and 'order:created'. A regular user socket MUST NOT be able to forge order
+  // events (prevents unauthorized state invalidation signals to other consumers).
   socket.on('order:updated', (payload: OrderEvent) => {
+    if (!socket.data.isService) return // non-service cannot forge
     io.to(`restaurant:${payload.restaurantId}`).emit('order:updated', payload)
     io.to(`order:${payload.orderId}`).emit('order:updated', payload)
     io.to('vendor:all').emit('order:updated', payload)
     io.to('admin:all').emit('order:updated', payload)
-    io.to('consumer:all').emit('order:updated', payload)
+    // V3-REPAIR-32: REMOVED io.to('consumer:all').emit('order:updated', payload)
+    // Consumers receive ONLY their own order events via order:{orderId} (ownership-checked).
   })
 
   socket.on('order:created', (payload: OrderEvent) => {
+    if (!socket.data.isService) return // non-service cannot forge
     io.to(`restaurant:${payload.restaurantId}`).emit('order:created', payload)
     io.to('vendor:all').emit('order:created', payload)
     io.to('admin:all').emit('order:created', payload)
+    // V3-REPAIR-32: REMOVED consumer:all broadcast (same privacy rationale)
   })
 
   socket.on('killswitch:toggled', (payload: { key: string; enabled: boolean }) => {

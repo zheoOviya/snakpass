@@ -226,6 +226,11 @@ export function ConsumerView({ initialTab }: ConsumerViewProps) {
   // ── Realtime: refresh orders + active order on socket events ─────────────
   React.useEffect(() => {
     const sock = realtimeSocket()
+    // V3-REPAIR-32: subscribe to the active order's private channel (ownership-checked
+    // by the realtime service). This replaces the removed consumer:all order broadcast.
+    if (activeOrder) {
+      sock.emit('subscribe', `order:${activeOrder.id}`)
+    }
     const handler = (p: { orderId: string }) => {
       // Refresh active order if it matches the updated one.
       if (activeOrder && p.orderId === activeOrder.id) {
@@ -243,6 +248,9 @@ export function ConsumerView({ initialTab }: ConsumerViewProps) {
     sock.on('order:updated', handler)
     sock.on('order:created', createdHandler)
     return () => {
+      if (activeOrder) {
+        sock.emit('unsubscribe', `order:${activeOrder.id}`)
+      }
       sock.off('order:updated', handler)
       sock.off('order:created', createdHandler)
     }
