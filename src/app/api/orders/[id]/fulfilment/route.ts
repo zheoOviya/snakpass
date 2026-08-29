@@ -335,6 +335,37 @@ export const PATCH = (req: NextRequest, { params }: { params: Promise<{ id: stri
         // -------------------------------------------------------------------
         let pickupOtpId: string | null = null
         if (desired === 'READY_FOR_PICKUP' && order.user?.phone && order.pickupOtp === '000000') {
+          // V4A4 — OTP Reissue Invalidation (defense-in-depth).
+          // Before issuing a new pickup OTP, atomically invalidate ALL prior
+          // unconsumed pickup OTPs for this order. This establishes the
+          // authoritative invariant:
+          //   "the current OTP is the most recently issued one; all prior OTPs
+          //    are permanently unusable when a new one is issued."
+          //
+          // The sentinel guard above (order.pickupOtp === '000000') prevents
+          // reissue in normal operation (once an OTP is issued, pickupOtp is
+          // set to 'ISSUED'). This invalidation is defense-in-depth: if a prior
+          // OTP exists (e.g., from the legacy /status route which issues with
+          // generic 'pickup' purpose, or from a race/bug that bypassed the
+          // sentinel), it is automatically marked consumed → verifyOtp rejects
+          // it (rec.consumed === true → ok: false).
+          //
+          // No schema migration — reuses the existing `consumed` field.
+          // Covers BOTH 'pickup:<orderId>' (V4A3 exact binding) AND generic
+          // 'pickup' (legacy /status route) to ensure no prior credential
+          // survives a new issuance.
+          await tx.otpRequest.updateMany({
+            where: {
+              target: order.user.phone,
+              OR: [
+                { purpose: `pickup:${id}` },
+                { purpose: 'pickup' },
+              ],
+              consumed: false,
+            },
+            data: { consumed: true },
+          })
+
           // Generate the 6-digit code + hash (mirrors otp-service.ts hashCode).
           const otpCode = String(Math.floor(100000 + Math.random() * 900000))
           const salt = Buffer.from('snakzap-otp-salt')
