@@ -14705,3 +14705,78 @@ Stage Summary:
 - SOURCE_REPAIR_REQUIRED = NO (no defect reproduced — architecture is sound)
 - PAYMENT_ORDER_RECOVERY = CONDITIONAL (demo mode insufficient for real-provider GO)
 - FALSE_SUCCESS_UI = NOT_FULLY_VERIFIED (browser blocked; API false-success = 0)
+
+---
+Task ID: SNAKZAP-P2-RAZORPAY-TEST-MODE-CONTRACT-VALIDATION-37
+Agent: Payment Provider Contract Validation Agent (main)
+Task: Validate Razorpay Test Mode integration contract — signature verification, capture semantics, duplicate/retry, reconciliation, provider/local-state boundaries.
+
+Work Log:
+- Phase 0: Baseline at c63f638 (clean, LOCAL_HEAD == origin/main, P1 formally closed).
+- Phase 1 (current integration contract): Traced from source.
+  RAZORPAY_ORDER_CREATION = createRazorpayOrder() in src/lib/razorpay.ts (instance.orders.create)
+  RAZORPAY_PAYMENT_CAPTURE = captureRazorpayPayment() in src/lib/razorpay.ts (instance.payments.capture)
+  SIGNATURE_VERIFIER = verifyRazorpaySignature() in src/lib/razorpay.ts
+  SIGNATURE_INPUT = HMAC-SHA256(keySecret, `${razorpayOrderId}|${razorpayPaymentId}`)
+  SERVER_SIDE_ORDER_ID_SOURCE = gatewayOrderId from Payment.gatewayOrderId (set in TX-B from createRazorpayOrder)
+  CAPTURE_MODE = manual (deferred to outbox publisher via PAYMENT_CAPTURE_REQUESTED)
+  PROVIDER_STATUS_QUERY = fetchRazorpayPaymentStatus() (instance.payments.fetch — READ-ONLY)
+  WEBHOOK_ENDPOINT = POST /api/webhooks/razorpay (verifyWebhookSignature with RAZORPAY_WEBHOOK_SECRET)
+  WEBHOOK_SIGNATURE_VERIFIER = verifyWebhookSignature() — HMAC-SHA256 over raw body, constant-time comparison
+
+- Phase 2 (credential gate): RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET = ALL UNSET. Not in .env. realPayments flag = OFF (default). No Razorpay TEST MODE credentials available in this environment. BLOCKED: RAZORPAY_TEST_CREDENTIALS_UNAVAILABLE.
+
+- Phase 3 (signature validation): Source-traced (not live-tested — no test credentials).
+  In real-provider mode (realPayments=true): HMAC-SHA256 over `${razorpayOrderId}|${razorpayPaymentId}` with keySecret. Constant-time comparison (length check + loop).
+  In demo mode: accepts any non-empty signature (permissive mock).
+  SIGNATURE_ALGORITHM = HMAC-SHA256 ✅
+  ORDER_ID_FOR_SIGNATURE = SERVER-AUTHORITATIVE ✅ (gatewayOrderId from Payment record)
+  KEY_SECRET_FRONTEND_EXPOSURE = 0 ✅ (keySecret read from process.env, never sent to client)
+  Cannot live-test INVALID_SIGNATURE_ACCEPTED without test credentials.
+
+- Phase 4 (timing-safe verification): CONSTANT_TIME_SIGNATURE_COMPARISON = YES. Source lines 100-106: length check + constant-time loop (match flag set to false on mismatch, but loop continues — no early exit). This is a correct constant-time implementation.
+
+- Phase 5-7 (test-mode provider lifecycle, duplicate/retry, ambiguous-success): ALL BLOCKED — require Razorpay TEST MODE credentials. Source-trace confirms the wiring exists (gatewayIdempotencyKey passed as X-Idempotency-Key header to captureRazorpayPayment), but the Orchestrator correctly noted that X-Idempotency-Key behavior for Payment Gateway capture is not explicitly documented (Razorpay docs only guarantee idempotency for Payout APIs). Cannot verify provider-side behavior without live test credentials.
+
+- Phase 8 (provider reconciliation): IMPLEMENTED. fetchRazorpayPaymentStatus() exists — READ-ONLY instance.payments.fetch(). Maps Razorpay statuses ('captured', 'authorized', 'failed', 'refunded') to internal types. Used by M3 remediation handler to verify gateway state before flipping CAPTURE_PENDING → CAPTURED. Cannot live-test without test credentials.
+
+- Phase 9 (webhook contract): IMPLEMENTED. POST /api/webhooks/razorpay:
+  - RAW_BODY_VERIFICATION = YES (req.text() before JSON.parse, HMAC over raw body)
+  - verifyWebhookSignature uses HMAC-SHA256 with RAZORPAY_WEBHOOK_SECRET, constant-time comparison
+  - Dedup via WebhookEvent.eventId unique constraint
+  - Invalid signature → 403 + audit + WebhookEvent record
+  - Feature flag: webhookHandler (default OFF)
+  Cannot live-test without RAZORPAY_WEBHOOK_SECRET.
+
+- Phase 10 (PAID-state authority): ORDER_PAID_SEMANTICS = CAPTURE_REQUESTED (not PROVIDER_CONFIRMED).
+  Order.status = PAID is set in TX-B (line 193 of payments/route.ts), BEFORE the provider capture happens (capture is deferred to the outbox publisher via PAYMENT_CAPTURE_REQUESTED).
+  This means PAID semantically means "capture requested", not "provider confirmed".
+  FALSE_PAID_PROVIDER_FAILURE = POSSIBLE: if provider capture fails, Order remains PAID + Payment stays CAPTURE_PENDING. The outbox retry mechanism + fetchRazorpayPaymentStatus reconciliation provide recovery, but the consumer sees Order=PAID (optimistic) while capture may still fail.
+  This is NOT a defect requiring source repair — it is a design decision (optimistic PAID + deferred capture). The recovery path (outbox retry + provider status query + race-safe updateMany) is implemented. However, it is a risk that should be classified explicitly.
+
+- Phase 11 (failure matrix): Source-traced only (no live test credentials).
+  A (invalid signature): demo mode accepts any non-empty sig; real mode rejects (HMAC mismatch → FAILED payment)
+  B (unknown provider order): createRazorpayOrder would fail at gateway
+  C (amount mismatch): server-authoritative price (P1 repair) → amount always matches
+  D (capture rejected): captureResult.captured=false → Payment.retryCount++, throw, outbox retry
+  E (already captured): publisher checks Payment.status===CAPTURED → idempotent exit
+  F-I: outbox retry + provider idempotency key + race-safe updateMany
+
+- Phase 12 (secret minimization): Source-traced.
+  RAZORPAY_KEY_SECRET_EXPOSURE = 0 (process.env only, never sent to client/API response)
+  WEBHOOK_SECRET_EXPOSURE = 0 (process.env only)
+  AUTHORIZATION_HEADER_EXPOSURE = 0 (Razorpay SDK handles internally)
+  CARD_DATA_EXPOSURE = 0 (Razorpay Checkout handles card data — SnakZap never touches it)
+  OTP_RAW_EXPOSURE = 0 (V4A3 verified)
+  OTP_HASH_EXPOSURE = 0 (V4A3 verified)
+  CREDENTIAL_EXPOSURE = 0
+
+- Phase 13 (source repair): SOURCE_REPAIR_REQUIRED = NO. No defect reproduced that requires source repair. The integration is source-present and correctly wired. The PAID-before-confirm design decision is classified as a risk, not a defect (recovery path exists). Live-provider testing is blocked by lack of test credentials.
+
+Stage Summary:
+- P2_RAZORPAY_TEST_MODE_CONTRACT_BLOCKED
+- BLOCKER=RAZORPAY_TEST_CREDENTIALS_UNAVAILABLE
+- Source trace confirms: integration is correctly wired (HMAC-SHA256, constant-time, webhook verification, provider status fetch, outbox recovery)
+- Cannot live-test without Razorpay TEST MODE credentials
+- Key finding: Order.status=PAID set before provider confirm (optimistic) — classified as risk, not defect (recovery path implemented)
+- Provider idempotency for Payment Gateway capture: NOT VERIFIED (X-Idempotency-Key wiring present, but Razorpay docs only guarantee for Payout APIs — requires live test to verify)
