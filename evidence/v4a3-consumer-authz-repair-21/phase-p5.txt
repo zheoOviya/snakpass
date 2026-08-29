@@ -1,0 +1,13 @@
+
+# V4A3-CONSUMER-PICKUP-AUTHORIZATION-REPAIR-21 — phase=p5
+# DB=/home/z/my-project/db/custom.db  baseline=2adc9c8952b8c7c449e4e508d4d93a3a21d92dd0
+
+=== PHASE 5 — Mandatory role matrix ===
+  [PASS] Owning Vendor + valid → 200 + PICKED_UP + 1 audit + 1 outbox — http=200
+  [PASS] Owning Vendor + wrong → 4xx, READY_FOR_PICKUP, ac+1, not consumed — http=409 ac=1
+  [PASS] Foreign Vendor + valid → 403, 0 mutation, 0 side-effect — http=403
+  [PASS] Consumer owner + valid → 403, 0 mutation, OTP not consumed — http=403
+  [PASS] Consumer owner + wrong → 403, attemptCount Δ=0 (no burn) — http=403 ac=0
+  [PASS] Different Consumer + valid → 403, OTP not consumed — http=403
+  [PASS] Unauthenticated + valid → 401/403, OTP not consumed — http=403
+  [TRACE] SUPER_ADMIN + valid → http=200 ful=PICKED_UP consumed=1 auditΔ=1 outboxΔ=1

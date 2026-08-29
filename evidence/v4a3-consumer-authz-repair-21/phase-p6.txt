@@ -1,0 +1,13 @@
+
+# V4A3-CONSUMER-PICKUP-AUTHORIZATION-REPAIR-21 — phase=p6
+# DB=/home/z/my-project/db/custom.db  baseline=2adc9c8952b8c7c449e4e508d4d93a3a21d92dd0
+
+=== PHASE 6 — Consumer oracle test (uniform rejection) ===
+  [PASS] Consumer + valid OTP → 403 uniform — http=403
+  [PASS] Consumer + wrong OTP → 403 uniform — http=403 ac=0
+  [PASS] Consumer + expired OTP → 403 uniform — http=403
+  [PASS] Consumer + consumed OTP → 403 uniform — http=403
+  [PASS] Consumer + locked OTP → 403 uniform — http=403
+
+  Uniform rejection statuses: 403
+  Uniform = YES

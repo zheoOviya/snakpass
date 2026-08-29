@@ -1,0 +1,10 @@
+
+# V4A3-CONSUMER-PICKUP-AUTHORIZATION-REPAIR-21 — phase=p10
+# DB=/home/z/my-project/db/custom.db  baseline=2adc9c8952b8c7c449e4e508d4d93a3a21d92dd0
+
+=== PHASE 10 — Concurrency regression (authorized Vendor) ===
+  [FAIL] Run 1: 1 winner, 1 PICKED_UP, 1 audit, 1 outbox — r1=200 r2=409 auditΔ=2 outboxΔ=1
+  [FAIL] Run 2: 1 winner, 1 PICKED_UP, 1 audit, 1 outbox — r1=200 r2=409 auditΔ=2 outboxΔ=1
+  [FAIL] Run 3: 1 winner, 1 PICKED_UP, 1 audit, 1 outbox — r1=200 r2=409 auditΔ=2 outboxΔ=1
+  [FAIL] Run 4: 1 winner, 1 PICKED_UP, 1 audit, 1 outbox — r1=200 r2=409 auditΔ=2 outboxΔ=1
+  [FAIL] Run 5: 1 winner, 1 PICKED_UP, 1 audit, 1 outbox — r1=200 r2=409 auditΔ=2 outboxΔ=1

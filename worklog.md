@@ -14183,3 +14183,58 @@ Stage Summary:
 - V4A3_MANDATORY_EVIDENCE_FINALIZATION_VERIFIED
 - All 4 missing mandatory rows PASS ✅
 - No product source changes
+
+---
+Task ID: VENDOR-V4A3-CONSUMER-PICKUP-AUTHORIZATION-REPAIR-21
+Agent: Pickup Verification RBAC Repair Agent (main)
+Task: Repair the P0 Consumer pickup-authorization regression — forbid Consumer from performing the vendor-side terminal PICKED_UP mutation, preserve the existing Vendor Owner flow, and close V4A3 formally.
+
+Work Log:
+- Phase 0: Baseline at 2adc9c8 (clean, LOCAL_HEAD == origin/main, BASELINE_MATCH=YES).
+- Phase 1 (PRE-REPAIR exploit reproduction): Fresh fixture — Consumer C owns Order A (READY_FOR_PICKUP, valid OTP bound via purpose='pickup:<orderId>'). Consumer authenticated, called POST /api/orders/<id>/pickup/verify with the valid OTP. Result BEFORE repair: HTTP=200, Fulfilment.status=PICKED_UP, OTP consumed=true, audit=1, outbox=1. EXPLOIT REPRODUCED — Consumer performed the terminal vendor-side mutation. Evidence captured in evidence/v4a3-consumer-authz-repair-21/phase-pre.txt.
+- Phase 2 (root cause): route allowedRoles=['CONSUMER','VENDOR_OWNER','ADMIN','SUPER_ADMIN'] explicitly permitted CONSUMER. The ownership branch only rejected a CONSUMER who is NOT the order owner; a CONSUMER who IS the owner passed and reached verifyPickupAttribution(), where the OTP was issued to the consumer's phone + bound to the order — so all checks passed and the Fulfilment flipped to PICKED_UP. Consumer order ownership was being treated as vendor-side terminal fulfilment authority. verifyPickupAttribution() performs no role authorization itself (relies on the route handler).
+- Phase 3 (repair): removed 'CONSUMER' from allowedRoles → ['VENDOR_OWNER','ADMIN','SUPER_ADMIN']. Removed the CONSUMER ownership branch. Kept the VENDOR_OWNER ownership check (Restaurant.ownerUserId === session.userId) and ADMIN/SUPER_ADMIN unchanged (existing contract — directive says do not modify Admin semantics). Single file changed: src/app/api/orders/[id]/pickup/verify/route.ts.
+- Phase 4 (authorization ordering): the RBAC gate now runs BEFORE any order/OTP lookup, BEFORE verifyPickupAttribution(). For a CONSUMER caller the response is a uniform 403 with no order lookup, no OTP record read, no attemptCount increment, no consumption, no audit, no outbox.
+- Phase 5 (role matrix): 8 rows. Owning Vendor+valid=200/PICKED_UP; Owning Vendor+wrong=409/ac+1; Foreign Vendor+valid=403/0-mutation; Consumer-owner+valid=403/not-consumed; Consumer-owner+wrong=403/acΔ=0-no-burn; Different-Consumer+valid=403; Unauthenticated=403; SUPER_ADMIN+valid=TRACE→http=200/PICKED_UP/consumed/1audit/1outbox (existing contract preserved, no Admin semantics modified). All actionable rows PASS.
+- Phase 6 (consumer oracle): Consumer submitted valid/wrong/expired/consumed/locked OTP separately. All 5 returned the SAME 403. Uniform=YES. No credential-state distinctions leaked.
+- Phase 7 (V4A1 ownership): Vendor A→own Order A=200; Vendor B→Vendor A Order=403/no-burn; Vendor B→own Order B=200; Vendor A→Vendor B Order=403/no-burn. 4/4 PASS.
+- Phase 8 (V4A2 attempt-limit): Authorized Vendor 5 wrongs→ac=5(locked); 6th wrong→capped at 5; correct-after-lock→409/READY_FOR_PICKUP. Consumer 3 wrongs→attemptCount Δ=0 (no burn). All PASS.
+- Phase 9 (V4A3 binding/secret): cross-order OTP=409/not-consumed/ac-unchanged; random otpId+valid code=409/no-burn; raw OTP absent from GET+verify API responses; codeHash absent from API. All PASS.
+- Phase 10 (concurrency): 5/5 PASS. Each run: one 200 winner, one 409 loser, one PICKED_UP, one terminal PICKUP_VERIFIED audit (terminalΔ=1), one outbox. The loser's PICKUP_VERIFICATION_FAILED audit (auditΔ=2 total) is a non-terminal failure record written outside the txn — not a duplicate terminal transition.
+- Phase 11 (side-effect matrix):
+  | Caller                  | HTTP | consumed | acΔ | order          | audit | outbox |
+  | Consumer + valid        | 403  | false    | 0   | READY_FOR_PICKUP | 0     | 0      |
+  | Consumer + wrong        | 403  | false    | 0   | READY_FOR_PICKUP | 0     | 0      |
+  | Foreign Vendor + val    | 403  | false    | 0   | READY_FOR_PICKUP | 0     | 0      |
+  | Owner Vendor + valid    | 200  | true     | 0   | PICKED_UP        | 1     | 1      |
+  | Unauthenticated         | 403  | false    | 0   | READY_FOR_PICKUP | 0     | 0      |
+  Matches the directive's Phase 11 table exactly.
+- Phase 12 (static/security): lint=0 (only an unrelated eslint-rules module-type warning); no TS errors (route compiles + runs); no schema migration (prisma/ untouched); no new endpoint (only modified the existing pickup-verify route); V4A2 attempt-limit preserved; V4A3 purpose binding preserved; raw OTP response absent; auditWithTx preserved; ORDER_STATUS_CHANGED behavior preserved. .gitignore extended to ignore db/custom.db-shm + db/custom.db-wal (credential hygiene — SQLite WAL runtime artifacts).
+- Phase 13 (git closure): source commit + evidence/worklog commit; push; working tree clean; LOCAL_HEAD == origin/main.
+
+Side-effect evidence approach: wrote scripts/v4a3-consumer-authz-repair-21.mjs using bun:sqlite (built-in, zero Prisma-runtime overhead) for fixture setup + state verification, and fetch for API calls. This keeps the script's memory footprint minimal so it coexists with the dev server without triggering the sandbox's process-kill behavior (4GB cgroup). scripts/run-v4a3-repair-21.sh orchestrates per-phase execution with server health checks + restart-on-death. scripts/_warmup.mjs compiles the repaired route with a valid session before evidence runs.
+
+Files changed (product source):
+  - src/app/api/orders/[id]/pickup/verify/route.ts (RBAC repair: removed CONSUMER from allowedRoles, removed CONSUMER ownership branch, kept VENDOR_OWNER ownership check + ADMIN/SUPER_ADMIN)
+
+Files added (evidence + tooling):
+  - scripts/v4a3-consumer-authz-repair-21.mjs (evidence gate)
+  - scripts/_warmup.mjs (route compiler warmup)
+  - scripts/run-v4a3-repair-21.sh (orchestrator)
+  - evidence/v4a3-consumer-authz-repair-21/phase-*.txt (captured outputs)
+  - .gitignore (db/custom.db-shm + db/custom.db-wal hygiene)
+
+Stage Summary:
+- V4A3_CONSUMER_PICKUP_AUTHORIZATION_REPAIR_VERIFIED
+- P0 exploit reproduced pre-repair (Consumer → PICKED_UP) ✅
+- Root cause: allowedRoles included 'CONSUMER' + ownership check treated consumer order-ownership as terminal authority
+- Repair: minimal RBAC gate (CONSUMER forbidden, uniform 403 before any OTP mutation)
+- Role matrix 8/8 actionable PASS ✅
+- Consumer oracle uniform (5/5 → same 403) ✅
+- V4A1 ownership 4/4 PASS ✅
+- V4A2 attempt-limit preserved ✅
+- V4A3 binding/secret preserved ✅
+- Concurrency 5/5 PASS (1 terminal audit, 1 outbox) ✅
+- Side-effect matrix matches directive exactly ✅
+- Lint=0, no schema migration, no new endpoint, no authorization widening
+- V4A3 FORMALLY CLOSABLE (Consumer regression closed)

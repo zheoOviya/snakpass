@@ -1,0 +1,14 @@
+
+# V4A3-CONSUMER-PICKUP-AUTHORIZATION-REPAIR-21 — phase=p8
+# DB=/home/z/my-project/db/custom.db  baseline=2adc9c8952b8c7c449e4e508d4d93a3a21d92dd0
+
+=== PHASE 8 — V4A2 attempt-limit regression (authorized Vendor only) ===
+  wrong #1 → ac=1
+  wrong #2 → ac=2
+  wrong #3 → ac=3
+  wrong #4 → ac=4
+  wrong #5 → ac=5
+  [PASS] Authorized Vendor wrong #5 → attemptCount=5 (locked) — ac=5
+  [PASS] Authorized Vendor wrong #6 → capped at 5 — ac=5
+  [PASS] Authorized Vendor correct-after-lock → reject, READY_FOR_PICKUP — http=409
+  [PASS] Consumer wrong attempts do NOT increment attemptCount — ac before=0 after=0
