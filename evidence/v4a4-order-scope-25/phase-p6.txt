@@ -1,0 +1,19 @@
+
+# V4A4-ORDER-SCOPE-LOCKOUT-CORRECTION-25 — phase=p6
+# DB=/home/z/my-project/db/custom.db  baseline=3332bd9
+
+=== PHASE 6 — Concurrent cross-order isolation (10 fixtures) ===
+  Run 1: reissueX=200 verifyY=200 Y.consumed=1 Y.ac=0 Y.ful=PICKED_UP ❌
+  Run 2: reissueX=200 verifyY=200 Y.consumed=1 Y.ac=0 Y.ful=PICKED_UP ❌
+  Run 3: reissueX=200 verifyY=200 Y.consumed=1 Y.ac=0 Y.ful=PICKED_UP ❌
+  Run 4: reissueX=200 verifyY=200 Y.consumed=1 Y.ac=0 Y.ful=PICKED_UP ❌
+  Run 5: reissueX=200 verifyY=200 Y.consumed=1 Y.ac=0 Y.ful=PICKED_UP ❌
+  Run 6: reissueX=200 verifyY=200 Y.consumed=1 Y.ac=0 Y.ful=PICKED_UP ❌
+  Run 7: reissueX=200 verifyY=200 Y.consumed=1 Y.ac=0 Y.ful=PICKED_UP ❌
+  Run 8: reissueX=200 verifyY=200 Y.consumed=1 Y.ac=0 Y.ful=PICKED_UP ❌
+  Run 9: reissueX=200 verifyY=200 Y.consumed=1 Y.ac=0 Y.ful=PICKED_UP ❌
+  Run 10: reissueX=200 verifyY=200 Y.consumed=1 Y.ac=0 Y.ful=PICKED_UP ❌
+
+  CROSS_ORDER_INVALIDATION = 10/10
+  CROSS_ORDER_ATTEMPT_BURN = 0/10
+  CROSS_ORDER_TERMINAL_MUTATION = 0/10

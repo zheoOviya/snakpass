@@ -1,0 +1,16 @@
+
+# V4A4-ORDER-SCOPE-LOCKOUT-CORRECTION-25 — phase=p2
+# DB=/home/z/my-project/db/custom.db  baseline=3332bd9
+
+=== PHASE 2 — Same-consumer two-order isolation ===
+  Same consumer C (phone=+91998877p263549001) owns:
+    Order X (id=95b12702, Rest A) with OTP_X (purpose=pickup:<X>)
+    Order Y (id=aac12340, Rest B) with OTP_Y (purpose=pickup:<Y>)
+  OTP_Y before X reissue: consumed=0 ac=0
+  Reissue X: HTTP=200, new OTP_X2 otpId=p2d42p3i
+  OTP_X (old) after reissue: consumed=1 (expected consumed=true)
+  OTP_Y after X reissue: consumed=0 ac=0 (expected unchanged)
+  [PASS] OTP Y consumed state UNCHANGED — before=0 after=0
+  [PASS] OTP Y attemptCount UNCHANGED — before=0 after=0
+  Verify OTP_Y: HTTP=200, Fulfilment Y status=PICKED_UP
+  [PASS] OTP Y still usable = YES — http=200 ful=PICKED_UP

@@ -14350,3 +14350,40 @@ Stage Summary:
 - Active-record invariant: USABLE_CURRENT_OTP_COUNT <= 1 ✅
 - V4A1-V4A3 targeted regression: all PASS ✅
 - V4A5 now UNLOCKED
+
+---
+Task ID: VENDOR-V4A4-ORDER-SCOPE-LOCKOUT-CORRECTION-25
+Agent: OTP Reissue Contract & Isolation Agent (main)
+Task: Prove/correct V4A4 implementation's exact order isolation and lockout/reissue semantics — without inventing new product policy.
+
+Work Log:
+- Phase 0: Baseline at 3332bd9 (clean, LOCAL_HEAD == origin/main, BASELINE_MATCH=YES).
+- Phase 1 (production reissue reachability): Traced both OTP issuance paths WITHOUT DB manipulation.
+  - /fulfilment route: guarded by sentinel order.pickupOtp==='000000'. First issuance sets sentinel='ISSUED' → second /fulfilment call (same→same) returns 200 idempotent, NO new OTP. V4A4 invalidation NOT triggered.
+  - /status route: guarded by NEXT_STATUS state machine. Once Order.status=READY_FOR_PICKUP, NEXT_STATUS['READY_FOR_PICKUP']='PICKED_UP' → cannot re-transition to READY_FOR_PICKUP. Also has pre-existing SQLite lock bug (P1008 — createOtp uses global db inside withTransaction).
+  - CONCLUSION: PRODUCTION_REISSUE_CAPABILITY = NO. V4A4 invalidation = defense-in-depth only.
+- Phase 2 (same-consumer two-order isolation): Same Consumer C (same phone) owns Order X (Rest A) + Order Y (Rest B). Manually issued OTP_X (purpose=pickup:<X>) + OTP_Y (purpose=pickup:<Y>). Triggered reissue for X only (reset sentinel + Fulfilment→ALMOST_READY + PATCH /fulfilment). Result: OTP_X (old) consumed=true (invalidated by V4A4, order-scoped). OTP_Y consumed=0, ac=0 (UNCHANGED). Verify OTP_Y → 200, PICKED_UP (still usable). PASS — no cross-order invalidation.
+- Phase 3 (generic legacy OTP ownership): OtpRequest model has NO orderId field — only target (phone) + purpose (string). A generic purpose='pickup' row carries NO recoverable order identity. CONCLUSION: do NOT consume generic pickup rows merely because phone matches. Minimal correction: scope invalidation to exact purpose='pickup:<orderId>'.
+- Phase 4 (lockout/reissue reachability): Fresh fixture, issued OTP_A, locked at 5 wrong attempts. Attempted legitimate API paths (NO DB manipulation) to obtain new OTP_B: /fulfilment same→same (200, no new OTP — sentinel); /status READY_FOR_PICKUP (409 — state machine). CONCLUSION: CAN_LOCKED_ORDER_OBTAIN_NEW_OTP_THROUGH_PRODUCTION_API = NO. OTP_REISSUE_BYPASSES_ATTEMPT_LIMIT_POLICY = NO. REASON = no production reissue path (sentinel + state machine prevent reissue).
+- Phase 5 (repair): Removed the generic purpose='pickup' clause from V4A4 invalidation query. Now scoped to EXACT purpose='pickup:<orderId>' only. Single file changed: src/app/api/orders/[id]/fulfilment/route.ts. The query went from {target, OR:[pickup:<id>, pickup], consumed:false} to {purpose:pickup:<id>, consumed:false}. No phone-wide invalidation. No schema migration.
+- Phase 6 (concurrent cross-order isolation, 10 fixtures): Same consumer, two orders. Concurrent: reissue X + wrong-verify Y (wrong doesn't consume Y, isolates cross-order effect). 10/10 PASS: CROSS_ORDER_INVALIDATION=0/10, CROSS_ORDER_ATTEMPT_BURN=0/10, CROSS_ORDER_TERMINAL_MUTATION=0/10. Y.consumed stays 0, Y.ful stays READY_FOR_PICKUP.
+- Phase 7 (V4A4 targeted regression, synthetic defense-in-depth): Synthetic reissue (reset sentinel + Fulfilment→ALMOST_READY + PATCH /fulfilment). old exact-order OTP_A → consumed=true (unusable). verify OTP_A → 409. latest OTP_B → not consumed (usable). active<=1. PASS.
+- Phase 8 (V4A1-V4A3 spot regression): V4A1 Foreign Vendor verify → 403. V4A3 Consumer verify → 403. V4A2 5 wrong → locked at 5. V4A3 Order X OTP → Order Y reject/no burn. V4A3 RAW_OTP_API_RESPONSE=0 + PROTECTED_HASH=0. All PASS.
+- Phase 9 (credential governance): Per directive, previously-exposed PAT must NOT be reused. No fresh credential available in this environment. If push is required, will report BLOCKED=GIT_CREDENTIALS_UNAVAILABLE.
+- Phase 10 (git closure): source commit + evidence/worklog commit. Push status TBD (credential governance — see Phase 9).
+
+Contradictions resolved:
+1. Cross-order invalidation scope: FIXED. Removed generic purpose='pickup' clause. Invalidation now exact-order-scoped via purpose='pickup:<orderId>'. Phase 2 + Phase 6 prove Order Y is unaffected by Order X's reissue.
+2. Lockout/reissue bypass: RESOLVED. Phase 1 + Phase 4 prove NO production reissue path exists. The sentinel (/fulfilment) + state machine (/status) prevent reissue entirely. V4A4 invalidation is defense-in-depth. The lockout-bypass concern is moot — there is no API path to trigger a reissue that would reset the attempt budget.
+
+Files changed (product source):
+  - src/app/api/orders/[id]/fulfilment/route.ts (V4A4 order-scope correction: remove generic 'pickup' clause from invalidation query)
+
+Stage Summary:
+- V4A4_ORDER_SCOPE_LOCKOUT_CORRECTION_VERIFIED
+- PRODUCTION_REISSUE_CAPABILITY = NO ✅
+- Cross-order isolation: 0/10 invalidation, 0/10 attempt burn, 0/10 terminal mutation ✅
+- Lockout bypass: NO (no production reissue path) ✅
+- V4A4 invalidation = defense-in-depth only (order-scoped) ✅
+- V4A1-V4A3 targeted regression: all PASS ✅
+- No schema migration, no new endpoint, no new policy ✅

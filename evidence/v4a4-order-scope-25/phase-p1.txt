@@ -1,0 +1,27 @@
+
+# V4A4-ORDER-SCOPE-LOCKOUT-CORRECTION-25 — phase=p1
+# DB=/home/z/my-project/db/custom.db  baseline=3332bd9
+
+=== PHASE 1 — Production reissue reachability ===
+  Route 1: PATCH /fulfilment (ALMOST_READY → READY_FOR_PICKUP)
+    allowed roles: VENDOR_OWNER only (V1 PHASE 3 role boundary)
+    required Order.status: any (reads via order.pickupOtp sentinel)
+    required Fulfilment.status: ALMOST_READY (NEXT_FULFILMENT_STATUS)
+    sentinel: order.pickupOtp === "000000" (first issuance only)
+    first issuance: HTTP=200, OTP_A otpId=uyj8jxhz
+    second /fulfilment (same→same): HTTP=200, OTP_B otpId=<none>
+    → sentinel is 'ISSUED' (not '000000') → no reissue. V4A4 invalidation NOT triggered.
+
+  Route 2: PATCH /status (ALMOST_READY → READY_FOR_PICKUP)
+    allowed roles: VENDOR_OWNER, ADMIN, SUPER_ADMIN (elevated roles)
+    required Order.status: ALMOST_READY (NEXT_STATUS state machine)
+    sentinel: none (uses createOtp with generic purpose="pickup")
+    /status attempt: HTTP=409, body={"error":{"code":"CONFLICT","message":"Order status update conflicted with a concurrent request. Please retry.","traceId":"c2acadca-f8d4-43f7-a693-40c5fbf1daff"}}
+    OTPs for this phone after /status attempt: 0
+
+  CONCLUSION:
+    PRODUCTION_REISSUE_CAPABILITY = NO
+    REASON:
+      /fulfilment: sentinel (order.pickupOtp='ISSUED') prevents reissue. Idempotent same→same returns 200 without issuance.
+      /status: NEXT_STATUS state machine. Once Order.status=READY_FOR_PICKUP, NEXT_STATUS['READY_FOR_PICKUP']='PICKED_UP' — cannot re-transition to READY_FOR_PICKUP. Also has pre-existing SQLite lock bug (P1008).
+    V4A4 invalidation = defense-in-depth only (no production reissue path exists)
