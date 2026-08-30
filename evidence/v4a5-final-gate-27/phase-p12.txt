@@ -1,8 +1,0 @@
-
-# V4A5-FINAL-PICKUP-SECURITY-GATE-27 — phase=p12
-# DB=/home/z/my-project/db/custom.db  baseline=9eff754
-
-=== PHASE 12 — Vendor ownership mutation gate ===
-  [FAIL] Vendor B → Vendor A fulfilment → 403 — http=429
-  [FAIL] Vendor B → Vendor A verify → 403, no burn — http=429
-  [FAIL] Vendor A → Vendor B order → 403, no burn — http=429

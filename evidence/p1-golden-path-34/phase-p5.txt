@@ -1,9 +1,0 @@
-
-# P1-PAYMENT-ORDER-PICKUP-GOLDEN-PATH-34 — phase=p5
-# baseline=29390ca
-
-=== PHASE 5 — Order creation and ownership ===
-  Foreign consumer GET order: HTTP=200
-  [PASS] Owner sees own order in /api/orders list — found=true
-  Foreign vendor PATCH fulfilment: HTTP=403
-  [PASS] Foreign vendor cannot mutate fulfilment (403) — http=403

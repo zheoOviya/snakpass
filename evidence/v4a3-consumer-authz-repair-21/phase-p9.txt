@@ -1,9 +1,0 @@
-
-# V4A3-CONSUMER-PICKUP-AUTHORIZATION-REPAIR-21 — phase=p9
-# DB=/home/z/my-project/db/custom.db  baseline=2adc9c8952b8c7c449e4e508d4d93a3a21d92dd0
-
-=== PHASE 9 — V4A3 binding/secret regression ===
-  [PASS] Cross-order OTP → reject, OTP NOT consumed, ac unchanged — http=409
-  [PASS] Random otpId + valid code → reject, no burn — http=409
-  [PASS] Raw OTP absent from GET + verify API responses — getHas=false verifyHas=false
-  [PASS] codeHash absent from API response — hashInGet=false

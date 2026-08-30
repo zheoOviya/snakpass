@@ -1,8 +1,0 @@
-
-# V4A5-FINAL-PICKUP-SECURITY-GATE-27 — phase=p14
-# DB=/home/z/my-project/db/custom.db  baseline=9eff754
-
-=== PHASE 14 — Audit/outbox cardinality ===
-  [FAIL] Success → 1 terminal audit, 1 terminal outbox — auditΔ=0 outboxΔ=0
-  [PASS] Failure → 0 terminal audit, 0 terminal outbox — auditΔ=0 outboxΔ=0
-  [PASS] Failure audit → no raw secret

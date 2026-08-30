@@ -1,8 +1,0 @@
-
-# V4A5-FINAL-PICKUP-SECURITY-GATE-27 — phase=p11
-# DB=/home/z/my-project/db/custom.db  baseline=9eff754
-
-=== PHASE 11 — State eligibility ===
-  [PASS] ALMOST_READY → reject, no mutation — http=429
-  [PASS] PREPARING → reject, no mutation — http=429
-  [PASS] PICKED_UP → reject, no terminal duplication — http=429

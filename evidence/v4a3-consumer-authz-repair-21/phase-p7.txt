@@ -1,9 +1,0 @@
-
-# V4A3-CONSUMER-PICKUP-AUTHORIZATION-REPAIR-21 — phase=p7
-# DB=/home/z/my-project/db/custom.db  baseline=2adc9c8952b8c7c449e4e508d4d93a3a21d92dd0
-
-=== PHASE 7 — V4A1 ownership regression ===
-  [PASS] Vendor A → own Order A → success — http=200
-  [PASS] Vendor B → Vendor A Order → 403, no burn — http=403
-  [PASS] Vendor B → own Order B → success — http=200
-  [PASS] Vendor A → Vendor B Order → 403, no burn — http=403

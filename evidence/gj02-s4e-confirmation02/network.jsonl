@@ -1,5 +1,0 @@
-{"flow":"P1-accept-click","interaction":"\"CLICKED:Accept User 9002's friend request\"","timestamp":"2026-08-25T02:34:10.942Z"}
-{"flow":"P1-server-truth","dbStatus":"PENDING","timestamp":"2026-08-25T02:34:14.084Z"}
-{"flow":"P2-decline-click","interaction":"\"CLICKED:Decline User 9002's friend request\"","timestamp":"2026-08-25T02:34:41.778Z"}
-{"flow":"P2-server-truth","dbStatus":"PENDING","timestamp":"2026-08-25T02:34:44.906Z"}
-{"flow":"E3-double-accept","patchRequests":0,"timestamp":"2026-08-25T02:35:14.054Z"}

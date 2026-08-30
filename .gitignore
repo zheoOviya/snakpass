@@ -1,71 +1,15 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+# v0 sandbox internal files
+__v0_runtime_loader.js
+__v0_devtools.tsx
+__v0_jsx-dev-runtime.ts
+.snowflake/
+.v0-trash/
+.vercel/
 
-# dependencies
+# Environment variables
+.env*.local
+
+# Common ignores
 node_modules
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
-
-# testing
-/coverage
-
-# next.js
-/.next/
-/out/
-
-# production
-/build
-
-# misc
+.next/
 .DS_Store
-*.pem
-
-# debug
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# env files (can opt-in for committing if needed)
-.env
-.env.local
-.env.production
-.env.development
-# Allow .env.example to be tracked (contains template, no secrets)
-!.env.example
-
-# vercel
-.vercel
-
-
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-local-*
-.claude
-.z-ai-config
-*.log
-dev.log
-dev.out.log
-test
-prompt
-
-server.log
-# Skills directory
-/skills/
-
-# runtime data + logs (do not track)
-db/custom.db
-db/custom.db-journal
-db/custom.db-shm
-db/custom.db-wal
-db/*.jsonl
-db/backups/
-
-# transient tool outputs
-tool-results/
-_v2-verify.ts
