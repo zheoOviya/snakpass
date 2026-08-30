@@ -319,24 +319,71 @@ async function processPaymentCaptureRequested(event: {
     throw captureError
   }
 
-  // If the gateway returned captured=false (decline), treat as failure.
+  // If the gateway returned captured=false (decline), treat as TERMINAL failure.
+  // P2-REPAIR-38: Terminal capture failure must converge Payment→FAILED + Order→CANCELLED.
+  // Previously: Payment stayed CAPTURE_PENDING + outbox retried forever (infinite loop).
+  // Now: Payment→FAILED, Order→CANCELLED, outbox→PUBLISHED (no retry).
   if (!captureResult.captured) {
-    await db.payment.update({
-      where: { id: payment.id },
-      data: {
-        retryCount: { increment: 1 },
-        failureReason: 'Gateway declined capture (captured=false)',
-      },
+    await db.$transaction(async (tx) => {
+      // 1. Payment → FAILED (race-safe: only if still CAPTURE_PENDING)
+      const paymentUpdated = await tx.payment.updateMany({
+        where: { id: payment.id, status: 'CAPTURE_PENDING' },
+        data: {
+          status: 'FAILED',
+          failureReason: 'Gateway declined capture (captured=false)',
+          retryCount: { increment: 1 },
+          version: { increment: 1 },
+        },
+      })
+
+      // 2. If Payment was updated to FAILED, converge Order → CANCELLED
+      if (paymentUpdated.count > 0) {
+        await tx.order.updateMany({
+          where: { id: payload.orderId, status: 'PAID' },
+          data: { status: 'CANCELLED' },
+        })
+
+        // 3. Audit log
+        await tx.auditLog.create({
+          data: {
+            actorId: null,
+            actorRole: 'SYSTEM',
+            action: 'PAYMENT_CAPTURE_FAILED',
+            metadata: JSON.stringify({
+              paymentId: payment.id,
+              orderId: payload.orderId,
+              reason: 'Gateway declined capture (captured=false)',
+              source: 'outbox-publisher',
+              outboxEventId: event.eventId,
+            }),
+          },
+        })
+      }
+
+      // 4. Mark outbox PUBLISHED (terminal — no retry)
+      await tx.outbox.update({
+        where: { id: event.id },
+        data: {
+          status: 'PUBLISHED',
+          publishedAt: new Date(),
+          claimedAt: null,
+          claimUntil: null,
+          workerId: null,
+          lastError: 'capture-declined-terminal-failure',
+        },
+      })
     })
+
     await log({
       level: 'warn',
-      message: 'capture-declined-by-gateway',
+      message: 'capture-declined-by-gateway-terminal',
       eventId: event.eventId,
       eventType: 'PAYMENT_CAPTURE_REQUESTED',
       paymentId: payment.id,
+      orderId: payload.orderId,
       attempt: event.attempts + 1,
     })
-    throw new Error('Gateway declined capture (captured=false)')
+    return // Terminal failure — do NOT throw (no retry)
   }
 
   // 5. Capture succeeded — open a NEW transaction and atomically:

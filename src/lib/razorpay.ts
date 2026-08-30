@@ -1,5 +1,5 @@
 import Razorpay from 'razorpay'
-import crypto from 'crypto'
+import crypto, { timingSafeEqual } from 'crypto'
 import { isFeatureEnabled } from './deployment'
 
 // P0-01 Wave-3 — Razorpay integration (test-mode by default)
@@ -97,13 +97,14 @@ export function verifyRazorpaySignature(
     .update(`${razorpayOrderId}|${razorpayPaymentId}`)
     .digest('hex')
 
-  // Constant-time comparison
+  // P2-REPAIR-38: Use crypto.timingSafeEqual instead of manual comparison.
+  // Previous manual comparison was fixed-work but not cryptographically constant-time
+  // (JS string comparison is not guaranteed timing-safe).
   if (expectedSignature.length !== razorpaySignature.length) return false
-  let match = true
-  for (let i = 0; i < expectedSignature.length; i++) {
-    if (expectedSignature[i] !== razorpaySignature[i]) match = false
-  }
-  return match
+  return timingSafeEqual(
+    Buffer.from(expectedSignature, 'hex'),
+    Buffer.from(razorpaySignature, 'hex'),
+  )
 }
 
 /**
@@ -468,13 +469,12 @@ export function verifyWebhookSignature(
     .update(payload, 'utf8')
     .digest('hex')
 
-  // Constant-time comparison (prevents timing attacks)
+  // P2-REPAIR-38: Use crypto.timingSafeEqual (same hardening as payment signature)
   if (expectedSignature.length !== signature.length) return false
-  let match = true
-  for (let i = 0; i < expectedSignature.length; i++) {
-    if (expectedSignature[i] !== signature[i]) match = false
-  }
-  return match
+  return timingSafeEqual(
+    Buffer.from(expectedSignature, 'hex'),
+    Buffer.from(signature, 'hex'),
+  )
 }
 
 /**

@@ -277,6 +277,14 @@ async function handlePaymentFailed(
     }
   }
 
+  // P2-REPAIR-38: Converge Order status from PAID → CANCELLED on terminal payment failure.
+  // Previously: Payment was set to FAILED but Order stayed PAID (false paid state).
+  // Now: Order converges to CANCELLED, providing truthful customer-visible state.
+  await tx.order.updateMany({
+    where: { id: payment.orderId, status: 'PAID' },
+    data: { status: 'CANCELLED' },
+  })
+
   // Audit log
   await tx.auditLog.create({
     data: {
@@ -286,8 +294,10 @@ async function handlePaymentFailed(
       metadata: JSON.stringify({
         webhookEventId,
         paymentId: payment.id,
+        orderId: payment.orderId,
         gatewayPaymentId,
         failureReason,
+        orderConverged: 'PAID → CANCELLED',
       }),
     },
   })
