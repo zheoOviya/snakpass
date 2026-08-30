@@ -143,13 +143,28 @@ async function handlePaymentCaptured(
     }
   }
 
+  // P2-REPAIR-40: If Payment is already FAILED, do NOT override with CAPTURED.
+  // FAILED is a terminal state. A late payment.captured webhook for a payment
+  // that has already been marked FAILED (by publisher or payment.failed webhook)
+  // must not resurrect it. This enforces FIRST_TERMINAL_STATE_WINS.
+  if (payment.status === 'FAILED') {
+    return {
+      processed: true,
+      paymentId: payment.id,
+      notes: `payment.captured: Payment ${payment.id} already FAILED — late captured webhook ignored (terminal state)`,
+    }
+  }
+
   // Update Payment to CAPTURED using optimistic-lock (version field)
-  // This handles the race where the capture route AND the webhook both try to update
+  // P2-REPAIR-40: Changed from { not: 'CAPTURED' } to { equals: 'CAPTURE_PENDING' }
+  // Previously: a payment.captured webhook could override FAILED → CAPTURED (contradiction).
+  // Now: only CAPTURE_PENDING → CAPTURED is allowed. FAILED is a terminal state
+  // that cannot be overridden by a captured webhook. This enforces FIRST_TERMINAL_STATE_WINS.
   const updated = await tx.payment.updateMany({
     where: {
       id: payment.id,
       version: payment.version,
-      status: { not: 'CAPTURED' }, // Don't update if already captured
+      status: 'CAPTURE_PENDING', // Only transition from CAPTURE_PENDING → CAPTURED
     },
     data: {
       status: 'CAPTURED',
